@@ -1,0 +1,13 @@
+{
+  "name": "java-sdk",
+  "engineVersion": "latest",
+  "sdk": {
+    "source": "dang"
+  },
+  "dependencies": [
+    {
+      "name": "polyfill",
+      "source": "github.com/dagger/sdk-sdk/polyfill"
+    }
+  ]
+}
