@@ -29,7 +29,7 @@ type Packager {
       .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
       .withDirectory("/dagger-io", sdkSource(ws))
       .withWorkdir("/dagger-io")
-      .withExec(["mvn", "--projects", "dagger-codegen-maven-plugin", "--also-make", "package", "-T1C", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+      .withExec(["mvn", "--projects", "dagger-codegen-maven-plugin", "--also-make", "package", "-T1C", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "-Dproject.build.outputTimestamp=2024-01-01T00:00:00Z", "--no-transfer-progress"])
       .withExec(["sh", "-c", "mkdir -p /out && cp dagger-codegen-maven-plugin/target/dagger-codegen-maven-plugin-*.jar /out/dagger-codegen-maven-plugin.jar"])
       .directory("/out")
   }
