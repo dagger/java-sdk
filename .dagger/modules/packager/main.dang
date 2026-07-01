@@ -1,0 +1,46 @@
+"""
+Pre-build committable build assets for the Java SDK.
+
+Some assets are expensive to rebuild from source on every `dagger generate`: the
+Dagger codegen Maven plugin in particular costs ~10s to compile and assemble each
+time. `generate` builds those assets once and writes them under `prebuilt/` so
+they can be checked in; the SDK then installs the committed jar instead of
+recompiling the plugin. Run this explicitly (`dagger generate packager`) to
+refresh the assets when the SDK sources that produce them change.
+"""
+type Packager {
+  """Maven container used to build the assets (pinned digest, matches the SDK)."""
+  let mvn: Container! {
+    container.from("maven:3.9.9-eclipse-temurin-21-alpine@sha256:4cbb8bf76c46b97e028998f2486ed014759a8e932480431039bdb93dffe6813e")
+  }
+
+  """The vendored Java SDK Maven reactor, read from the workspace root."""
+  let sdkSource(ws: Workspace!): Directory! {
+    ws.directory("/", include: ["sdk/**"]).directory("sdk")
+  }
+
+  """
+  Build the Dagger codegen Maven plugin and return a directory holding the
+  packaged jar under a stable, version-independent name.
+  """
+  let codegenPluginJar(ws: Workspace!): Directory! {
+    mvn
+      .withoutEntrypoint
+      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
+      .withDirectory("/dagger-io", sdkSource(ws))
+      .withWorkdir("/dagger-io")
+      .withExec(["mvn", "--projects", "dagger-codegen-maven-plugin", "--also-make", "package", "-T1C", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+      .withExec(["sh", "-c", "mkdir -p /out && cp dagger-codegen-maven-plugin/target/dagger-codegen-maven-plugin-*.jar /out/dagger-codegen-maven-plugin.jar"])
+      .directory("/out")
+  }
+
+  """
+  Build all committable assets and write them under `prebuilt/` at the workspace
+  root (runs at `dagger generate`).
+  """
+  pub generate(ws: Workspace!): Changeset! @generate {
+    polyfill.workspace(ws).fork
+      .withDirectory("prebuilt", codegenPluginJar(ws))
+      .changes
+  }
+}

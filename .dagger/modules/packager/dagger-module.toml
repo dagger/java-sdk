@@ -1,0 +1,9 @@
+name = "packager"
+engineVersion = "v1.0.0-0"
+
+[runtime]
+  source = "dang"
+
+[[dependencies]]
+  name = "polyfill"
+  source = "github.com/dagger/sdk-sdk/polyfill"
