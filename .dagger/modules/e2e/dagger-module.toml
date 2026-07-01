@@ -1,0 +1,9 @@
+name = "e2e"
+engineVersion = "latest"
+
+[runtime]
+  source = "dang"
+
+[[dependencies]]
+  name = "java-sdk"
+  source = "../../.."

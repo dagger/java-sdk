@@ -1,0 +1,84 @@
+"""
+End-to-end checks for the Java SDK helper module.
+"""
+type E2e {
+  let outputRoot: String! = ".dagger/modules/e2e/out"
+
+  """Fail the current check when a condition is false."""
+  let assert(condition: Boolean!, message: String!): Void {
+    if (condition == false) { raise message }
+    null
+  }
+
+  """Return true when a list contains the exact string."""
+  let contains(values: [String!]!, want: String!): Boolean! {
+    values.filter { value => value == want }.length > 0
+  }
+
+  """Assert that a changeset added a path."""
+  let assertAdded(changes: Changeset!, path: String!): Void {
+    assert(contains(changes.addedPaths, path), "expected added path: " + path)
+  }
+
+  """Assert that a string contains a substring."""
+  let assertContains(value: String!, want: String!, message: String!): Void {
+    assert(value.contains(want), message)
+  }
+
+  """
+  New Java modules should target this repository's build/package-only runtime
+  rather than a builtin SDK name.
+  """
+  pub targetRuntimeCheck: Void @check {
+    assert(
+      javaSdk.targetRuntime == "github.com/dagger/java-sdk/runtime",
+      "targetRuntime should be the in-repo build/package-only runtime",
+    )
+    null
+  }
+
+  """The generate skip marker filename should be stable."""
+  pub skipGenerateFilenameCheck: Void @check {
+    assert(
+      javaSdk.skipGenerateFilename == ".dagger-java-sdk-skip-generate",
+      "skip marker filename changed",
+    )
+    null
+  }
+
+  """
+  initModule should seed only the SDK-owned template files: a two-pass pom
+  defaulting dagger.proc=none and the module sources, with the module name
+  substituted into paths and contents. Engine-owned files (dagger-module.toml,
+  the legacy dagger.json) are produced by the engine, not by initModule, and no
+  existing files are touched.
+  """
+  pub initCheck(ws: Workspace!): Void @check {
+    let p = outputRoot + "/init-default"
+    let changes = javaSdk.initModule(ws, name: "init-default", path: p)
+
+    assertAdded(changes, p + "/pom.xml")
+    assertAdded(changes, p + "/src/main/java/io/dagger/modules/initdefault/InitDefault.java")
+    assertAdded(changes, p + "/src/main/java/io/dagger/modules/initdefault/package-info.java")
+
+    assert(
+      contains(changes.addedPaths, p + "/dagger-module.toml") == false,
+      "initModule should not write the engine-owned dagger-module.toml",
+    )
+    assert(
+      contains(changes.addedPaths, p + "/dagger.json") == false,
+      "initModule should not write the engine-owned dagger.json",
+    )
+    assert(changes.modifiedPaths.length == 0, "init unexpectedly modified existing files")
+    assert(changes.removedPaths.length == 0, "init unexpectedly removed files")
+
+    let pom = changes.layer.file(p + "/pom.xml").contents
+    assertContains(pom, "<dagger.proc>none</dagger.proc>", "pom should default dagger.proc to none")
+    assertContains(pom, "<artifactId>init-default</artifactId>", "pom artifactId should be the kebab-case module name")
+
+    let module = changes.layer.file(p + "/src/main/java/io/dagger/modules/initdefault/InitDefault.java").contents
+    assertContains(module, "class InitDefault", "module class should be the camel-case module name")
+
+    null
+  }
+}
