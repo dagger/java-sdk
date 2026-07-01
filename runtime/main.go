@@ -107,7 +107,7 @@ func (m *JavaSdkRuntime) ModuleRuntime(
 		WithMountedCache("/root/.m2", dag.CacheVolume("sdk-java-maven-m2"), dagger.ContainerWithMountedCacheOpts{Sharing: dagger.CacheSharingModeLocked}).
 		WithDirectory(ModSourceDirPath, modSource.ContextDirectory()).
 		WithWorkdir(m.moduleConfig.modulePath()).
-		WithExec(m.mavenCommand("mvn", "clean", "package", "-DskipTests"))
+		WithExec(m.mavenCommand("mvn", "package", "-DskipTests"))
 
 	jar, err := m.finalJar(ctx, mvnCtr)
 	if err != nil {
