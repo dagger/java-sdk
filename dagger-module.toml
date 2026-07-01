@@ -1,0 +1,10 @@
+name = "java-sdk"
+engineVersion = "v1.0.0-0"
+
+[runtime]
+  source = "dang"
+
+[[dependencies]]
+  name = "polyfill"
+  source = "github.com/dagger/sdk-sdk/polyfill@main"
+  pin = "a16466390cacd68bd72f7ae9910d990966fb2226"

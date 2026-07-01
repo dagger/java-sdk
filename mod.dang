@@ -1,0 +1,200 @@
+"""
+A Dagger module that uses the Java SDK.
+"""
+type Mod {
+  """
+  Workspace-relative path of this module root.
+  """
+  pub path: String!
+
+  """
+  Workspace containing this module.
+  """
+  let ws: Workspace!
+
+  """
+  Marker filename that skips generate when found at or above this module root.
+  """
+  let skipGenerateFilename: String!
+
+  """
+  Whether this module or an ancestor contains the configured generate skip marker.
+  """
+  pub skipGenerate(ws: Workspace!): Boolean! {
+    hasMarker(ws, skipGenerateFilename)
+  }
+
+  """
+  Whether this module root or an ancestor containes a marker filename.
+  """
+  let hasMarker(ws: Workspace!, filename: String!): Boolean! {
+    let markerPath = ws.findUp(name: filename, from: path)
+    markerPath != null
+  }
+
+  """
+  Generate this module.
+  If the generate skip marker is present, the changeset is empty.
+  """
+  pub generate(ws: Workspace!): Changeset! {
+    if (skipGenerate(ws)) {
+      polyfill.workspace(ws).fork.changes
+    } else {
+      generateModule(ws, path).changes
+    }
+  }
+
+  """
+  Maven container used for codegen (pinned digest, matches the builtin runtime).
+  """
+  let mvn: Container! {
+    container.from("maven:3.9.9-eclipse-temurin-21-alpine@sha256:4cbb8bf76c46b97e028998f2486ed014759a8e932480431039bdb93dffe6813e")
+  }
+
+  """
+  The vendored Java SDK Maven reactor shipped with this module.
+  """
+  let sdkSourceDir: Directory! { currentModule.source.directory("sdk") }
+
+  """
+  Vendor the Java SDK as buildable source for a module:
+    src/main/java        the hand-written SDK library
+    src/processor/java   the annotation processor that generates the entrypoint
+    src/generated/java   the client bindings generated from the engine schema
+    src/processor/resources/META-INF/services/...Processor
+  The returned directory is dropped at <module>/sdk.
+  """
+  let prebuiltCodegenPlugin: String! { "prebuilt/dagger-codegen-maven-plugin.jar" }
+
+  """
+  A maven container with the codegen plugin available in the local repository.
+
+  When the prebuilt plugin jar has been committed (see the packager module), it
+  is installed directly — skipping the ~10s compile of the plugin from source.
+  Otherwise the plugin is built from the vendored sources as a fallback.
+  """
+  let codegenBase(introspectionJSON: File!): Container! {
+    let base = mvn
+      .withoutEntrypoint
+      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
+      .withMountedFile("/schema.json", introspectionJSON)
+      .withDirectory("/dagger-io", sdkSourceDir)
+      .withWorkdir("/dagger-io")
+
+    if (currentModule.source.exists(prebuiltCodegenPlugin)) {
+      base
+        .withMountedFile("/codegen-plugin.jar", currentModule.source.file(prebuiltCodegenPlugin))
+        .withExec(["mvn", "install:install-file", "-Dfile=/dagger-io/pom.xml", "-Dpackaging=pom", "-DpomFile=/dagger-io/pom.xml", "--no-transfer-progress"])
+        .withExec(["mvn", "install:install-file", "-Dfile=/codegen-plugin.jar", "-DpomFile=/dagger-io/dagger-codegen-maven-plugin/pom.xml", "--no-transfer-progress"])
+    } else {
+      base.withExec(["mvn", "--projects", "dagger-codegen-maven-plugin", "--also-make", "install", "-T1C", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+    }
+  }
+
+  let vendoredSdk(introspectionJSON: File!): Directory! {
+    let built = codegenBase(introspectionJSON)
+      .withExec(["mvn", "--projects", "dagger-java-sdk", "generate-sources", "-Ddaggerengine.schema=/schema.json", "-Dfmt.skip=true", "--no-transfer-progress"])
+
+    directory
+      .withDirectory("src/main/java", built.directory("/dagger-io/dagger-java-sdk/src/main/java"))
+      .withDirectory(
+        "src/processor/java",
+        built.directory("/dagger-io/dagger-java-annotation-processor/src/main/java"),
+      )
+      .withDirectory(
+        "src/generated/java",
+        built.directory("/dagger-io/dagger-java-sdk/target/generated-sources/dagger"),
+      )
+      .withNewFile(
+        "src/processor/resources/META-INF/services/javax.annotation.processing.Processor",
+        "io.dagger.annotation.processor.DaggerModuleAnnotationProcessor\n",
+      )
+  }
+
+  """
+  Compile the module with the annotation processor enabled (proc=full) so it
+  emits io.dagger.gen.entrypoint.Entrypoint, and return the generated-sources
+  directory (the entrypoint) for vendoring under <module>/src/generated/java.
+  """
+  let generatedEntrypoint(moduleDir: Directory!, name: String!): Directory! {
+    mvn
+      .withoutEntrypoint
+      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
+      .withDirectory("/module", moduleDir)
+      .withWorkdir("/module")
+      .withEnvVariable("_DAGGER_JAVA_SDK_MODULE_NAME", name)
+      .withExec(["mvn", "compile", "-Ddagger.proc=full", "--no-transfer-progress"])
+      .directory("/module/target/generated-sources/annotations")
+  }
+
+  """
+  Stage the vendored SDK + generated entrypoint for one module.
+  """
+  let generateModule(ws: Workspace!, modPathArg: String!): PolyfillWorkspaceFork! {
+    let pws = polyfill.workspace(ws)
+    let modSource = pws.moduleSource(modPathArg)
+    let name = modSource.core.moduleName
+    let vendored = vendoredSdk(modSource.core.introspectionSchemaJSON)
+
+    # the module as committed, with the freshly vendored SDK overlaid and any
+    # stale generated entrypoint dropped, so the processor regenerates it
+    let baseDir = moduleDir(ws, modPathArg)
+      .withoutDirectory("sdk/src")
+      .withDirectory("sdk", vendored)
+      .withoutDirectory("src/generated")
+    let entrypoint = generatedEntrypoint(baseDir, name)
+
+    pws
+      .fork
+      .withDirectory(joinPath(modPathArg, "sdk"), vendored)
+      .withDirectory(joinPath(modPathArg, "src/generated/java"), entrypoint)
+  }
+
+  """
+  The module's committed source directory, workspace-rooted.
+  """
+  let moduleDir(ws: Workspace!, modPathArg: String!): Directory! {
+    if (modPathArg == ".") {
+      ws.directory("/", include: ["**"])
+    } else {
+      ws.directory("/", include: [modPathArg + "/**"]).directory(modPathArg)
+    }
+  }
+
+  """
+  Join a module path with a sub-path, handling the root (".") module.
+  """
+  let joinPath(modPathArg: String!, sub: String!): String! {
+    if (modPathArg == ".") { sub } else { modPathArg + "/" + sub }
+  }
+
+  """
+  Return the default new module path for `init`.
+  """
+  let defaultModulePath(ws: Workspace!, name: String!): String! {
+    let daggerDir = ws.findUp(".dagger", ".")
+    if (daggerDir == null) {
+      ".dagger/modules/" + name
+    } else {
+      daggerDir.trimPrefix("/") + "/modules/" + name
+    }
+  }
+
+  """
+  Return a valid module path relative to the workspace.
+  """
+  let cleanModulePath(path: String!): String! {
+    let rawPath = path.trimPrefix("./").trimPrefix("/")
+
+    if (rawPath == "" or rawPath == ".") {
+      "."
+    } else if (rawPath == ".."
+      or rawPath.trimPrefix("../") != rawPath
+      or rawPath.contains("/../")
+      or rawPath.trimSuffix("/..") != rawPath) {
+      raise "path escapes workspace: " + rawPath
+    } else {
+      rawPath.trimSuffix("/")
+    }
+  }
+}
