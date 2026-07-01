@@ -64,14 +64,16 @@ type Mod {
     src/processor/resources/META-INF/services/...Processor
   The returned directory is dropped at <module>/sdk.
   """
+  let prebuiltCodegenRepo: String! { "prebuilt/m2" }
   let prebuiltCodegenPlugin: String! { "prebuilt/dagger-codegen-maven-plugin.jar" }
 
   """
   A maven container with the codegen plugin available in the local repository.
 
-  When the prebuilt plugin jar has been committed (see the packager module), it
-  is installed directly — skipping the ~10s compile of the plugin from source.
-  Otherwise the plugin is built from the vendored sources as a fallback.
+  Fast path: when the packager module has committed the plugin's local Maven
+  repository under prebuilt/m2, drop it into ~/.m2/repository with a plain copy —
+  no maven invocation. Otherwise fall back to installing a committed plugin jar,
+  and finally to compiling the plugin from the vendored sources.
   """
   let codegenBase(introspectionJSON: File!): Container! {
     let base = mvn
@@ -81,7 +83,11 @@ type Mod {
       .withDirectory("/dagger-io", sdkSourceDir)
       .withWorkdir("/dagger-io")
 
-    if (currentModule.source.exists(prebuiltCodegenPlugin)) {
+    if (currentModule.source.exists(prebuiltCodegenRepo + "/io/dagger")) {
+      base
+        .withDirectory("/prebuilt-m2", currentModule.source.directory(prebuiltCodegenRepo))
+        .withExec(["sh", "-c", "mkdir -p /root/.m2/repository && cp -r /prebuilt-m2/. /root/.m2/repository/"])
+    } else if (currentModule.source.exists(prebuiltCodegenPlugin)) {
       base
         .withMountedFile("/codegen-plugin.jar", currentModule.source.file(prebuiltCodegenPlugin))
         .withExec(["mvn", "install:install-file", "-Dfile=/dagger-io/pom.xml", "-Dpackaging=pom", "-DpomFile=/dagger-io/pom.xml", "--no-transfer-progress"])

@@ -4,9 +4,10 @@ Pre-build committable build assets for the Java SDK.
 Some assets are expensive to rebuild from source on every `dagger generate`: the
 Dagger codegen Maven plugin in particular costs ~10s to compile and assemble each
 time. `generate` builds those assets once and writes them under `prebuilt/` so
-they can be checked in; the SDK then installs the committed jar instead of
-recompiling the plugin. Run this explicitly (`dagger generate packager`) to
-refresh the assets when the SDK sources that produce them change.
+they can be checked in; the SDK then drops the committed local Maven repository
+into ~/.m2 instead of recompiling the plugin. Run this explicitly
+(`dagger generate packager`) to refresh the assets when the SDK sources that
+produce them change.
 """
 type Packager {
   """Maven container used to build the assets (pinned digest, matches the SDK)."""
@@ -20,17 +21,20 @@ type Packager {
   }
 
   """
-  Build the Dagger codegen Maven plugin and return a directory holding the
-  packaged jar under a stable, version-independent name.
+  Build and install the Dagger codegen Maven plugin, then return the resulting
+  local Maven repository subtree (io/dagger: the parent pom and the plugin jar +
+  pom). Dropped into ~/.m2/repository it lets the SDK resolve the plugin without
+  compiling it from source. The build is reproducible (fixed output timestamp) so
+  the committed tree does not churn between regenerations.
   """
-  let codegenPluginJar(ws: Workspace!): Directory! {
+  let codegenPluginRepo(ws: Workspace!): Directory! {
     mvn
       .withoutEntrypoint
       .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
       .withDirectory("/dagger-io", sdkSource(ws))
       .withWorkdir("/dagger-io")
-      .withExec(["mvn", "--projects", "dagger-codegen-maven-plugin", "--also-make", "package", "-T1C", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "-Dproject.build.outputTimestamp=2024-01-01T00:00:00Z", "--no-transfer-progress"])
-      .withExec(["sh", "-c", "mkdir -p /out && cp dagger-codegen-maven-plugin/target/dagger-codegen-maven-plugin-*.jar /out/dagger-codegen-maven-plugin.jar"])
+      .withExec(["mvn", "--projects", "dagger-codegen-maven-plugin", "--also-make", "install", "-T1C", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "-Dproject.build.outputTimestamp=2024-01-01T00:00:00Z", "--no-transfer-progress"])
+      .withExec(["sh", "-c", "rm -rf /out && mkdir -p /out/io && cp -r /root/.m2/repository/io/dagger /out/io/dagger"])
       .directory("/out")
   }
 
@@ -40,7 +44,7 @@ type Packager {
   """
   pub generate(ws: Workspace!): Changeset! @generate {
     polyfill.workspace(ws).fork
-      .withDirectory("prebuilt", codegenPluginJar(ws))
+      .withDirectory("prebuilt/m2", codegenPluginRepo(ws))
       .changes
   }
 }
