@@ -111,7 +111,7 @@ type Mod {
     # artifacts are versioned. This step is cached across a module's own edits.
     let built = codegenBase(introspectionJSON)
       .withExec(["mvn", "versions:set", "-DnewVersion=" + name, "-DgenerateBackupPoms=false", "--no-transfer-progress"])
-      .withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "install", "-Ddaggerengine.schema=/schema.json", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+      .withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", "-Ddaggerengine.schema=/schema.json", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
 
     directory
       .withDirectory("src/main/java", built.directory("/dagger-io/dagger-java-sdk/src/main/java"))
