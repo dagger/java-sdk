@@ -97,13 +97,20 @@ type Mod {
     }
   }
 
-  let vendoredSdk(introspectionJSON: File!): Directory! {
+  let vendoredSdk(introspectionJSON: File!, name: String!): Directory! {
     # install (rather than generate-sources) so the compiled SDK and annotation
     # processor jars land in the local Maven repository — the dagger-prebuilt-sdk
     # pom profile compiles the entrypoint against them instead of recompiling the
-    # vendored SDK sources. This step depends only on the SDK sources and the
-    # engine schema, so it is cached across user-module edits.
+    # vendored SDK sources.
+    #
+    # The jars are installed under a per-module version so modules that resolve to
+    # different schemas (different dependencies, or a different engine) never share
+    # a Maven coordinate in the local repository. The codegen plugin is referenced
+    # via its own fixed version, so it keeps resolving from the prebuilt repo. The
+    # vendored source that gets committed is version-independent; only the build
+    # artifacts are versioned. This step is cached across a module's own edits.
     let built = codegenBase(introspectionJSON)
+      .withExec(["mvn", "versions:set", "-DnewVersion=" + name, "-DgenerateBackupPoms=false", "--no-transfer-progress"])
       .withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "install", "-Ddaggerengine.schema=/schema.json", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
 
     directory
@@ -134,7 +141,7 @@ type Mod {
       .withDirectory("/module", moduleDir)
       .withWorkdir("/module")
       .withEnvVariable("_DAGGER_JAVA_SDK_MODULE_NAME", name)
-      .withExec(["mvn", "compile", "-Ddagger.proc=full", "-Ddagger.sdk=prebuilt", "--no-transfer-progress"])
+      .withExec(["mvn", "compile", "-Ddagger.proc=full", "-Ddagger.sdk=prebuilt", "-Ddagger.sdk.version=" + name, "--no-transfer-progress"])
       .directory("/module/target/generated-sources/annotations")
   }
 
@@ -145,7 +152,7 @@ type Mod {
     let pws = polyfill.workspace(ws)
     let modSource = pws.moduleSource(modPathArg)
     let name = modSource.core.moduleName
-    let vendored = vendoredSdk(modSource.core.introspectionSchemaJSON)
+    let vendored = vendoredSdk(modSource.core.introspectionSchemaJSON, name)
 
     # the module as committed, with the freshly vendored SDK overlaid and any
     # stale generated entrypoint dropped, so the processor regenerates it

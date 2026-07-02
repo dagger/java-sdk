@@ -228,7 +228,7 @@
                 <plugin>
                     <groupId>io.dagger</groupId>
                     <artifactId>dagger-codegen-maven-plugin</artifactId>
-                    <version>${project.version}</version>
+                    <version>${dagger.codegen.plugin.version}</version>
                 </plugin>
             </plugins>
         </pluginManagement>
@@ -293,6 +293,13 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <daggerengine.version>0.21.4</daggerengine.version>
         <daggerengine.schema></daggerengine.schema>
+        <!--
+        Version at which the codegen plugin is referenced. Kept independent of
+        ${project.version} so `dagger generate` can rebuild the SDK jars under a
+        per-module version (versions:set) while still resolving the plugin from
+        the prebuilt local repository at its own fixed version.
+        -->
+        <dagger.codegen.plugin.version>0.21.4</dagger.codegen.plugin.version>
 
         <assertj-core.version>3.27.7</assertj-core.version>
         <auto-service.version>1.1.1</auto-service.version>
