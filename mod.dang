@@ -134,7 +134,7 @@ type Mod {
       .withDirectory("/module", moduleDir)
       .withWorkdir("/module")
       .withEnvVariable("_DAGGER_JAVA_SDK_MODULE_NAME", name)
-      .withExec(["mvn", "compile", "-Ddagger.proc=full", "--no-transfer-progress"])
+      .withExec(["mvn", "compile", "-Ddagger.proc=full", "-Ddagger.sdk=prebuilt", "--no-transfer-progress"])
       .directory("/module/target/generated-sources/annotations")
   }
 
