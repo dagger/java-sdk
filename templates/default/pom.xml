@@ -20,6 +20,11 @@
         to regenerate it from the current module code.
         -->
         <dagger.proc>none</dagger.proc>
+        <!--
+        Version of the vendored Dagger Java SDK. Only used by the
+        dagger-prebuilt-sdk profile to resolve the prebuilt SDK jars.
+        -->
+        <dagger.sdk.version>0.21.4</dagger.sdk.version>
     </properties>
 
     <!--
@@ -319,4 +324,52 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+        Fast path used by `dagger generate` (mod.dang passes -Ddagger.sdk=prebuilt):
+        compile the module against the prebuilt Dagger Java SDK jars installed in
+        the local Maven repository instead of the vendored SDK sources, so only the
+        module's own code is compiled. This profile is internal to code generation.
+        A plain `mvn package` (no property) still compiles the vendored sources and
+        needs no prebuilt artifacts.
+        -->
+        <profile>
+            <id>dagger-prebuilt-sdk</id>
+            <activation>
+                <property>
+                    <name>dagger.sdk</name>
+                    <value>prebuilt</value>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>io.dagger</groupId>
+                    <artifactId>dagger-java-sdk</artifactId>
+                    <version>${dagger.sdk.version}</version>
+                </dependency>
+                <dependency>
+                    <groupId>io.dagger</groupId>
+                    <artifactId>dagger-java-annotation-processor</artifactId>
+                    <version>${dagger.sdk.version}</version>
+                    <scope>provided</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <!-- Do not add the vendored SDK sources as compile roots. -->
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>add-dagger-sdk-sources</id>
+                                <phase>none</phase>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
