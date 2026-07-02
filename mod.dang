@@ -98,8 +98,13 @@ type Mod {
   }
 
   let vendoredSdk(introspectionJSON: File!): Directory! {
+    # install (rather than generate-sources) so the compiled SDK and annotation
+    # processor jars land in the local Maven repository — the dagger-prebuilt-sdk
+    # pom profile compiles the entrypoint against them instead of recompiling the
+    # vendored SDK sources. This step depends only on the SDK sources and the
+    # engine schema, so it is cached across user-module edits.
     let built = codegenBase(introspectionJSON)
-      .withExec(["mvn", "--projects", "dagger-java-sdk", "generate-sources", "-Ddaggerengine.schema=/schema.json", "-Dfmt.skip=true", "--no-transfer-progress"])
+      .withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "install", "-Ddaggerengine.schema=/schema.json", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
 
     directory
       .withDirectory("src/main/java", built.directory("/dagger-io/dagger-java-sdk/src/main/java"))
