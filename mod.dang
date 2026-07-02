@@ -18,6 +18,11 @@ type Mod {
   let skipGenerateFilename: String!
 
   """
+  Whether to commit the compiled SDK jar into the module (see JavaSdk.vendorSdkJar).
+  """
+  let vendorSdkJar: Boolean!
+
+  """
   Whether this module or an ancestor contains the configured generate skip marker.
   """
   pub skipGenerate(ws: Workspace!): Boolean! {
@@ -97,22 +102,26 @@ type Mod {
     }
   }
 
-  let vendoredSdk(introspectionJSON: File!, name: String!): Directory! {
-    # install (rather than generate-sources) so the compiled SDK and annotation
-    # processor jars land in the local Maven repository — the dagger-prebuilt-sdk
-    # pom profile compiles the entrypoint against them instead of recompiling the
-    # vendored SDK sources.
-    #
-    # The jars are installed under a per-module version so modules that resolve to
-    # different schemas (different dependencies, or a different engine) never share
-    # a Maven coordinate in the local repository. The codegen plugin is referenced
-    # via its own fixed version, so it keeps resolving from the prebuilt repo. The
-    # vendored source that gets committed is version-independent; only the build
-    # artifacts are versioned. This step is cached across a module's own edits.
-    let built = codegenBase(introspectionJSON)
+  """
+  Build and install the SDK + annotation processor jars, returning the maven
+  container.
+
+  Uses install (rather than generate-sources) so the compiled jars land in the
+  local Maven repository — the dagger-prebuilt-sdk pom profile compiles the
+  entrypoint against them instead of recompiling the vendored SDK sources. Jars
+  are installed under a per-module version so modules that resolve to different
+  schemas (different dependencies, or a different engine) never share a Maven
+  coordinate; the codegen plugin keeps its own fixed version and resolves from the
+  prebuilt repo. Cached across a module's own edits.
+  """
+  let sdkBuilt(introspectionJSON: File!, name: String!): Container! {
+    codegenBase(introspectionJSON)
       .withExec(["mvn", "versions:set", "-DnewVersion=" + name, "-DgenerateBackupPoms=false", "--no-transfer-progress"])
       .withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", "-Ddaggerengine.schema=/schema.json", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+  }
 
+  let vendoredSdk(introspectionJSON: File!, name: String!): Directory! {
+    let built = sdkBuilt(introspectionJSON, name)
     directory
       .withDirectory("src/main/java", built.directory("/dagger-io/dagger-java-sdk/src/main/java"))
       .withDirectory(
@@ -126,6 +135,24 @@ type Mod {
       .withNewFile(
         "src/processor/resources/META-INF/services/javax.annotation.processing.Processor",
         "io.dagger.annotation.processor.DaggerModuleAnnotationProcessor\n",
+      )
+  }
+
+  """
+  Capture the compiled SDK jar as a small local Maven repository to commit under
+  <module>/sdk/repo. Stored at a fixed version so the module pom's
+  dagger-vendored-sdk-jar profile resolves it; the runtime build then compiles
+  only the module's own code against the jar rather than the vendored sources.
+  """
+  let vendoredSdkJar(introspectionJSON: File!, name: String!): Directory! {
+    let jar = sdkBuilt(introspectionJSON, name)
+      .withExec(["sh", "-c", "mkdir -p /out && cp /root/.m2/repository/io/dagger/dagger-java-sdk/" + name + "/dagger-java-sdk-" + name + ".jar /out/dagger-java-sdk-0.21.4.jar"])
+      .file("/out/dagger-java-sdk-0.21.4.jar")
+    directory
+      .withFile("io/dagger/dagger-java-sdk/0.21.4/dagger-java-sdk-0.21.4.jar", jar)
+      .withNewFile(
+        "io/dagger/dagger-java-sdk/0.21.4/dagger-java-sdk-0.21.4.pom",
+        "<project><modelVersion>4.0.0</modelVersion><groupId>io.dagger</groupId><artifactId>dagger-java-sdk</artifactId><version>0.21.4</version><packaging>jar</packaging></project>\n",
       )
   }
 
@@ -152,20 +179,28 @@ type Mod {
     let pws = polyfill.workspace(ws)
     let modSource = pws.moduleSource(modPathArg)
     let name = modSource.core.moduleName
-    let vendored = vendoredSdk(modSource.core.introspectionSchemaJSON, name)
+    let introspectionJSON = modSource.core.introspectionSchemaJSON
+    let vendored = vendoredSdk(introspectionJSON, name)
 
-    # the module as committed, with the freshly vendored SDK overlaid and any
-    # stale generated entrypoint dropped, so the processor regenerates it
+    # the module as committed, with the whole committed sdk/ dropped (source and
+    # any previously vendored jar) and the freshly vendored SDK sources overlaid,
+    # plus any stale generated entrypoint dropped so the processor regenerates it
     let baseDir = moduleDir(ws, modPathArg)
-      .withoutDirectory("sdk/src")
+      .withoutDirectory("sdk")
       .withDirectory("sdk", vendored)
       .withoutDirectory("src/generated")
     let entrypoint = generatedEntrypoint(baseDir, name)
 
-    pws
+    let fork = pws
       .fork
       .withDirectory(joinPath(modPathArg, "sdk"), vendored)
       .withDirectory(joinPath(modPathArg, "src/generated/java"), entrypoint)
+
+    if (vendorSdkJar) {
+      fork.withDirectory(joinPath(modPathArg, "sdk/repo"), vendoredSdkJar(introspectionJSON, name))
+    } else {
+      fork
+    }
   }
 
   """

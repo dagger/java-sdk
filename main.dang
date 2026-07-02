@@ -20,6 +20,15 @@ type JavaSdk {
   pub skipGenerateFilename: String! = ".dagger-java-sdk-skip-generate"
 
   """
+  Commit the compiled Dagger Java SDK as a jar into each generated module so its
+  runtime build compiles only the module's own code against the jar instead of
+  recompiling the vendored SDK sources. The sources stay checked in for IDE use.
+  Opt-in (set `settings.vendorSdkJar = true` under `[modules.java-sdk]` in the
+  workspace dagger.toml) because it adds a committed binary artifact.
+  """
+  pub vendorSdkJar: Boolean! = false
+
+  """
   Initialize Java-owned files for a new Dagger module.
   """
   pub initModule(
@@ -65,7 +74,7 @@ type JavaSdk {
   pub generateAll(ws: Workspace!): Changeset! @generate {
     changeset.withChangesets(
       currentModule.asSDK.modules.{{path}}
-        .map { m => Mod(path: m.path, ws: ws, skipGenerateFilename: skipGenerateFilename) }
+        .map { m => Mod(path: m.path, ws: ws, skipGenerateFilename: skipGenerateFilename, vendorSdkJar: vendorSdkJar) }
         .filter { mod => mod.skipGenerate(ws) == false }
         .map { mod => mod.generate(ws) },
     )

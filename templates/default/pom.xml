@@ -238,6 +238,16 @@
                                 <source>sdk/src/main/java</source>
                                 <source>sdk/src/processor/java</source>
                                 <source>sdk/src/generated/java</source>
+                            </sources>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>add-entrypoint-source</id>
+                        <goals>
+                            <goal>add-source</goal>
+                        </goals>
+                        <configuration>
+                            <sources>
                                 <source>src/generated/java</source>
                             </sources>
                         </configuration>
@@ -353,6 +363,57 @@
                     <artifactId>dagger-java-annotation-processor</artifactId>
                     <version>${dagger.sdk.version}</version>
                     <scope>provided</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <!-- Do not add the vendored SDK sources as compile roots. -->
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>add-dagger-sdk-sources</id>
+                                <phase>none</phase>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!--
+        Opt-in runtime fast path. When `dagger generate` has committed the compiled
+        Dagger Java SDK jar under sdk/repo (enabled by the SDK's vendorSdkJar
+        setting), this profile activates automatically on its presence: the module
+        builds against that jar instead of recompiling the vendored SDK sources,
+        which stay checked in for IDE navigation. With no committed jar the profile
+        stays inactive and the build compiles the sources as usual.
+        -->
+        <profile>
+            <id>dagger-vendored-sdk-jar</id>
+            <activation>
+                <file>
+                    <exists>sdk/repo/io/dagger/dagger-java-sdk/0.21.4/dagger-java-sdk-0.21.4.jar</exists>
+                </file>
+            </activation>
+            <repositories>
+                <repository>
+                    <id>dagger-vendored-sdk</id>
+                    <url>file://${project.basedir}/sdk/repo</url>
+                    <releases>
+                        <enabled>true</enabled>
+                    </releases>
+                    <snapshots>
+                        <enabled>false</enabled>
+                    </snapshots>
+                </repository>
+            </repositories>
+            <dependencies>
+                <dependency>
+                    <groupId>io.dagger</groupId>
+                    <artifactId>dagger-java-sdk</artifactId>
+                    <version>0.21.4</version>
                 </dependency>
             </dependencies>
             <build>
