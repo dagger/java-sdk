@@ -6,7 +6,6 @@ import static io.smallrye.graphql.client.core.Document.document;
 import static io.smallrye.graphql.client.core.Field.field;
 import static io.smallrye.graphql.client.core.Operation.operation;
 
-import com.jayway.jsonpath.JsonPath;
 import io.dagger.client.exception.DaggerExecException;
 import io.dagger.client.exception.DaggerQueryException;
 import io.smallrye.graphql.client.GraphQLError;
@@ -18,6 +17,8 @@ import io.smallrye.graphql.client.core.InlineFragment;
 import io.smallrye.graphql.client.dynamic.api.DynamicGraphQLClient;
 import jakarta.json.JsonArray;
 import jakarta.json.JsonObject;
+import jakarta.json.JsonString;
+import jakarta.json.JsonValue;
 import jakarta.json.bind.Jsonb;
 import jakarta.json.bind.JsonbBuilder;
 import jakarta.json.bind.JsonbConfig;
@@ -190,18 +191,25 @@ class QueryBuilder {
 
   <T> T executeQuery(Class<T> klass)
       throws ExecutionException, InterruptedException, DaggerQueryException {
-    String path =
+    List<String> pathElts =
         StreamSupport.stream(
                 Spliterators.spliteratorUnknownSize(parts.descendingIterator(), 0), false)
             .map(QueryPart::getOperation)
-            .collect(Collectors.joining("."));
+            .toList();
     Document query = buildDocument();
     Response response = executeQuery(query);
+    JsonValue value = response.getData();
+    for (String elt : pathElts) {
+      value = (value instanceof JsonObject obj) ? obj.get(elt) : null;
+    }
+    if (value == null || value.getValueType() == JsonValue.ValueType.NULL) {
+      return null;
+    }
     if (Scalar.class.isAssignableFrom(klass)) {
       // FIXME scalar could be other types than String in the future
-      String value = JsonPath.parse(response.getData().toString()).read(path, String.class);
+      String str = (value instanceof JsonString js) ? js.getString() : value.toString();
       try {
-        return klass.getDeclaredConstructor(String.class).newInstance(value);
+        return klass.getDeclaredConstructor(String.class).newInstance(str);
       } catch (NoSuchMethodException
           | InstantiationException
           | IllegalAccessException
@@ -209,9 +217,14 @@ class QueryBuilder {
         // FIXME - This may not happen
         throw new RuntimeException(nsme);
       }
-    } else {
-      return JsonPath.parse(response.getData().toString()).read(path, klass);
     }
+    if (klass == String.class && value instanceof JsonString js) {
+      return klass.cast(js.getString());
+    }
+    JsonbConfig config =
+        new JsonbConfig().withPropertyVisibilityStrategy(new PrivateVisibilityStrategy());
+    Jsonb jsonb = JsonbBuilder.newBuilder().withConfig(config).build();
+    return jsonb.fromJson(value.toString(), klass);
   }
 
   <T> List<T> executeListQuery(Class<T> klass)
