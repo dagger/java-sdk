@@ -5,7 +5,6 @@ import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.propagation.ContextPropagators;
 import io.opentelemetry.exporter.otlp.http.trace.OtlpHttpSpanExporter;
-import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
@@ -48,20 +47,18 @@ public class TelemetryInitializer {
     Resource resource =
         Resource.getDefault().merge(Resource.builder().put("serviceName", SERVICE_NAME).build());
 
-    SpanExporter spanExporter;
-    if ("http/protobuf".equalsIgnoreCase(OTLP_PROTOCOL)) {
-      spanExporter =
-          OtlpHttpSpanExporter.builder()
-              .setEndpoint(Optional.ofNullable(OTLP_TRACES_ENDPOINT).orElse(OTLP_ENDPOINT))
-              .setTimeout(2, TimeUnit.SECONDS)
-              .build();
-    } else {
-      spanExporter =
-          OtlpGrpcSpanExporter.builder()
-              .setEndpoint(Optional.ofNullable(OTLP_TRACES_ENDPOINT).orElse(OTLP_ENDPOINT))
-              .setTimeout(2, TimeUnit.SECONDS)
-              .build();
+    // The engine always exposes OTLP over http/protobuf; the sender-jdk exporter
+    // cannot speak gRPC, so anything else is reported and ignored.
+    if (OTLP_PROTOCOL != null && !"http/protobuf".equalsIgnoreCase(OTLP_PROTOCOL)) {
+      LOG.warn("Unsupported OTLP protocol {}, only http/protobuf is supported", OTLP_PROTOCOL);
+      return OpenTelemetry.noop();
     }
+
+    SpanExporter spanExporter =
+        OtlpHttpSpanExporter.builder()
+            .setEndpoint(Optional.ofNullable(OTLP_TRACES_ENDPOINT).orElse(OTLP_ENDPOINT))
+            .setTimeout(2, TimeUnit.SECONDS)
+            .build();
 
     SdkTracerProvider sdkTracerProvider =
         SdkTracerProvider.builder()
