@@ -15,14 +15,13 @@ import jakarta.json.JsonString;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
-import org.apache.commons.lang3.StringUtils;
 
 public class DaggerExceptionUtils {
 
   private DaggerExceptionUtils() {}
 
   public static Object getExtensionValueByKey(GraphQLError error, String key) {
-    if (error == null || StringUtils.isBlank(key) || error.getExtensions() == null) {
+    if (error == null || key == null || key.isBlank() || error.getExtensions() == null) {
       return null;
     }
 
@@ -61,8 +60,7 @@ public class DaggerExceptionUtils {
     return Arrays.stream(errors)
         .map(
             e ->
-                String.format(
-                    SIMPLE_MESSAGE, e.getMessage(), StringUtils.join(getPath(e), "."), getType(e)))
+                String.format(SIMPLE_MESSAGE, e.getMessage(), join(getPath(e), "."), getType(e)))
         .collect(Collectors.joining("\n"));
   }
 
@@ -73,10 +71,10 @@ public class DaggerExceptionUtils {
                 String.format(
                     ENHANCED_MESSAGE,
                     e.getMessage(),
-                    StringUtils.join(getPath(e), "."),
+                    join(getPath(e), "."),
                     getType(e),
                     getExitCode(e),
-                    StringUtils.join(getCmd(e), ",")))
+                    join(getCmd(e), ",")))
         .collect(Collectors.joining("\n"));
   }
 
@@ -87,11 +85,15 @@ public class DaggerExceptionUtils {
                 String.format(
                     FULL_MESSAGE,
                     e.getMessage(),
-                    StringUtils.join(getPath(e), "."),
+                    join(getPath(e), "."),
                     getType(e),
                     getExitCode(e),
-                    StringUtils.join(getCmd(e), ","),
+                    join(getCmd(e), ","),
                     getExtensionValueByKey(e, STDERR_KEY)))
         .collect(Collectors.joining("\n"));
+  }
+
+  private static String join(List<String> elements, String separator) {
+    return elements == null ? null : String.join(separator, elements);
   }
 }

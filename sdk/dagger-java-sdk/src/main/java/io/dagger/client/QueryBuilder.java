@@ -23,6 +23,8 @@ import jakarta.json.bind.Jsonb;
 import jakarta.json.bind.JsonbBuilder;
 import jakarta.json.bind.JsonbConfig;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.LinkedList;
@@ -31,7 +33,6 @@ import java.util.Spliterators;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
-import org.apache.commons.lang3.reflect.TypeUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -244,8 +245,27 @@ class QueryBuilder {
     JsonbConfig config =
         new JsonbConfig().withPropertyVisibilityStrategy(new PrivateVisibilityStrategy());
     Jsonb jsonb = JsonbBuilder.newBuilder().withConfig(config).build();
-    List<T> rv = jsonb.fromJson(array.toString(), TypeUtils.parameterize(List.class, klass));
+    List<T> rv = jsonb.fromJson(array.toString(), listOf(klass));
     return rv;
+  }
+
+  private static Type listOf(Class<?> element) {
+    return new ParameterizedType() {
+      @Override
+      public Type[] getActualTypeArguments() {
+        return new Type[] {element};
+      }
+
+      @Override
+      public Type getRawType() {
+        return List.class;
+      }
+
+      @Override
+      public Type getOwnerType() {
+        return null;
+      }
+    };
   }
 
   /**

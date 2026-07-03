@@ -13,7 +13,6 @@ import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
 import io.opentelemetry.sdk.trace.export.SpanExporter;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
-import org.apache.commons.lang3.Strings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,15 +35,12 @@ public class TelemetryInitializer {
 
     LOG.debug("Initializing Telemetry");
 
-    if (Strings.CI.equals(OTLP_DISABLED, "TRUE")) {
+    if ("TRUE".equalsIgnoreCase(OTLP_DISABLED)) {
       LOG.info("Opentelemetry is disabled");
       return OpenTelemetry.noop();
     }
 
-    if (!Strings.CS.startsWith(OTLP_ENDPOINT, "http://")
-        && !Strings.CS.startsWith(OTLP_ENDPOINT, "https://")
-        && !Strings.CS.startsWith(OTLP_TRACES_ENDPOINT, "http://")
-        && !Strings.CS.startsWith(OTLP_TRACES_ENDPOINT, "https://")) {
+    if (!hasHttpScheme(OTLP_ENDPOINT) && !hasHttpScheme(OTLP_TRACES_ENDPOINT)) {
       LOG.warn("Opentelemetry configuration is not valid, please check!");
       return OpenTelemetry.noop();
     }
@@ -53,7 +49,7 @@ public class TelemetryInitializer {
         Resource.getDefault().merge(Resource.builder().put("serviceName", SERVICE_NAME).build());
 
     SpanExporter spanExporter;
-    if (Strings.CI.equals(OTLP_PROTOCOL, "http/protobuf")) {
+    if ("http/protobuf".equalsIgnoreCase(OTLP_PROTOCOL)) {
       spanExporter =
           OtlpHttpSpanExporter.builder()
               .setEndpoint(Optional.ofNullable(OTLP_TRACES_ENDPOINT).orElse(OTLP_ENDPOINT))
@@ -95,5 +91,9 @@ public class TelemetryInitializer {
     if (INSTANCE != null) {
       INSTANCE.close();
     }
+  }
+
+  private static boolean hasHttpScheme(String url) {
+    return url != null && (url.startsWith("http://") || url.startsWith("https://"));
   }
 }
