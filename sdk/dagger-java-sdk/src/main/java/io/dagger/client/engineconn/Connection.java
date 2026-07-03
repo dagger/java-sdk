@@ -1,13 +1,11 @@
 package io.dagger.client.engineconn;
 
+import io.dagger.client.graphql.GraphQLClient;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.context.Context;
-import io.smallrye.graphql.client.dynamic.api.DynamicGraphQLClient;
-import io.smallrye.graphql.client.vertx.dynamic.VertxDynamicGraphQLClientBuilder;
-import io.vertx.core.Vertx;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
+import java.util.HashMap;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,21 +13,18 @@ public final class Connection {
 
   static final Logger LOG = LoggerFactory.getLogger(Connection.class);
 
-  private final DynamicGraphQLClient graphQLClient;
-  private final Vertx vertx;
+  private final GraphQLClient graphQLClient;
 
-  Connection(DynamicGraphQLClient graphQLClient, Vertx vertx) {
+  Connection(GraphQLClient graphQLClient) {
     this.graphQLClient = graphQLClient;
-    this.vertx = vertx;
   }
 
-  public DynamicGraphQLClient getGraphQLClient() {
+  public GraphQLClient getGraphQLClient() {
     return this.graphQLClient;
   }
 
   public void close() throws Exception {
     this.graphQLClient.close();
-    this.vertx.close();
   }
 
   public static Connection get(String workingDir) throws IOException {
@@ -53,23 +48,13 @@ public final class Connection {
   }
 
   private static Connection getConnection(int port, String token) {
-    Vertx vertx = Vertx.vertx();
-    // Inject Dagger Cloud token
-    String encodedToken =
-        Base64.getEncoder().encodeToString((token + ":").getBytes(StandardCharsets.UTF_8));
-
-    VertxDynamicGraphQLClientBuilder clientBuilder =
-        new VertxDynamicGraphQLClientBuilder()
-            .vertx(vertx)
-            .url(String.format("http://127.0.0.1:%d/query", port))
-            .header("authorization", String.format("Basic %s", encodedToken));
-
     // Inject OpenTelemetry context into headers
+    Map<String, String> headers = new HashMap<>();
     GlobalOpenTelemetry.getPropagators()
         .getTextMapPropagator()
-        .inject(
-            Context.current(), clientBuilder, (carrier, key, value) -> carrier.header(key, value));
+        .inject(Context.current(), headers, (carrier, key, value) -> carrier.put(key, value));
 
-    return new Connection(clientBuilder.build(), vertx);
+    return new Connection(
+        new GraphQLClient(String.format("http://127.0.0.1:%d/query", port), token, headers));
   }
 }

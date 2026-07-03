@@ -1,17 +1,14 @@
 package io.dagger.client;
 
-import static io.smallrye.graphql.client.core.Argument.arg;
-import static io.smallrye.graphql.client.core.InputObject.inputObject;
-import static io.smallrye.graphql.client.core.InputObjectField.prop;
-
 import io.dagger.client.exception.DaggerQueryException;
-import io.smallrye.graphql.client.core.Argument;
-import io.smallrye.graphql.client.core.InputObjectField;
+import io.dagger.client.graphql.GraphQLValues;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
 
 public class Arguments {
 
@@ -43,12 +40,12 @@ public class Arguments {
     return new Arguments(newMap);
   }
 
-  List<Argument> toList() throws ExecutionException, InterruptedException, DaggerQueryException {
-    List<Argument> argList = new ArrayList<>();
+  String toGraphQL() throws ExecutionException, InterruptedException, DaggerQueryException {
+    List<String> rendered = new ArrayList<>();
     for (Map.Entry<String, Object> entry : args.entrySet()) {
-      argList.add(arg(entry.getKey(), toArgumentValue(entry.getValue())));
+      rendered.add(entry.getKey() + ":" + GraphQLValues.format(toArgumentValue(entry.getValue())));
     }
-    return argList;
+    return rendered.stream().collect(Collectors.joining(","));
   }
 
   private Object toArgumentValue(Object value)
@@ -65,11 +62,11 @@ public class Arguments {
         return id;
       }
     } else if (value instanceof InputValue) {
-      return inputObject(
-          ((InputValue) value)
-              .toMap().entrySet().stream()
-                  .map(e -> prop(e.getKey(), e.getValue()))
-                  .toArray(InputObjectField[]::new));
+      Map<String, Object> normalized = new LinkedHashMap<>();
+      for (Map.Entry<String, Object> e : ((InputValue) value).toMap().entrySet()) {
+        normalized.put(e.getKey(), toArgumentValue(e.getValue()));
+      }
+      return normalized;
     } else if (value instanceof String
         || value instanceof Integer
         || value instanceof Long

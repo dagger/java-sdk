@@ -2,19 +2,12 @@ package io.dagger.client;
 
 import static io.dagger.client.exception.DaggerExceptionConstants.TYPE_EXEC_ERROR_VALUE;
 import static io.dagger.client.exception.DaggerExceptionConstants.TYPE_KEY;
-import static io.smallrye.graphql.client.core.Document.document;
-import static io.smallrye.graphql.client.core.Field.field;
-import static io.smallrye.graphql.client.core.Operation.operation;
 
 import io.dagger.client.exception.DaggerExecException;
 import io.dagger.client.exception.DaggerQueryException;
-import io.smallrye.graphql.client.GraphQLError;
-import io.smallrye.graphql.client.Response;
-import io.smallrye.graphql.client.core.Document;
-import io.smallrye.graphql.client.core.Field;
-import io.smallrye.graphql.client.core.FieldOrFragment;
-import io.smallrye.graphql.client.core.InlineFragment;
-import io.smallrye.graphql.client.dynamic.api.DynamicGraphQLClient;
+import io.dagger.client.graphql.GraphQLClient;
+import io.dagger.client.graphql.GraphQLError;
+import io.dagger.client.graphql.GraphQLResponse;
 import jakarta.json.JsonArray;
 import jakarta.json.JsonObject;
 import jakarta.json.JsonString;
@@ -40,26 +33,25 @@ class QueryBuilder {
 
   static final Logger LOG = LoggerFactory.getLogger(QueryBuilder.class);
 
-  private final DynamicGraphQLClient client;
+  private final GraphQLClient client;
   private final Deque<QueryPart> parts;
   private final List<QueryPart> leaves;
   private final String inlineFragmentType;
 
-  QueryBuilder(DynamicGraphQLClient client) {
+  QueryBuilder(GraphQLClient client) {
     this(client, new LinkedList<>(), new ArrayList<>(), null);
   }
 
-  private QueryBuilder(DynamicGraphQLClient client, Deque<QueryPart> parts) {
+  private QueryBuilder(GraphQLClient client, Deque<QueryPart> parts) {
     this(client, parts, new ArrayList<>(), null);
   }
 
-  private QueryBuilder(
-      DynamicGraphQLClient client, Deque<QueryPart> parts, List<String> finalFields) {
+  private QueryBuilder(GraphQLClient client, Deque<QueryPart> parts, List<String> finalFields) {
     this(client, parts, finalFields, null);
   }
 
   private QueryBuilder(
-      DynamicGraphQLClient client,
+      GraphQLClient client,
       Deque<QueryPart> parts,
       List<String> finalFields,
       String inlineFragmentType) {
@@ -117,7 +109,7 @@ class QueryBuilder {
     return new QueryBuilder(client, list, new ArrayList<>(), typeName);
   }
 
-  private void handleErrors(Response response) throws DaggerQueryException {
+  private void handleErrors(GraphQLResponse response) throws DaggerQueryException {
     if (!response.hasError()) {
       return;
     }
@@ -141,38 +133,26 @@ class QueryBuilder {
     throw new DaggerQueryException(response.getErrors().get(0));
   }
 
-  Document buildDocument() throws ExecutionException, InterruptedException, DaggerQueryException {
-    Field leafField = parts.pop().toField();
-    leafField.setFields(
-        leaves.stream().<FieldOrFragment>map(qp -> field(qp.getOperation())).toList());
-    List<Field> fields = new ArrayList<>();
-    for (QueryPart qp : parts) {
-      fields.add(qp.toField());
+  String buildQuery() throws ExecutionException, InterruptedException, DaggerQueryException {
+    String block = leaves.stream().map(QueryPart::getOperation).collect(Collectors.joining(" "));
+    // parts front-to-back is innermost-to-outermost; wrap each level around the previous
+    List<QueryPart> chain = new ArrayList<>(parts);
+    for (int i = 0; i < chain.size(); i++) {
+      boolean outermost = i == chain.size() - 1;
+      if (outermost && inlineFragmentType != null && !block.isEmpty()) {
+        // node(id: "...") { ... on TypeName { nested { fields } } }
+        block = "... on " + inlineFragmentType + " {" + block + "}";
+      }
+      String rendered = chain.get(i).toGraphQL();
+      block = block.isEmpty() ? rendered : rendered + " {" + block + "}";
     }
-    Field operation =
-        fields.stream()
-            .reduce(
-                leafField,
-                (acc, field) -> {
-                  field.setFields(List.of(acc));
-                  return field;
-                });
-    // Wrap children of the outermost field in an inline fragment if needed.
-    // This produces: node(id: "...") { ... on TypeName { nested { fields } } }
-    if (inlineFragmentType != null) {
-      List<FieldOrFragment> children = operation.getFields();
-      InlineFragment fragment =
-          InlineFragment.on(inlineFragmentType, children.toArray(new FieldOrFragment[0]));
-      operation.setFields(List.of(fragment));
-    }
-    Document query = document(operation(operation));
-    return query;
+    return "query {" + block + "}";
   }
 
-  Response executeQuery(Document document)
+  GraphQLResponse executeQuery(String query)
       throws ExecutionException, InterruptedException, DaggerQueryException {
-    LOG.debug("Executing query: {}", document.build());
-    Response response = client.executeSync(document);
+    LOG.debug("Executing query: {}", query);
+    GraphQLResponse response = client.executeQuery(query);
     handleErrors(response);
     LOG.debug("Received response: {}", response.getData());
     return response;
@@ -186,8 +166,7 @@ class QueryBuilder {
    * @throws DaggerQueryException
    */
   void executeQuery() throws ExecutionException, InterruptedException, DaggerQueryException {
-    Document query = buildDocument();
-    executeQuery(query);
+    executeQuery(buildQuery());
   }
 
   <T> T executeQuery(Class<T> klass)
@@ -197,8 +176,7 @@ class QueryBuilder {
                 Spliterators.spliteratorUnknownSize(parts.descendingIterator(), 0), false)
             .map(QueryPart::getOperation)
             .toList();
-    Document query = buildDocument();
-    Response response = executeQuery(query);
+    GraphQLResponse response = executeQuery(buildQuery());
     JsonValue value = response.getData();
     for (String elt : pathElts) {
       value = (value instanceof JsonObject obj) ? obj.get(elt) : null;
@@ -235,8 +213,7 @@ class QueryBuilder {
                 Spliterators.spliteratorUnknownSize(parts.descendingIterator(), 0), false)
             .map(QueryPart::getOperation)
             .toList();
-    Document document = buildDocument();
-    Response response = executeQuery(document);
+    GraphQLResponse response = executeQuery(buildQuery());
     JsonObject obj = response.getData();
     for (int i = 0; i < pathElts.size() - 1; i++) {
       obj = obj.getJsonObject(pathElts.get(i));
@@ -280,8 +257,7 @@ class QueryBuilder {
                 Spliterators.spliteratorUnknownSize(parts.descendingIterator(), 0), false)
             .map(QueryPart::getOperation)
             .toList();
-    Document document = buildDocument();
-    Response response = executeQuery(document);
+    GraphQLResponse response = executeQuery(buildQuery());
     JsonObject obj = response.getData();
     for (int i = 0; i < pathElts.size() - 1; i++) {
       obj = obj.getJsonObject(pathElts.get(i));

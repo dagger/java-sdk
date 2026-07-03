@@ -9,7 +9,7 @@ import static io.dagger.client.exception.DaggerExceptionConstants.STDERR_KEY;
 import static io.dagger.client.exception.DaggerExceptionConstants.STDOUT_KEY;
 import static io.dagger.client.exception.DaggerExceptionConstants.TYPE_KEY;
 
-import io.smallrye.graphql.client.GraphQLError;
+import io.dagger.client.graphql.GraphQLError;
 import jakarta.json.JsonArray;
 import jakarta.json.JsonString;
 import java.util.Arrays;

@@ -1,9 +1,6 @@
 package io.dagger.client;
 
-import static io.smallrye.graphql.client.core.Field.field;
-
 import io.dagger.client.exception.DaggerQueryException;
-import io.smallrye.graphql.client.core.Field;
 import java.util.concurrent.ExecutionException;
 
 class QueryPart {
@@ -24,9 +21,8 @@ class QueryPart {
     return fieldName;
   }
 
-  Field toField() throws ExecutionException, InterruptedException, DaggerQueryException {
-    // List<Argument> argList = arguments.entrySet().stream().map(e -> arg(e.getKey(),
-    // e.getValue().serialize())).toList();
-    return field(fieldName, arguments.toList());
+  String toGraphQL() throws ExecutionException, InterruptedException, DaggerQueryException {
+    String args = arguments.toGraphQL();
+    return args.isEmpty() ? fieldName : fieldName + "(" + args + ")";
   }
 }

@@ -1,6 +1,6 @@
 package io.dagger.client.exception;
 
-import io.smallrye.graphql.client.GraphQLError;
+import io.dagger.client.graphql.GraphQLError;
 
 public class DaggerQueryException extends Exception {
 
