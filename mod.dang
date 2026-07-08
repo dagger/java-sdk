@@ -43,9 +43,9 @@ type Mod {
   """
   pub generate(ws: Workspace!): Changeset! {
     if (skipGenerate(ws)) {
-      polyfill.workspace(ws).fork.changes
+      changeset
     } else {
-      generateModule(ws, path).changes
+      generateModule(ws, path)
     }
   }
 
@@ -175,9 +175,11 @@ type Mod {
   """
   Stage the vendored SDK + generated entrypoint for one module.
   """
-  let generateModule(ws: Workspace!, modPathArg: String!): PolyfillWorkspaceFork! {
-    let pws = polyfill.workspace(ws)
-    let modSource = pws.moduleSource(modPathArg)
+  let generateModule(ws: Workspace!, modPathArg: String!): Changeset! {
+    # Native module-source resolution (Directory.asModuleSource, Query.moduleSource)
+    # fails from module code: SDK and user-defaults loading need the requester's host
+    # session. The polyfill resolves the source from a nested client that has one.
+    let modSource = polyfill.workspace(ws).moduleSource(modPathArg)
     let name = modSource.core.moduleName
     let introspectionJSON = modSource.core.introspectionSchemaJSON
     let vendored = vendoredSdk(introspectionJSON, name)
@@ -191,15 +193,21 @@ type Mod {
       .withoutDirectory("src/generated")
     let entrypoint = generatedEntrypoint(baseDir, name)
 
-    let fork = pws
-      .fork
+    let before = if (modPathArg == ".") {
+      ws.directory("/", include: ["**"])
+    } else {
+      ws.directory("/", include: [modPathArg + "/**"])
+    }
+    let staged = before
       .withDirectory(joinPath(modPathArg, "sdk"), vendored)
       .withDirectory(joinPath(modPathArg, "src/generated/java"), entrypoint)
 
     if (vendorSdkJar) {
-      fork.withDirectory(joinPath(modPathArg, "sdk/repo"), vendoredSdkJar(introspectionJSON, name))
+      staged
+        .withDirectory(joinPath(modPathArg, "sdk/repo"), vendoredSdkJar(introspectionJSON, name))
+        .changes(before)
     } else {
-      fork
+      staged.changes(before)
     }
   }
 
