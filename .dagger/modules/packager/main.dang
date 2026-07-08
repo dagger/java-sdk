@@ -43,8 +43,7 @@ type Packager {
   root (runs at `dagger generate`).
   """
   pub generate(ws: Workspace!): Changeset! @generate {
-    polyfill.workspace(ws).fork
-      .withDirectory("prebuilt/m2", codegenPluginRepo(ws))
-      .changes
+    let before = ws.directory("/", include: ["prebuilt/**"])
+    before.withDirectory("prebuilt/m2", codegenPluginRepo(ws)).changes(before)
   }
 }

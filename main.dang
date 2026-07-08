@@ -45,7 +45,12 @@ type JavaSdk {
       rawPath.trimSuffix("/")
     }
 
-    polyfill.workspace(ws).fork.withDirectory(modPath, renderedTemplate(name, "default")).changes
+    let before = if (modPath == ".") {
+      ws.directory("/", include: ["**"])
+    } else {
+      ws.directory("/", include: [modPath + "/**"])
+    }
+    before.withDirectory(modPath, renderedTemplate(name, "default")).changes(before)
   }
 
   """
