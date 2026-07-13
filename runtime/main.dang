@@ -1,0 +1,137 @@
+"""
+Runtime module for the Java SDK.
+
+Builds and packages a module's already-vendored, committed sources. Code
+generation is owned by the Java SDK's `generate` step (`dagger generate`), not
+here: new-style modules commit the generated files, so the engine skips codegen
+at module load and this runtime only builds and packages.
+"""
+type JavaSdkRuntime {
+  """If true, add -e to the maven command to show execution error messages."""
+  pub mavenErrors: Boolean! = false
+
+  """If true, add -X to the maven command to enable full debug logging."""
+  pub mavenDebugLogging: Boolean! = false
+
+  let modSourceDirPath: String! { "/src" }
+  let modDirPath: String! { "/opt/module" }
+  let entrypointRelPath: String! { "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java" }
+
+  # Built from committed single-FROM Dockerfiles (rather than an inline
+  # container.from) so Dependabot keeps the pinned base image digests up to date.
+  let mavenBase: Container! { currentModule.source.directory("images/maven").dockerBuild }
+  let jreBase: Container! { currentModule.source.directory("images/java").dockerBuild }
+
+  """
+  Configure the runtime from the module's dagger.json `sdk.config`. The engine
+  calls this at load with the config values (or these defaults).
+  """
+  pub withConfig(
+    mavenErrors: Boolean! = false,
+    mavenDebugLogging: Boolean! = false,
+  ): JavaSdkRuntime! {
+    JavaSdkRuntime(mavenErrors: mavenErrors, mavenDebugLogging: mavenDebugLogging)
+  }
+
+  """
+  No-op: code generation is owned by `dagger generate`. New-style modules commit
+  the generated files, so the engine skips codegen at module load. Returning the
+  module source unchanged keeps the SDK code-generator contract satisfied without
+  generating anything.
+  """
+  pub codegen(modSource: ModuleSource!, introspectionJson: File): GeneratedCode! {
+    generatedCode(code: modSource.contextDirectory)
+  }
+
+  """
+  Build and package the module from its committed sources; return a container that
+  runs the resulting jar. The module is self-contained (the Java SDK is vendored
+  under sdk/ and the entrypoint is committed under src/generated/java), so a plain
+  `mvn package` compiles them together and only fetches third-party dependencies.
+  No codegen, introspection, templating, or version rewriting happens here.
+  """
+  pub moduleRuntime(modSource: ModuleSource!, introspectionJson: File): Container! {
+    let subPath = modSource.sourceSubpath
+    let contextDir = modSource.contextDirectory
+
+    checkGeneratedFiles(contextDir, subPath)
+
+    let workdir = if (subPath == "" or subPath == ".") {
+      modSourceDirPath
+    } else {
+      modSourceDirPath + "/" + subPath
+    }
+
+    let built = disableSVE(mavenBase)
+      .withMountedCache(
+        path: "/root/.m2",
+        cache: cacheVolume("sdk-java-maven-m2"),
+        sharing: CacheSharingMode.LOCKED,
+      )
+      .withDirectory(modSourceDirPath, contextDir)
+      .withWorkdir(workdir)
+      .withExec(mavenPackageArgs)
+      .withExec(["sh", "-c", pickJarScript])
+
+    let jar = built.file("/tmp/module.jar")
+
+    disableSVE(jreBase)
+      .withFile(modDirPath + "/module.jar", jar)
+      .withWorkdir(modDirPath)
+      .withEntrypoint(["java", "-jar", modDirPath + "/module.jar"])
+  }
+
+  """
+  Maven command: `mvn package -DskipTests [-e] [-X] --threads 1C --no-transfer-progress`.
+  """
+  let mavenPackageArgs: [String!]! {
+    let base = ["mvn", "package", "-DskipTests"]
+    let withErrors = if (mavenErrors) { base + ["-e"] } else { base }
+    let withDebug = if (mavenDebugLogging) { withErrors + ["-X"] } else { withErrors }
+    withDebug + ["--threads", "1C", "--no-transfer-progress"]
+  }
+
+  """
+  Copy the packaged jar to a fixed path, skipping shade's `original-` backup of the
+  pre-shaded artifact. Uses a shell glob rather than a maven JVM spawn to resolve
+  the <artifactId>-<version>.jar name.
+  """
+  let pickJarScript: String! {
+    "set -e; jar=$(ls -1 target/*.jar 2>/dev/null | grep -v '/original-' | head -n1); test -n \"$jar\" || { echo \"no packaged jar found in $(pwd)/target\" >&2; exit 1; }; cp \"$jar\" /tmp/module.jar"
+  }
+
+  """
+  Fail early, actionably, when the module is missing its generated (committed)
+  entrypoint — e.g. `dagger generate` was never run or its output not committed.
+  Without this, packaging still yields a jar whose manifest points at the absent
+  io.dagger.gen.entrypoint.Entrypoint class, which then dies at container start
+  with an inscrutable "Could not find or load main class".
+  """
+  let checkGeneratedFiles(contextDir: Directory!, subPath: String!): Void {
+    let relPath = if (subPath == "" or subPath == ".") {
+      entrypointRelPath
+    } else {
+      subPath + "/" + entrypointRelPath
+    }
+    let moduleLabel = if (subPath == "" or subPath == ".") { "." } else { subPath }
+    let present = contextDir.exists(path: relPath, expectedType: ExistsType.REGULAR_TYPE)
+    let nonEmpty = if (present) { contextDir.file(relPath).size > 0 } else { false }
+    if (nonEmpty == false) {
+      raise "the Java module at \"" + moduleLabel + "\" is missing its generated file \"" + entrypointRelPath + "\" (missing or empty): run `dagger generate` and commit the generated files"
+    }
+    null
+  }
+
+  """
+  arm64 JDK crash workaround: disable SVE when the container platform is arm64.
+  `-XX:UseSVE=0` is AArch64-only, so it is applied only on arm64.
+  """
+  let disableSVE(ctr: Container!): Container! {
+    # Platform is a scalar; JSON.encode renders it to a matchable string.
+    if (JSON.encode(ctr.platform).contains("arm64")) {
+      ctr.withEnvVariable("_JAVA_OPTIONS", "-XX:UseSVE=0")
+    } else {
+      ctr
+    }
+  }
+}
