@@ -4,6 +4,17 @@ End-to-end checks for the Java SDK helper module.
 type E2e {
   let outputRoot: String! = ".dagger/modules/e2e/out"
 
+  let fixtureRoot: String! = ".dagger/modules/e2e/fixtures"
+  let generateModulePath: String! = fixtureRoot + "/generate/app"
+  let lookupModulePath: String! = fixtureRoot + "/lookup/app"
+  let lookupNestedPath: String! = lookupModulePath + "/nested"
+  let depsModulePath: String! = fixtureRoot + "/deps/app"
+  let skipModulePath: String! = fixtureRoot + "/skip/app"
+  # A CLI 1.0 managed module: configured by dagger-module.toml, not dagger.json.
+  let managedTomlModulePath: String! = fixtureRoot + "/managed-toml/app"
+  # A module using a different SDK; this SDK must never manage it.
+  let nonJavaModulePath: String! = fixtureRoot + "/lookup/not-java"
+
   """Fail the current check when a condition is false."""
   let assert(condition: Boolean!, message: String!): Void {
     if (condition == false) { raise message }
@@ -78,6 +89,74 @@ type E2e {
 
     let module = changes.layer.file(p + "/src/main/java/io/dagger/modules/initdefault/InitDefault.java").contents
     assertContains(module, "class InitDefault", "module class should be the camel-case module name")
+
+    null
+  }
+
+  """
+  From the workspace root the whole workspace is in scope, so modules() should
+  return every Java SDK module this workspace manages — whether it is configured
+  by the legacy dagger.json or the CLI 1.0 dagger-module.toml — and nothing that
+  isn't managed by this SDK (e.g. a sibling module using another SDK).
+  """
+  pub modulesCheck(ws: Workspace!): Void @check {
+    let pathRecords = javaSdk.modules(ws).{{rootPath}}
+
+    assert(pathRecords.filter { r => r.rootPath == lookupModulePath }.length > 0, "lookup Java module should be listed")
+    assert(pathRecords.filter { r => r.rootPath == skipModulePath }.length > 0, "skip-marked Java module should still be listed (skip only affects generate)")
+    assert(pathRecords.filter { r => r.rootPath == generateModulePath }.length > 0, "generate Java module should be listed")
+    assert(pathRecords.filter { r => r.rootPath == depsModulePath }.length > 0, "deps Java module should be listed")
+    assert(pathRecords.filter { r => r.rootPath == managedTomlModulePath }.length > 0, "a dagger-module.toml (CLI 1.0) managed module should be listed")
+    assert(pathRecords.filter { r => r.rootPath == nonJavaModulePath }.length == 0, "a module not managed by this SDK should be excluded from modules listing")
+
+    null
+  }
+
+  """
+  Discovery is anchored at the client's cwd, not the workspace root. Re-anchoring
+  the workspace to a subdirectory scopes modules() to the managed modules in that
+  cone (walk-down) plus the nearest enclosing one (find-up), and excludes managed
+  modules that live outside it.
+  """
+  pub modulesCwdCheck(ws: Workspace!): Void @check {
+    # A stable snapshot of the workspace, re-anchorable at any cwd. Keep every
+    # module config (both dagger.json and dagger-module.toml, for discovery) and
+    # the nested .keep so lookup/app/nested survives the include filter and can
+    # serve as a config-less subdirectory.
+    let root = ws.directory("/", include: ["**/dagger.json", "**/dagger-module.toml", "**/.keep"])
+
+    # Walk-down: from fixtures/generate only generate/app is in the cone; the
+    # sibling managed modules live outside it and must be excluded. Its
+    # cwd-relative path is "app" — a directory beneath the cwd.
+    let fromGenerate = javaSdk.modules(root.asWorkspace(cwd: fixtureRoot + "/generate"))
+    let fromGenerateRoots = fromGenerate.{{rootPath}}
+    assert(fromGenerateRoots.filter { r => r.rootPath == generateModulePath }.length > 0, "cwd=generate: the managed module in the cone should be discovered")
+    assert(fromGenerateRoots.filter { r => r.rootPath == lookupModulePath }.length == 0, "cwd=generate: lookup/app is outside the cone and must be excluded")
+    assert(fromGenerateRoots.filter { r => r.rootPath == depsModulePath }.length == 0, "cwd=generate: deps/app is outside the cone and must be excluded")
+    assert(fromGenerateRoots.filter { r => r.rootPath == skipModulePath }.length == 0, "cwd=generate: skip/app is outside the cone and must be excluded")
+    assert(fromGenerateRoots.length == 1, "cwd=generate: exactly one managed module is in the cone")
+    assert(fromGenerate.{{path}}.filter { r => r.path == "app" }.length > 0, "cwd=generate: the discovered module's path should be cwd-relative (app)")
+
+    # Find-up: from inside lookup/app (a nested subdir with no config of its own)
+    # the enclosing managed module is discovered; siblings are not. Its
+    # cwd-relative path is ".." — an ancestor of the cwd.
+    let fromNested = javaSdk.modules(root.asWorkspace(cwd: lookupNestedPath))
+    let fromNestedRoots = fromNested.{{rootPath}}
+    assert(fromNestedRoots.filter { r => r.rootPath == lookupModulePath }.length > 0, "cwd=lookup/app/nested: find-up should discover the enclosing lookup/app")
+    assert(fromNestedRoots.filter { r => r.rootPath == generateModulePath }.length == 0, "cwd=lookup/app/nested: generate/app is outside the cone")
+    assert(fromNestedRoots.length == 1, "cwd=lookup/app/nested: only the enclosing module should be discovered")
+    assert(fromNested.{{path}}.filter { r => r.path == ".." }.length > 0, "cwd=lookup/app/nested: the enclosing module's path should be cwd-relative (..)")
+
+    # Root cwd: the whole workspace is in scope, so every managed module — and
+    # only the managed ones — is discovered, whether marked by dagger.json or
+    # dagger-module.toml.
+    let fromRoot = javaSdk.modules(root.asWorkspace(cwd: "/")).{{rootPath}}
+    assert(fromRoot.filter { r => r.rootPath == generateModulePath }.length > 0, "cwd=/: generate/app should be listed")
+    assert(fromRoot.filter { r => r.rootPath == lookupModulePath }.length > 0, "cwd=/: lookup/app should be listed")
+    assert(fromRoot.filter { r => r.rootPath == depsModulePath }.length > 0, "cwd=/: deps/app should be listed")
+    assert(fromRoot.filter { r => r.rootPath == skipModulePath }.length > 0, "cwd=/: skip/app should be listed")
+    assert(fromRoot.filter { r => r.rootPath == managedTomlModulePath }.length > 0, "cwd=/: the dagger-module.toml managed module should be listed")
+    assert(fromRoot.length == 5, "cwd=/: exactly the five managed modules should be listed")
 
     null
   }
