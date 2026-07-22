@@ -95,20 +95,29 @@ type JavaSdk {
   the ones this SDK manages, whether they use dagger-module.toml or dagger.json.
   """
   pub modules(ws: Workspace!): [Mod!]! {
-    let managed = currentModule.asSDK.modules.{{path}}
-    let cwd = ws.cwd.trimPrefix("/").trimSuffix("/")
+    let managed = ws.sdk(name: currentModule.name).modules.{{source}}
+    let cwd = normalizePath(ws.cwd)
     polyfill.workspace(ws)
       .findConfigDirs(moduleConfigFilenames, exclude: ["**/target/**"])
       .map { dir => moduleRelPath(cwd, dir) }
       .uniq
-      .filter { path => managed.filter { m => m.path == path }.length > 0 }
+      .filter { path => managed.filter { m => normalizePath(m.source) == path }.length > 0 }
       .map { path => Mod(rootPath: path, ws: ws, skipGenerateFilename: skipGenerateFilename, vendorSdkJar: vendorSdkJar) }
+  }
+
+  """
+  Normalize a workspace path: strip a leading "./" or "/" and any trailing "/",
+  and map the empty/root path to ".".
+  """
+  let normalizePath(path: String!): String! {
+    let normalized = path.trimPrefix("./").trimPrefix("/").trimSuffix("/")
+    if (normalized == "") { "." } else { normalized }
   }
 
   """
   Resolve a findConfigDirs result — a cwd-relative path, at or below the cwd
   ("." , "sub/dir") or a strict ancestor (".." , "../..") — against the cwd into a
-  workspace-root-relative path, the format both asSDK module paths and
+  workspace-root-relative path, the format both managed module sources and
   Mod.rootPath use.
   """
   let moduleRelPath(cwd: String!, dir: String!): String! {
