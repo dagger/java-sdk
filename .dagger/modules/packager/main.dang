@@ -34,7 +34,12 @@ type Packager {
       .withDirectory("/dagger-io", sdkSource(ws))
       .withWorkdir("/dagger-io")
       .withExec(["mvn", "--projects", "dagger-codegen-maven-plugin", "--also-make", "install", "-T1C", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "-Dproject.build.outputTimestamp=2024-01-01T00:00:00Z", "--no-transfer-progress"])
-      .withExec(["sh", "-c", "rm -rf /out && mkdir -p /out/io && cp -r /root/.m2/repository/io/dagger /out/io/dagger"])
+      # Strip Maven's install-time timestamps so the committed repo is
+      # byte-reproducible: drop the comment lines from _remote.repositories
+      # (keeping the ">=" local-install markers resolution needs) and pin
+      # <lastUpdated>. Otherwise every generate re-timestamps these files and
+      # the check reports perpetual drift.
+      .withExec(["sh", "-c", "rm -rf /out && mkdir -p /out/io && cp -r /root/.m2/repository/io/dagger /out/io/dagger && find /out -name _remote.repositories -exec sed -i '/>=/!d' {} ';' && find /out -name maven-metadata-local.xml -exec sed -i 's|<lastUpdated>[0-9]*</lastUpdated>|<lastUpdated>20240101000000</lastUpdated>|' {} ';'"])
       .directory("/out")
   }
 

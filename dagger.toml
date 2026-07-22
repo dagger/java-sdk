@@ -1,46 +1,40 @@
-[modules.go]
-source = "github.com/dagger/go"
+# Dagger workspace configuration
+# Install modules with: dagger install <module>
 
-# Go version used for the default Go base image.
-# settings.version = ""
-# Base image used for Go test, generate, and helper containers.
-# settings.base = "alpine:latest"
-# Extra workspace-root include patterns mounted for each module's Go commands.
-# settings.includeExtraFiles = [""]
-# Module roots to lint. A bare pattern selects, a "!"-prefixed pattern
-# settings.lint = [""]
-# Module roots to test. Same selection rules as `lint`.
-# settings.test = [""]
-# Module roots to run go generate in. Same selection rules as `lint`.
-# settings.generate = [""]
+[modules.e2e]
+source = ".dagger/modules/e2e"
 
-[modules.dagger-go-sdk]
-source = "github.com/dagger/go-sdk"
-
-# Marker filename that skips generate when found at or above a Go SDK module root.
-# settings.skipGenerateFilename = ""
-
-[modules.dagger-go-sdk.as-sdk]
-name = "go"
-
-[[modules.dagger-go-sdk.as-sdk.modules]]
-path = "./runtime"
-
-
-[modules.dagger-dang-sdk]
-source = "github.com/dagger/dang-sdk"
-
-# Marker filename that skips generate when found at or above a Dang SDK module root.
-# settings.skipGenerateFilename = ""
-
-[modules.dagger-dang-sdk.as-sdk]
-name = "dang"
-
-[[modules.dagger-dang-sdk.as-sdk.modules]]
-path = "."
-
-[[modules.dagger-dang-sdk.as-sdk.modules]]
-path = ".dagger/modules/packager"
+[modules.java-sdk]
+source = "."
+check.skip = ["*"]
 
 [modules.packager]
 source = ".dagger/modules/packager"
+
+[modules.dang-sdk]
+source = "github.com/dagger/dang-sdk"
+# Marker filename that skips generate when found at or above a Dang SDK module root.
+# settings.skipGenerateFilename = ""
+
+[modules.dang-sdk.as-sdk]
+
+[[modules.dang-sdk.as-sdk.modules]]
+path = "."
+
+[modules.java-sdk.as-sdk]
+name = "java"
+
+[[modules.java-sdk.as-sdk.modules]]
+path = ".dagger/modules/e2e/fixtures/generate/app"
+
+[[modules.java-sdk.as-sdk.modules]]
+path = ".dagger/modules/e2e/fixtures/lookup/app"
+
+[[modules.java-sdk.as-sdk.modules]]
+path = ".dagger/modules/e2e/fixtures/deps/app"
+
+[[modules.java-sdk.as-sdk.modules]]
+path = ".dagger/modules/e2e/fixtures/skip/app"
+
+[[modules.java-sdk.as-sdk.modules]]
+path = ".dagger/modules/e2e/fixtures/managed-toml/app"
