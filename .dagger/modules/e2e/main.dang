@@ -161,4 +161,30 @@ type E2e {
 
     null
   }
+
+  """
+  Generation from a subdirectory must resolve managed module root paths from
+  the workspace root, not relative to the caller's cwd.
+  """
+  pub generateCwdCheck(ws: Workspace!): Void @check {
+    # Prepare a valid module in memory and remove the fixture-wide skip marker
+    # so this check can exercise generation without changing committed fixtures.
+    let initialized = javaSdk.initModule(ws, name: "generate-app", path: generateModulePath)
+    let root = ws
+      .directory("/", exclude: [fixtureRoot + "/.dagger-java-sdk-skip-generate"])
+      .withDirectory(".", initialized.layer)
+    let fromParent = javaSdk.generateAll(
+      root.asWorkspace(cwd: fixtureRoot + "/generate"),
+    )
+    assertAdded(fromParent, generateModulePath + "/sdk/src/main/java/io/dagger/client/Dagger.java")
+    assertAdded(fromParent, generateModulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
+
+    let fromModule = javaSdk.generateAll(
+      root.asWorkspace(cwd: generateModulePath),
+    )
+    assertAdded(fromModule, generateModulePath + "/sdk/src/main/java/io/dagger/client/Dagger.java")
+    assertAdded(fromModule, generateModulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
+
+    null
+  }
 }

@@ -201,7 +201,8 @@ type Mod {
     # Native module-source resolution (Directory.asModuleSource, Query.moduleSource)
     # fails from module code: SDK and user-defaults loading need the requester's host
     # session. The polyfill resolves the source from a nested client that has one.
-    let modSource = polyfill.workspace(ws).moduleSource(modPathArg)
+    # Anchor rootPath at "/" so a non-root workspace cwd is not prefixed again.
+    let modSource = polyfill.workspace(ws).moduleSource("/" + modPathArg)
     let name = modSource.core.moduleName
     let introspectionJSON = modSource.core.introspectionSchemaJSON
     let vendored = vendoredSdk(introspectionJSON, name)
