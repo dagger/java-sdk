@@ -21,6 +21,9 @@ source = "github.com/dagger/dang-sdk"
 [[modules.dang-sdk.as-sdk.modules]]
 path = "."
 
+[modules.sdk-sdk]
+source = "github.com/dagger/sdk-sdk"
+
 [modules.java-sdk.as-sdk]
 name = "java"
 
