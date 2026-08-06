@@ -43,7 +43,7 @@ type JavaSdk {
     name: String!,
     path: String!,
     """
-    Template to use to init the module: default, empty, legacy
+    Template to use to init the module: default*, empty, legacy
     """
     template: String! = "default"
   ): Changeset! {

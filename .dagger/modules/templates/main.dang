@@ -5,6 +5,7 @@ type Templates {
   let placeholder: String! = "<placeholder-list-templates>"
   let tmplFileName: String! = "main.dang.tmpl"
   let fileName: String! = "main.dang"
+  let defaultTemplate: String! = "default"
 
   """
   Render dang file with the current template list
@@ -15,8 +16,15 @@ type Templates {
       .withNewFile(
         fileName,
         src.file(tmplFileName).contents.replace(
-          "<placeholder-list-templates>",
-          src.directory("templates").entries.map { tmpl => tmpl.replace("/", "") }.join(", "),
+          placeholder,
+          src.directory("templates").entries.map { tmpl =>
+            let cleaned = tmpl.replace("/", "")
+            if (cleaned == defaultTemplate) {
+              cleaned + "*"
+            } else {
+              cleaned
+            }
+          }.join(", "),
         ),
       )
       .changes(src)
