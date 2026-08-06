@@ -1,3 +1,4 @@
+/** DaggerModule example */
 @Module
 package io.dagger.modules.daggermoduleplaceholder;
 

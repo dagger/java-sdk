@@ -5,30 +5,32 @@ import static io.dagger.client.Dagger.dag;
 import io.dagger.client.Container;
 import io.dagger.client.exception.DaggerQueryException;
 import io.dagger.client.Directory;
+import io.dagger.client.Workspace;
+import io.dagger.module.annotation.Default;
 import io.dagger.module.annotation.Function;
 import io.dagger.module.annotation.Object;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 
-/** DaggerModule main object */
 @Object
 public class DaggerModule {
-  /** Returns a container that echoes whatever string argument is provided */
-  @Function
-  public Container containerEcho(String stringArg) {
-    return dag().container().from("alpine:latest").withExec(List.of("echo", stringArg));
+  private Directory source;
+  private String baseImageAddress;
+
+  public DaggerModule() {}
+
+  public DaggerModule(Workspace ws, @Default("alpine:3.24") String baseImageAddress) {
+    this.source = ws.directory("/");
+    this.baseImageAddress = baseImageAddress;
   }
 
-  /** Returns lines that match a pattern in the files of the provided Directory */
+  /** A container with the workspace source, ready to build. */
   @Function
-  public String grepDir(Directory directoryArg, String pattern)
-      throws InterruptedException, ExecutionException, DaggerQueryException {
+  public Container container() {
     return dag()
-        .container()
-        .from("alpine:latest")
-        .withMountedDirectory("/mnt", directoryArg)
-        .withWorkdir("/mnt")
-        .withExec(List.of("grep", "-R", pattern, "."))
-        .stdout();
+    .container()
+    .from(this.baseImageAddress)
+    .withDirectory("/src", this.source)
+    .withWorkdir("/src");
   }
 }
