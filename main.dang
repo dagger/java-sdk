@@ -56,14 +56,8 @@ type JavaSdk {
       rawPath.trimSuffix("/")
     }
 
-    let before = if (modPath == ".") {
-      ws.directory("/", include: ["**"])
-    } else {
-      ws.directory("/", include: [modPath + "/**"])
-    }
-
     let selectedTemplate = if (template == "") { "default" } else { template }
-    before.withDirectory(modPath, renderedTemplate(name, selectedTemplate)).changes(before)
+    ws.fork.withNewDirectory("/" + modPath, renderedTemplate(name, selectedTemplate)).changes
   }
 
   """
@@ -96,15 +90,14 @@ type JavaSdk {
   (currentModule.asSDK.modules). So running from a subdirectory acts on the
   project you're in — and the projects beneath it — not the whole workspace.
 
-  Discovery is the polyfill's cwd-aware findConfigDirs (dagger/dagger#13688);
+  Discovery is the engine's cwd-aware Workspace.findConfigDirs;
   this maps its cwd-relative results to workspace-root-relative paths and keeps
   the ones this SDK manages, whether they use dagger-module.toml or dagger.json.
   """
   modules(ws: Workspace!): [Mod!]! {
     let managed = ws.sdk(name: currentModule.name).modules.{{source}}
     let cwd = normalizePath(ws.cwd)
-    polyfill
-      .workspace(ws)
+    ws
       .findConfigDirs(moduleConfigFilenames, exclude: ["**/target/**"])
       .map { dir => moduleRelPath(cwd, dir) }
       .uniq

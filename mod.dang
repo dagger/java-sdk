@@ -199,13 +199,10 @@ type Mod {
   Stage the vendored SDK + generated entrypoint for one module.
   """
   let generateModule(ws: Workspace!, modPathArg: String!): Changeset! {
-    # Native module-source resolution (Directory.asModuleSource, Query.moduleSource)
-    # fails from module code: SDK and user-defaults loading need the requester's host
-    # session. The polyfill resolves the source from a nested client that has one.
     # Anchor rootPath at "/" so a non-root workspace cwd is not prefixed again.
-    let modSource = polyfill.workspace(ws).moduleSource("/" + modPathArg)
-    let name = modSource.core.moduleName
-    let introspectionJSON = modSource.core.introspectionSchemaJSON
+    let modSource = ws.moduleSource("/" + modPathArg)
+    let name = modSource.moduleName
+    let introspectionJSON = modSource.introspectionSchemaJSON
     let vendored = vendoredSdk(introspectionJSON, name)
 
     # the module as committed, with the whole committed sdk/ dropped (source and
@@ -217,24 +214,18 @@ type Mod {
       .withoutDirectory("src/generated")
     let entrypoint = generatedEntrypoint(baseDir, name)
 
-    let before = if (modPathArg == ".") {
-      ws.directory("/", include: ["**"])
-    } else {
-      ws.directory("/", include: [modPathArg + "/**"])
-    }
-    let staged = before
-      .withDirectory(joinPath(modPathArg, "sdk"), vendored)
-      .withDirectory(joinPath(modPathArg, "src/generated/java"), entrypoint)
+    # Stage through a workspace fork: the changeset comes back measured from
+    # the caller's cwd, the way the client applies it.
+    let staged = ws.fork
+      .withNewDirectory("/" + joinPath(modPathArg, "sdk"), vendored)
+      .withNewDirectory("/" + joinPath(modPathArg, "src/generated/java"), entrypoint)
 
     if (vendorSdkJar) {
       staged
-        .withDirectory(joinPath(modPathArg, "sdk/repo"), vendoredSdkJar(
-          introspectionJSON,
-          name,
-        ))
-        .changes(before)
+        .withNewDirectory("/" + joinPath(modPathArg, "sdk/repo"), vendoredSdkJar(introspectionJSON, name))
+        .changes
     } else {
-      staged.changes(before)
+      staged.changes
     }
   }
 
