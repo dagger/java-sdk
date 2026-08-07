@@ -12,12 +12,12 @@ type JavaSdk {
   """
   Runtime source written into the dagger-module.toml of new Java modules.
   """
-  pub targetRuntime: String! { "github.com/dagger/java-sdk/runtime" }
+  targetRuntime: String! { "github.com/dagger/java-sdk/runtime" }
 
   """
   Marker filename that skips generate when found at or above a Java SDK module root.
   """
-  pub skipGenerateFilename: String! = ".dagger-java-sdk-skip-generate"
+  skipGenerateFilename: String! = ".dagger-java-sdk-skip-generate"
 
   """
   Config filenames that mark a Dagger module root: the CLI 1.0
@@ -33,19 +33,19 @@ type JavaSdk {
   Opt-in (set `settings.vendorSdkJar = true` under `[modules.java-sdk]` in the
   workspace dagger.toml) because it adds a committed binary artifact.
   """
-  pub vendorSdkJar: Boolean! = false
+  vendorSdkJar: Boolean! = false
 
   """
   Initialize Java-owned files for a new Dagger module.
   """
-  pub initModule(
+  initModule(
     ws: Workspace!,
     name: String!,
     path: String!,
     """
     Template to use to init the module: default*, empty, legacy
     """
-    template: String! = "default"
+    template: String! = "default",
   ): Changeset! {
     let rawPath = path.trimPrefix("./").trimPrefix("/")
     let modPath = if (rawPath == "" or rawPath == ".") {
@@ -100,15 +100,21 @@ type JavaSdk {
   this maps its cwd-relative results to workspace-root-relative paths and keeps
   the ones this SDK manages, whether they use dagger-module.toml or dagger.json.
   """
-  pub modules(ws: Workspace!): [Mod!]! {
+  modules(ws: Workspace!): [Mod!]! {
     let managed = ws.sdk(name: currentModule.name).modules.{{source}}
     let cwd = normalizePath(ws.cwd)
-    polyfill.workspace(ws)
+    polyfill
+      .workspace(ws)
       .findConfigDirs(moduleConfigFilenames, exclude: ["**/target/**"])
       .map { dir => moduleRelPath(cwd, dir) }
       .uniq
       .filter { path => managed.filter { m => normalizePath(m.source) == path }.length > 0 }
-      .map { path => Mod(rootPath: path, ws: ws, skipGenerateFilename: skipGenerateFilename, vendorSdkJar: vendorSdkJar) }
+      .map { path => Mod(
+        rootPath: path,
+        ws: ws,
+        skipGenerateFilename: skipGenerateFilename,
+        vendorSdkJar: vendorSdkJar,
+      ) }
   }
 
   """
@@ -146,7 +152,7 @@ type JavaSdk {
   running from a subdirectory generates only the project you're in and the
   projects beneath it.
   """
-  pub generateAll(ws: Workspace!): Changeset! @generate {
+  generateAll(ws: Workspace!): Changeset! @generate {
     changeset.withChangesets(
       modules(ws)
         .filter { mod => mod.skipGenerate(ws) == false }
