@@ -6,7 +6,7 @@ type Mod {
   Workspace-root-relative path of this module root — the module's stable
   identity, independent of where the client is invoked from.
   """
-  pub rootPath: String!
+  rootPath: String!
 
   """
   Workspace containing this module.
@@ -28,7 +28,7 @@ type Mod {
   the module itself, "sub/mod" for a module beneath it, ".." for an enclosing one.
   A cwd-relative view of rootPath, so listings read the way a shell user would.
   """
-  pub path: String! {
+  path: String! {
     let cwd = ws.cwd.trimPrefix("/").trimSuffix("/")
     if (rootPath == cwd) {
       "."
@@ -47,7 +47,7 @@ type Mod {
   """
   Whether this module or an ancestor contains the configured generate skip marker.
   """
-  pub skipGenerate(ws: Workspace!): Boolean! {
+  skipGenerate(ws: Workspace!): Boolean! {
     hasMarker(ws, skipGenerateFilename)
   }
 
@@ -63,7 +63,7 @@ type Mod {
   Generate this module.
   If the generate skip marker is present, the changeset is empty.
   """
-  pub generate(ws: Workspace!): Changeset! {
+  generate(ws: Workspace!): Changeset! {
     if (skipGenerate(ws)) {
       changeset
     } else {
@@ -92,6 +92,7 @@ type Mod {
   The returned directory is dropped at <module>/sdk.
   """
   let prebuiltCodegenRepo: String! { "prebuilt/m2" }
+
   let prebuiltCodegenPlugin: String! { "prebuilt/dagger-codegen-maven-plugin.jar" }
 
   """
@@ -227,7 +228,10 @@ type Mod {
 
     if (vendorSdkJar) {
       staged
-        .withDirectory(joinPath(modPathArg, "sdk/repo"), vendoredSdkJar(introspectionJSON, name))
+        .withDirectory(joinPath(modPathArg, "sdk/repo"), vendoredSdkJar(
+          introspectionJSON,
+          name,
+        ))
         .changes(before)
     } else {
       staged.changes(before)
