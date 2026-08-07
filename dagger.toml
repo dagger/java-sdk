@@ -1,10 +1,6 @@
 [modules.e2e]
 source = ".dagger/modules/e2e"
 
-[modules.java-sdk]
-source = "."
-check.skip = ["*"]
-
 [modules.packager]
 source = ".dagger/modules/packager"
 
@@ -25,21 +21,3 @@ path = "."
 
 [modules.sdk-sdk]
 source = "github.com/dagger/sdk-sdk"
-
-[modules.java-sdk.as-sdk]
-name = "java"
-
-[[modules.java-sdk.as-sdk.modules]]
-path = ".dagger/modules/e2e/fixtures/generate/app"
-
-[[modules.java-sdk.as-sdk.modules]]
-path = ".dagger/modules/e2e/fixtures/lookup/app"
-
-[[modules.java-sdk.as-sdk.modules]]
-path = ".dagger/modules/e2e/fixtures/deps/app"
-
-[[modules.java-sdk.as-sdk.modules]]
-path = ".dagger/modules/e2e/fixtures/skip/app"
-
-[[modules.java-sdk.as-sdk.modules]]
-path = ".dagger/modules/e2e/fixtures/managed-toml/app"
