@@ -189,11 +189,11 @@ public class Helpers {
     return builder.build();
   }
 
-  /** Fix using '$' char in javadoc */
+  /** Escape schema descriptions before embedding them in Javadoc. */
   static String escapeJavadoc(String str) {
     if (str == null) {
       return "";
     }
-    return str.replace("$", "$$").replace("&", "&amp;");
+    return str.replace("$", "$$").replace("&", "&amp;").replace("*/", "*&#47;");
   }
 }

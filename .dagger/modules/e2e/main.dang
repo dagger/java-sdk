@@ -235,14 +235,14 @@ type E2e {
     let fromParent = javaSdk.generateAll(
       root.asWorkspace(cwd: fixtureRoot + "/generate"),
     )
-    assertAdded(fromParent, generateModulePath + "/sdk/src/main/java/io/dagger/client/Dagger.java")
-    assertAdded(fromParent, generateModulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
+    assertAdded(fromParent, "app/sdk/src/main/java/io/dagger/client/Dagger.java")
+    assertAdded(fromParent, "app/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
 
     let fromModule = javaSdk.generateAll(
       root.asWorkspace(cwd: generateModulePath),
     )
-    assertAdded(fromModule, generateModulePath + "/sdk/src/main/java/io/dagger/client/Dagger.java")
-    assertAdded(fromModule, generateModulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
+    assertAdded(fromModule, "sdk/src/main/java/io/dagger/client/Dagger.java")
+    assertAdded(fromModule, "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
 
     null
   }

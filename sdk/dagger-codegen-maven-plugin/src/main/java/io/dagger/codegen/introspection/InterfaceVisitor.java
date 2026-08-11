@@ -36,6 +36,14 @@ class InterfaceVisitor extends AbstractVisitor {
             .addJavadoc(Helpers.escapeJavadoc(type.getDescription()))
             .addModifiers(Modifier.PUBLIC);
 
+    // GraphQL's Node interface is accepted as an input by fields such as
+    // LLM.withTools. Model its ID contract in Java so it can use the same
+    // argument serialization path as concrete Dagger objects.
+    if ("Node".equals(type.getName())) {
+      interfaceBuilder.addSuperinterface(
+          ParameterizedTypeName.get(ClassName.bestGuess("IDAble"), ClassName.bestGuess("ID")));
+    }
+
     if (type.getFields() != null) {
       for (Field field : type.getFields()) {
         MethodSpec.Builder methodBuilder =
