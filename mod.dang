@@ -280,12 +280,19 @@ type Mod {
 
   """
   The module's committed source directory, workspace-rooted.
+
+  Maven build output is left out: a class file an IDE dropped under target/ is
+  newer than its source, so maven-compiler-plugin skips recompiling it and the
+  stale class wins over the entrypoint this generation is producing.
   """
   let moduleDir(ws: Workspace!, modPathArg: String!): Directory! {
+    let buildOutputExclude = ["**/target/**"]
     if (modPathArg == ".") {
-      ws.directory("/", include: ["**"])
+      ws.directory("/", include: ["**"], exclude: buildOutputExclude)
     } else {
-      ws.directory("/", include: [modPathArg + "/**"]).directory(modPathArg)
+      ws
+        .directory("/", include: [modPathArg + "/**"], exclude: buildOutputExclude)
+        .directory(modPathArg)
     }
   }
 
