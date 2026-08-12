@@ -223,7 +223,9 @@ type E2e {
 
   """
   Generation from a subdirectory must resolve managed module root paths from
-  the workspace root, not relative to the caller's cwd.
+  the workspace root, not relative to the caller's cwd, and must return a
+  changeset whose paths are relative to that cwd — the form the engine applies
+  a generator's result in.
   """
   generateCwdCheck(ws: Workspace!): Void @check {
     # Prepare a valid module in memory and remove the fixture-wide skip marker
@@ -232,17 +234,26 @@ type E2e {
     let root = testWS(ws)
       .directory("/", exclude: [fixtureRoot + "/.dagger-java-sdk-skip-generate"])
       .withDirectory(".", initialized.layer)
+
+    # Module-relative paths of the two artifacts generation stages.
+    let vendoredClient = "sdk/src/main/java/io/dagger/client/Dagger.java"
+    let entrypoint = "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"
+
+    # From the module's parent the module is one level down, so its changes are
+    # rooted at "app" — the same cwd-relative path modulesCwdCheck expects.
     let fromParent = javaSdk.generateAll(
       root.asWorkspace(cwd: fixtureRoot + "/generate"),
     )
-    assertAdded(fromParent, generateModulePath + "/sdk/src/main/java/io/dagger/client/Dagger.java")
-    assertAdded(fromParent, generateModulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
+    assertAdded(fromParent, "app/" + vendoredClient)
+    assertAdded(fromParent, "app/" + entrypoint)
 
+    # From the module itself the cwd is the module root, so its changes carry no
+    # prefix at all.
     let fromModule = javaSdk.generateAll(
       root.asWorkspace(cwd: generateModulePath),
     )
-    assertAdded(fromModule, generateModulePath + "/sdk/src/main/java/io/dagger/client/Dagger.java")
-    assertAdded(fromModule, generateModulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
+    assertAdded(fromModule, vendoredClient)
+    assertAdded(fromModule, entrypoint)
 
     null
   }

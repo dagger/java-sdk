@@ -197,13 +197,38 @@ type Mod {
 
   """
   Stage the vendored SDK + generated entrypoint for one module.
+
+  The returned changeset is relative to the client's cwd, the form the engine
+  applies a generator's result in.
   """
   let generateModule(ws: Workspace!, modPathArg: String!): Changeset! {
     # Native module-source resolution (Directory.asModuleSource, Query.moduleSource)
     # fails from module code: SDK and user-defaults loading need the requester's host
     # session. The polyfill resolves the source from a nested client that has one.
     # Anchor rootPath at "/" so a non-root workspace cwd is not prefixed again.
-    let modSource = polyfill.workspace(ws).moduleSource("/" + modPathArg)
+
+    # Create an overlay containing generated (local) dependencies so the generation
+    # can work.
+    #
+    # Only stage when there is a local dependency to stage: the call resolves
+    # module sources through the workspace's owning client, which a synthetic
+    # workspace (Directory.asWorkspace, as the e2e checks build) does not have,
+    # and an all-remote dependency list yields an empty changeset anyway.
+    # Remote dependencies are assumed committed, matching the engine.
+    let localDeps = ws
+      .moduleSource(workspaceRef(rootPath))
+      .dependencies
+      .{{kind}}
+      .filter { dep => dep.kind != ModuleSourceKind.GIT_SOURCE }
+    let wsWithDeps = if (localDeps.length == 0) {
+      ws
+    } else {
+      ws.withChanges(
+        polyfill.workspace(ws).moduleSource(workspaceRef(rootPath)).core.generateLocalDependencies(ws),
+      )
+    }
+
+    let modSource = polyfill.workspace(wsWithDeps).moduleSource(workspaceRef(modPathArg))
     let name = modSource.core.moduleName
     let introspectionJSON = modSource.core.introspectionSchemaJSON
     let vendored = vendoredSdk(introspectionJSON, name)
@@ -211,42 +236,72 @@ type Mod {
     # the module as committed, with the whole committed sdk/ dropped (source and
     # any previously vendored jar) and the freshly vendored SDK sources overlaid,
     # plus any stale generated entrypoint dropped so the processor regenerates it
-    let baseDir = moduleDir(ws, modPathArg)
+    let baseDir = moduleDir(wsWithDeps, modPathArg)
       .withoutDirectory("sdk")
       .withDirectory("sdk", vendored)
       .withoutDirectory("src/generated")
     let entrypoint = generatedEntrypoint(baseDir, name)
 
     let before = if (modPathArg == ".") {
-      ws.directory("/", include: ["**"])
+      wsWithDeps.directory("/", include: ["**"])
     } else {
-      ws.directory("/", include: [modPathArg + "/**"])
+      wsWithDeps.directory("/", include: [modPathArg + "/**"])
     }
     let staged = before
       .withDirectory(joinPath(modPathArg, "sdk"), vendored)
       .withDirectory(joinPath(modPathArg, "src/generated/java"), entrypoint)
 
-    if (vendorSdkJar) {
-      staged
-        .withDirectory(joinPath(modPathArg, "sdk/repo"), vendoredSdkJar(
-          introspectionJSON,
-          name,
-        ))
-        .changes(before)
+    let after = if (vendorSdkJar) {
+      staged.withDirectory(joinPath(modPathArg, "sdk/repo"), vendoredSdkJar(
+        introspectionJSON,
+        name,
+      ))
     } else {
-      staged.changes(before)
+      staged
+    }
+
+    # The staging above is workspace-rooted, but the engine applies a returned
+    # changeset relative to the caller's cwd — so without re-rooting here every
+    # path ends up nested under the cwd a second time and the module is never
+    # actually generated. Selecting a subdirectory is metadata only, so this
+    # costs nothing.
+    let cwd = ws.cwd.trimPrefix("/").trimSuffix("/")
+    if (cwd == "") {
+      after.changes(before)
+    } else if (modPathArg == cwd or modPathArg.trimPrefix(cwd + "/") != modPathArg) {
+      after.directory(cwd).changes(before.directory(cwd))
+    } else {
+      # A cwd-relative changeset cannot express paths outside the cwd, so a
+      # module discovered above it (find-up) would be silently dropped and left
+      # ungenerated. Fail loudly until there is a policy for such modules.
+      raise "module " + modPathArg + " lies outside the current directory " + cwd + ": its generated changes cannot be expressed relative to the cwd"
     }
   }
 
   """
   The module's committed source directory, workspace-rooted.
+
+  Maven build output is left out: a class file an IDE dropped under target/ is
+  newer than its source, so maven-compiler-plugin skips recompiling it and the
+  stale class wins over the entrypoint this generation is producing.
   """
   let moduleDir(ws: Workspace!, modPathArg: String!): Directory! {
+    let buildOutputExclude = ["**/target/**"]
     if (modPathArg == ".") {
-      ws.directory("/", include: ["**"])
+      ws.directory("/", include: ["**"], exclude: buildOutputExclude)
     } else {
-      ws.directory("/", include: [modPathArg + "/**"]).directory(modPathArg)
+      ws
+        .directory("/", include: [modPathArg + "/**"], exclude: buildOutputExclude)
+        .directory(modPathArg)
     }
+  }
+
+  """
+  A module path as a workspace-root-absolute ref, the form Workspace.moduleSource
+  resolves from the workspace root rather than from the client's cwd.
+  """
+  let workspaceRef(modPathArg: String!): String! {
+    if (modPathArg == ".") { "/" } else { "/" + modPathArg }
   }
 
   """

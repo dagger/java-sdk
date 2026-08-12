@@ -17,6 +17,15 @@ type JavaSdkRuntime {
   let modDirPath: String! { "/opt/module" }
   let entrypointRelPath: String! { "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java" }
 
+  """
+  Maven build output, never an input. Carrying the host's copy into the build is
+  not just wasteful: a class file left there by an IDE (Eclipse JDT writes a
+  stub that throws "Unresolved compilation problems" at runtime) is newer than
+  its source, so maven-compiler-plugin skips recompiling it and the stale class
+  is what gets packaged.
+  """
+  let buildOutputExclude: [String!]! { ["**/target/**"] }
+
   # Built from committed single-FROM Dockerfiles (rather than an inline
   # container.from) so Dependabot keeps the pinned base image digests up to date.
   let mavenBase: Container! { currentModule.source.directory("images/maven").dockerBuild }
@@ -68,7 +77,7 @@ type JavaSdkRuntime {
         cache: cacheVolume("sdk-java-maven-m2"),
         sharing: CacheSharingMode.LOCKED,
       )
-      .withDirectory(modSourceDirPath, contextDir)
+      .withDirectory(modSourceDirPath, contextDir, exclude: buildOutputExclude)
       .withWorkdir(workdir)
       .withExec(mavenPackageArgs)
       .withExec(["sh", "-c", pickJarScript])

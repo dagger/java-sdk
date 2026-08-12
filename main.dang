@@ -79,7 +79,15 @@ type JavaSdk {
         "/helper",
         currentModule.source.directory("helpers/render-java-template"),
       )
-      .withDirectory("/template", currentModule.source.directory("templates/" + template))
+      # target/ is gitignored, so it is absent from a clean checkout but present
+      # in a developer's — and the renderer substitutes the module name into
+      # every file it walks, including .class bytes, producing a corrupt class
+      # that then breaks the scaffolded module's build.
+      .withDirectory(
+        "/template",
+        currentModule.source.directory("templates/" + template),
+        exclude: ["**/target/**"],
+      )
       .withWorkdir("/helper")
       .withExec(["go", "build", "-o", "/usr/local/bin/render-java-template", "."])
       .withExec(["render-java-template", name, "/template", "/rendered"])
