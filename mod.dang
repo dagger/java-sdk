@@ -197,6 +197,9 @@ type Mod {
 
   """
   Stage the vendored SDK + generated entrypoint for one module.
+
+  The returned changeset is relative to the client's cwd, the form the engine
+  applies a generator's result in.
   """
   let generateModule(ws: Workspace!, modPathArg: String!): Changeset! {
     # Native module-source resolution (Directory.asModuleSource, Query.moduleSource)
@@ -248,15 +251,30 @@ type Mod {
       .withDirectory(joinPath(modPathArg, "sdk"), vendored)
       .withDirectory(joinPath(modPathArg, "src/generated/java"), entrypoint)
 
-    if (vendorSdkJar) {
-      staged
-        .withDirectory(joinPath(modPathArg, "sdk/repo"), vendoredSdkJar(
-          introspectionJSON,
-          name,
-        ))
-        .changes(before)
+    let after = if (vendorSdkJar) {
+      staged.withDirectory(joinPath(modPathArg, "sdk/repo"), vendoredSdkJar(
+        introspectionJSON,
+        name,
+      ))
     } else {
-      staged.changes(before)
+      staged
+    }
+
+    # The staging above is workspace-rooted, but the engine applies a returned
+    # changeset relative to the caller's cwd — so without re-rooting here every
+    # path ends up nested under the cwd a second time and the module is never
+    # actually generated. Selecting a subdirectory is metadata only, so this
+    # costs nothing.
+    let cwd = ws.cwd.trimPrefix("/").trimSuffix("/")
+    if (cwd == "") {
+      after.changes(before)
+    } else if (modPathArg == cwd or modPathArg.trimPrefix(cwd + "/") != modPathArg) {
+      after.directory(cwd).changes(before.directory(cwd))
+    } else {
+      # A cwd-relative changeset cannot express paths outside the cwd, so a
+      # module discovered above it (find-up) would be silently dropped and left
+      # ungenerated. Fail loudly until there is a policy for such modules.
+      raise "module " + modPathArg + " lies outside the current directory " + cwd + ": its generated changes cannot be expressed relative to the cwd"
     }
   }
 
