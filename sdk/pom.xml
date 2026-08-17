@@ -202,6 +202,48 @@
                 </plugins>
             </build>
         </profile>
+        <!--
+        Test dependencies live here rather than in the module dependency lists:
+        maven resolves test-scoped dependencies even under -Dmaven.test.skip=true,
+        so declaring them unconditionally would make every cold `dagger generate`
+        download libraries the generation path can never use. Activated by the
+        packager's unit-test check (`mvn -Ptests test`) and by hand.
+        -->
+        <profile>
+            <id>tests</id>
+            <build>
+                <pluginManagement>
+                    <plugins>
+                        <!--
+                        Pinned here rather than unconditionally: only this profile runs
+                        tests, and pinning surefire for every build would add ~3MiB of
+                        plugin downloads to a cold `dagger generate`, which never tests.
+                        -->
+                        <plugin>
+                            <groupId>org.apache.maven.plugins</groupId>
+                            <artifactId>maven-surefire-plugin</artifactId>
+                            <version>${maven-surefire-plugin.version}</version>
+                        </plugin>
+                    </plugins>
+                </pluginManagement>
+            </build>
+            <dependencyManagement>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.junit.jupiter</groupId>
+                        <artifactId>junit-jupiter</artifactId>
+                        <version>${junit-jupiter.version}</version>
+                        <scope>test</scope>
+                    </dependency>
+                    <dependency>
+                        <groupId>org.assertj</groupId>
+                        <artifactId>assertj-core</artifactId>
+                        <version>${assertj-core.version}</version>
+                        <scope>test</scope>
+                    </dependency>
+                </dependencies>
+            </dependencyManagement>
+        </profile>
     </profiles>
 
     <properties>
@@ -218,6 +260,7 @@
         -->
         <dagger.codegen.plugin.version>0.21.4</dagger.codegen.plugin.version>
 
+        <assertj-core.version>3.27.7</assertj-core.version>
         <auto-service.version>1.1.1</auto-service.version>
         <commons-lang.version>3.20.0</commons-lang.version>
         <exec-maven-plugin.version>3.6.3</exec-maven-plugin.version>
@@ -227,6 +270,7 @@
         <jakarta.json.bind-api.version>3.0.1</jakarta.json.bind-api.version>
         <javapoet.version>0.14.0</javapoet.version>
         <javaparser.version>3.28.0</javaparser.version>
+        <junit-jupiter.version>5.14.1</junit-jupiter.version>
         <maven-assembly-plugin.version>3.7.1</maven-assembly-plugin.version>
         <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
         <maven-javadoc-plugin.version>3.11.2</maven-javadoc-plugin.version>
@@ -236,6 +280,7 @@
         <maven-resources-plugin.version>3.3.1</maven-resources-plugin.version>
         <maven-shade-plugin.version>3.6.0</maven-shade-plugin.version>
         <maven-source-plugin.version>3.3.1</maven-source-plugin.version>
+        <maven-surefire-plugin.version>3.5.4</maven-surefire-plugin.version>
         <versions-maven-plugin.version>2.21.0</versions-maven-plugin.version>
         <slf4j-api.version>2.0.17</slf4j-api.version>
         <slf4j-simple.version>2.0.17</slf4j-simple.version>
