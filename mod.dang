@@ -140,8 +140,21 @@ type Mod {
   let sdkBuilt(introspectionJSON: File!, name: String!): Container! {
     codegenBase(introspectionJSON)
       .withExec(["mvn", "versions:set", "-DnewVersion=" + name, "-DgenerateBackupPoms=false", "--no-transfer-progress"])
-      .withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", "-Ddaggerengine.schema=/schema.json", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+      .withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", "-Ddaggerengine.schema=/schema.json", "-Ddaggerengine.version=" + engineVersion, "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
   }
+
+  """
+  The live engine version, without build metadata.
+
+  Codegen only reads the engine version off the CLI when it has to query the
+  schema itself. Here the schema is handed to it, so without this the version
+  stays whatever the pom happens to say, and generation cannot tell which shapes
+  the engine on the other end actually supports.
+
+  The `+<commit>` suffix is dropped: it changes on every engine build and would
+  make every module's SDK rebuild for no reason.
+  """
+  let engineVersion: String! { version.split("+")[0] ?? version }
 
   let vendoredSdk(introspectionJSON: File!, name: String!): Directory! {
     let built = sdkBuilt(introspectionJSON, name)
