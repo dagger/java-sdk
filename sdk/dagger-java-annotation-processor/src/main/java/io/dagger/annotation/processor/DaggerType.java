@@ -28,6 +28,10 @@ public abstract class DaggerType {
     return false;
   }
 
+  CodeBlock valueForSerialization(String name) {
+    return CodeBlock.of("$L", name);
+  }
+
   public static DaggerType of(TypeInfo ti) {
     String name = ti.typeName();
     String kindName = ti.kindName();
@@ -61,7 +65,7 @@ public abstract class DaggerType {
     }
 
     if (name.startsWith("java.util.Optional<")) {
-      return of(name.substring("java.util.Optional<".length(), name.length() - 1));
+      return new Optional(of(name.substring("java.util.Optional<".length(), name.length() - 1)));
     }
 
     try {
@@ -204,6 +208,29 @@ public abstract class DaggerType {
     @Override
     CodeBlock toJavaType() {
       return CodeBlock.of("$T", ClassName.bestGuess(qualifiedName));
+    }
+  }
+
+  public static class Optional extends DaggerType {
+    private final DaggerType inner;
+
+    public Optional(DaggerType inner) {
+      this.inner = inner;
+    }
+
+    @Override
+    CodeBlock toDaggerTypeDef() {
+      return CodeBlock.builder().add(inner.toDaggerTypeDef()).add(".withOptional(true)").build();
+    }
+
+    @Override
+    CodeBlock toJavaType() {
+      return CodeBlock.of("$T<$L>", java.util.Optional.class, inner.toJavaType());
+    }
+
+    @Override
+    CodeBlock valueForSerialization(String name) {
+      return CodeBlock.of("$L.orElse(null)", name);
     }
   }
 

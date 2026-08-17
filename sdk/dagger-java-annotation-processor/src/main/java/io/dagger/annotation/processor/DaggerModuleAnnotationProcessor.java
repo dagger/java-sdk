@@ -605,7 +605,8 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
 
   private static CodeBlock functionInvoke(ObjectInfo objectInfo, FunctionInfo fnInfo) {
     CodeBlock.Builder code = CodeBlock.builder();
-    CodeBlock fnReturnType = DaggerType.of(fnInfo.returnType()).toJavaType();
+    DaggerType returnType = DaggerType.of(fnInfo.returnType());
+    CodeBlock fnReturnType = returnType.toJavaType();
 
     CodeBlock startAsList = CodeBlock.of("$T.asList(", Arrays.class);
     CodeBlock endAsList = CodeBlock.of(")");
@@ -694,7 +695,8 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
     if (returnsVoid && !isConstructor) {
       code.addStatement("return $T.toJSON(null)", JsonConverter.class);
     } else {
-      code.addStatement("return $T.toJSON(res)", JsonConverter.class);
+      code.addStatement(
+          "return $T.toJSON($L)", JsonConverter.class, returnType.valueForSerialization("res"));
     }
 
     return code.build();
