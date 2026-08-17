@@ -171,6 +171,34 @@ public class GetDaggerWebsite {
 }
 ```
 
+### Nullable object results
+
+Some API fields may resolve to nothing — `TypeDef.asObject()` on a type definition
+that is not an object, for instance. From engine `v1.0.0-beta.10` those fields
+return `Optional`, and because the result has to be resolved to know whether it
+is there, they throw the same exceptions as any other query:
+
+```java
+Optional<ObjectTypeDef> asObject = typeDef.asObject();
+if (asObject.isPresent()) {
+  System.out.println(asObject.get().name());
+}
+```
+
+Fields that cannot resolve to nothing are unaffected: they stay lazy and throw
+nothing. Against an engine older than `v1.0.0-beta.10` the generated client keeps
+the previous shape, so nullable fields return the object type directly.
+
+A module function can return a nullable object the same way, by declaring
+`Optional<T>`:
+
+```java
+@Function
+public Optional<Directory> maybeDirectory(boolean found) {
+  return found ? Optional.of(dag().directory()) : Optional.empty();
+}
+```
+
 ### Run sample code snippets
 
 The `dagger-java-samples` module contains code samples.
