@@ -256,4 +256,67 @@ type E2e {
 
     null
   }
+
+  """
+  A module function returning Optional<Directory> should register an optional
+  return type — and, since generation compiles the entrypoint it produces,
+  generating at all proves the entrypoint the annotation processor writes for an
+  Optional return is valid Java.
+
+  Reuses the generate fixture rather than adding a managed module, so the module
+  inventory the discovery checks assert stays as it is.
+  """
+  nullableReturnCheck(ws: Workspace!): Void @check {
+    let modPath = generateModulePath
+    let initialized = javaSdk.initModule(ws, name: "generate-app", path: modPath)
+    let root = testWS(ws)
+      .directory("/", exclude: [fixtureRoot + "/.dagger-java-sdk-skip-generate"])
+      .withDirectory(".", initialized.layer)
+      .withNewFile(
+        modPath + "/src/main/java/io/dagger/modules/generateapp/GenerateApp.java",
+        nullableReturnSource,
+      )
+
+    let changes = javaSdk.generateAll(root.asWorkspace(cwd: modPath))
+    let entrypoint = changes
+      .layer
+      .file("src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
+      .contents
+
+    assertContains(
+      entrypoint,
+      "withObject(\"Directory\").withOptional(true)",
+      "an Optional<Directory> return should register an optional Directory return type",
+    )
+    assertContains(
+      entrypoint,
+      "res.orElse(null)",
+      "the Optional return should be unwrapped before serialization",
+    )
+
+    null
+  }
+
+  """A module whose only function returns a nullable object."""
+  let nullableReturnSource: String! {
+    "package io.dagger.modules.generateapp;\n"
+      + "\n"
+      + "import static io.dagger.client.Dagger.dag;\n"
+      + "\n"
+      + "import io.dagger.client.Directory;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "import java.util.Optional;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class GenerateApp {\n"
+      + "  @Function\n"
+      + "  public Optional<Directory> maybeDirectory(boolean found) {\n"
+      + "    if (!found) {\n"
+      + "      return Optional.empty();\n"
+      + "    }\n"
+      + "    return Optional.of(dag().directory().withNewFile(\"found\", \"\"));\n"
+      + "  }\n"
+      + "}\n"
+  }
 }
