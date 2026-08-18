@@ -3,3 +3,8 @@ engineVersion = "v1.0.0-0"
 
 [runtime]
   source = "dang"
+
+[[dependencies]]
+  name = "polyfill"
+  source = "github.com/dagger/polyfill@main"
+  pin = "e90bbfc4843258a877a3a95b8db1571e7981e65f"

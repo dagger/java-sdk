@@ -44,6 +44,58 @@ type Packager {
   }
 
   """
+  Run the SDK's unit tests.
+
+  Tests live behind the `tests` Maven profile (maven resolves test-scoped
+  dependencies even under -Dmaven.test.skip=true, so declaring them
+  unconditionally would slow every cold `dagger generate`), and nothing else in
+  this repository runs them — the generation paths all skip tests. Hence this
+  check.
+
+  The reactor cannot be tested with a bare `mvn test`: dagger-java-sdk binds the
+  codegen mojo at generate-sources, which needs the plugin already installed and
+  a schema to generate from. So this mirrors the SDK's own codegen container:
+  install the plugin first, then test with the schema and the engine version
+  supplied — the same version the gate in Schema.supportsNullableObjects() reads.
+  """
+  unitTests(ws: Workspace!): Void @check {
+    # A module's introspection schema includes its dependencies' types, so the
+    # schema is taken from a dependency-free module: the SDK reactor must compile
+    # against plain core types, the way a freshly generated Java module does.
+    # (The workspace root would drag in the polyfill, whose types this codegen
+    # does not generate valid Java for.)
+    let introspectionJSON = polyfill
+      .workspace(ws)
+      .moduleSource("/.dagger/modules/templates")
+      .core
+      .introspectionSchemaJSON
+    mvn
+      .withoutEntrypoint
+      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
+      .withMountedFile("/schema.json", introspectionJSON)
+      .withDirectory("/dagger-io", sdkSource(ws))
+      .withWorkdir("/dagger-io")
+      .withExec(["mvn", "--projects", "dagger-codegen-maven-plugin", "--also-make", "install", "-T1C", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+      .withExec(["mvn", "-Ptests", "test", "-Ddaggerengine.schema=/schema.json", "-Ddaggerengine.version=" + engineVersion, "-Dfmt.skip=true", "--no-transfer-progress"])
+      # Then compile the client the gate produces from the *real* schema above it.
+      # The version is a literal, deliberately ahead of the engine this runs
+      # against: until the engine reaches it, generating at `engineVersion` only
+      # ever exercises the legacy shape, and nothing would compile the Optional
+      # one against the core schema — the shape the gate flips to.
+      .withExec(["mvn", "--projects", "dagger-java-sdk", "compile", "-Ddaggerengine.schema=/schema.json", "-Ddaggerengine.version=v1.0.0-beta.10", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+      .sync
+    null
+  }
+
+  """
+  The live engine version, without build metadata.
+
+  The `+<commit>` suffix changes on every engine build; keeping it would make
+  every container that embeds this string a fresh cache entry.
+  """
+  let engineVersion: String! { version.split("+")[0] ?? version }
+
+  """
   Build all committable assets and write them under `prebuilt/` at the workspace
   root (runs at `dagger generate`).
   """

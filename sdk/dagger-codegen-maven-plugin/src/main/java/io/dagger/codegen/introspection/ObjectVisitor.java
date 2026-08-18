@@ -11,6 +11,7 @@ import jakarta.json.stream.JsonParser;
 import java.nio.charset.Charset;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.function.UnaryOperator;
 import javax.lang.model.element.Modifier;
@@ -213,6 +214,18 @@ class ObjectVisitor extends AbstractVisitor {
     MethodSpec.Builder fieldMethodBuilder =
         MethodSpec.methodBuilder(Helpers.formatName(field)).addModifiers(Modifier.PUBLIC);
     TypeName returnType = resolveReturnType(field);
+    TypeName objectReturnType = returnType;
+    boolean nullableObject =
+        getSchema().supportsNullableObjects()
+            && field.getTypeRef().isOptional()
+            && field.getTypeRef().isObjectOrInterface();
+    // A non-null field still has to return Optional when an interface it shares an `implements`
+    // relation with declares the field nullable, or the class does not satisfy its own `implements`
+    // clause. It stays lazy: the value cannot be absent, so there is nothing to resolve.
+    boolean presentObject = !nullableObject && requiresOptionalObjectField(field);
+    if (nullableObject || presentObject) {
+      returnType = ParameterizedTypeName.get(ClassName.get(Optional.class), returnType);
+    }
     fieldMethodBuilder.returns(returnType);
     List<ParameterSpec> mandatoryParams =
         field.getRequiredArgs().stream()
@@ -294,13 +307,32 @@ class ObjectVisitor extends AbstractVisitor {
           .addException(InterruptedException.class)
           .addException(ExecutionException.class)
           .addException(ClassName.get("io.dagger.client.exception", "DaggerQueryException"));
+    } else if (nullableObject) {
+      String graphqlTypeName = field.getTypeRef().getTypeName();
+      String clientClassName =
+          field.getTypeRef().isInterface()
+              ? graphqlTypeName + "Client"
+              : objectReturnType.toString();
+      fieldMethodBuilder.addStatement(
+          "QueryBuilder objectQueryBuilder = nextQueryBuilder.executeNullableObjectQuery($S)",
+          graphqlTypeName);
+      fieldMethodBuilder.addStatement(
+          "return Optional.ofNullable(objectQueryBuilder).map(qb -> new $L(qb))",
+          ClassName.bestGuess(clientClassName));
+      fieldMethodBuilder
+          .addException(InterruptedException.class)
+          .addException(ExecutionException.class)
+          .addException(ClassName.get("io.dagger.client.exception", "DaggerQueryException"));
     } else if (field.getTypeRef().isObjectOrInterface()) {
       // For interface return types, instantiate the client class
-      if (field.getTypeRef().isInterface()) {
-        String ifaceName = field.getTypeRef().getTypeName();
-        fieldMethodBuilder.addStatement("return new $LClient(nextQueryBuilder)", ifaceName);
+      CodeBlock instantiation =
+          field.getTypeRef().isInterface()
+              ? CodeBlock.of("new $LClient(nextQueryBuilder)", field.getTypeRef().getTypeName())
+              : CodeBlock.of("new $L(nextQueryBuilder)", objectReturnType);
+      if (presentObject) {
+        fieldMethodBuilder.addStatement("return $T.of($L)", Optional.class, instantiation);
       } else {
-        fieldMethodBuilder.addStatement("return new $L(nextQueryBuilder)", returnType);
+        fieldMethodBuilder.addStatement("return $L", instantiation);
       }
     } else {
       fieldMethodBuilder.addStatement("return nextQueryBuilder.executeQuery($L.class)", returnType);
