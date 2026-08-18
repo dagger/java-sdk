@@ -111,6 +111,76 @@ class NullableObjectCodegenTest {
   }
 
   /**
+   * Coercing a non-null interface field to Optional must preserve GraphQL's covariant return type.
+   * Otherwise the object's Optional&lt;Dog&gt; method cannot implement the interface's
+   * Optional&lt;Animal&gt; method because Optional is invariant.
+   */
+  @Test
+  void coercedNonNullInterfaceFieldPreservesCovariantReturn() throws Exception {
+    Type shelter = type("Shelter", TypeKind.INTERFACE);
+    shelter.setFields(List.of(field("pet", typeRef(TypeKind.INTERFACE, "Animal"), shelter)));
+
+    Type home = type("Home", TypeKind.INTERFACE);
+    home.setFields(List.of(field("pet", nonNull(typeRef(TypeKind.INTERFACE, "Animal")), home)));
+
+    Type kennel = type("Kennel", TypeKind.OBJECT);
+    kennel.setInterfaces(
+        List.of(typeRef(TypeKind.INTERFACE, "Shelter"), typeRef(TypeKind.INTERFACE, "Home")));
+    kennel.setFields(List.of(field("pet", nonNull(typeRef(TypeKind.OBJECT, "Dog")), kennel)));
+
+    assertCompiles(sources(shelter, home, kennel));
+  }
+
+  /**
+   * Interfaces that merely share an ancestor do not impose an override obligation on one another.
+   * A nullable field on one sibling must not make a same-named non-null field on another sibling
+   * Optional when their common ancestor does not declare that field.
+   */
+  @Test
+  void nullableFieldDoesNotPropagateBetweenSiblingInterfaces() throws Exception {
+    Type root = type("Root", TypeKind.INTERFACE);
+    root.setFields(List.of(field("id", nonNull(typeRef(TypeKind.SCALAR, "ID")), root)));
+
+    Type nullableSibling = type("NullableSibling", TypeKind.INTERFACE);
+    nullableSibling.setInterfaces(List.of(typeRef(TypeKind.INTERFACE, "Root")));
+    nullableSibling.setFields(
+        List.of(field("child", typeRef(TypeKind.OBJECT, "Foo"), nullableSibling)));
+
+    Type nonNullSibling = type("NonNullSibling", TypeKind.INTERFACE);
+    nonNullSibling.setInterfaces(List.of(typeRef(TypeKind.INTERFACE, "Root")));
+    nonNullSibling.setFields(
+        List.of(field("child", nonNull(typeRef(TypeKind.OBJECT, "Foo")), nonNullSibling)));
+
+    Type nullableImplementation = type("NullableImplementation", TypeKind.OBJECT);
+    nullableImplementation.setInterfaces(
+        List.of(
+            typeRef(TypeKind.INTERFACE, "NullableSibling"),
+            typeRef(TypeKind.INTERFACE, "Root")));
+    nullableImplementation.setFields(
+        List.of(field("child", typeRef(TypeKind.OBJECT, "Foo"), nullableImplementation)));
+
+    Type implementation = type("NonNullImplementation", TypeKind.OBJECT);
+    implementation.setInterfaces(
+        List.of(
+            typeRef(TypeKind.INTERFACE, "NonNullSibling"),
+            typeRef(TypeKind.INTERFACE, "Root")));
+    implementation.setFields(
+        List.of(field("child", nonNull(typeRef(TypeKind.OBJECT, "Foo")), implementation)));
+
+    Map<String, String> generated =
+        sources(root, nullableSibling, nonNullSibling, nullableImplementation, implementation);
+
+    assertThat(generated.get("io.dagger.client.NullableSibling"))
+        .contains("Optional<Foo> child()");
+    assertThat(generated.get("io.dagger.client.NonNullSibling"))
+        .contains("Foo child();")
+        .doesNotContain("Optional<Foo> child()");
+    assertThat(generated.get("io.dagger.client.NonNullImplementation"))
+        .contains("Foo child()")
+        .doesNotContain("Optional<Foo> child()");
+  }
+
+  /**
    * The generated sources for the given types, plus the handwritten ones they are compiled against.
    */
   private Map<String, String> sources(Type... types) throws Exception {
