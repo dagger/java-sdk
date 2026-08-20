@@ -6,16 +6,16 @@ check.skip = ["*"]
 name = "java"
 
 [[modules.java-sdk.as-sdk.modules]]
-path = ".dagger/modules/e2e/fixtures/generate/app"
+path = "generate/app"
 
 [[modules.java-sdk.as-sdk.modules]]
-path = ".dagger/modules/e2e/fixtures/lookup/app"
+path = "lookup/app"
 
 [[modules.java-sdk.as-sdk.modules]]
-path = ".dagger/modules/e2e/fixtures/deps/app"
+path = "deps/app"
 
 [[modules.java-sdk.as-sdk.modules]]
-path = ".dagger/modules/e2e/fixtures/skip/app"
+path = "skip/app"
 
 [[modules.java-sdk.as-sdk.modules]]
-path = ".dagger/modules/e2e/fixtures/managed-toml/app"
+path = "managed-toml/app"

@@ -67,7 +67,7 @@ type Mod {
     if (skipGenerate(ws)) {
       changeset
     } else {
-      generateModule(ws, rootPath)
+      generateModule(ws)
     }
   }
 
@@ -199,83 +199,50 @@ type Mod {
   Stage the vendored SDK + generated entrypoint for one module.
 
   The returned changeset is relative to the client's cwd, the form the engine
-  applies a generator's result in.
+  applies a generator's result in: past v1.0.0-beta.10 every Workspace.changes
+  result is measured from the workspace cwd, so staging onto the workspace value
+  and diffing it against the baseline the caller already holds is all this needs.
   """
-  let generateModule(ws: Workspace!, modPathArg: String!): Changeset! {
-    # Native module-source resolution (Directory.asModuleSource, Query.moduleSource)
-    # fails from module code: SDK and user-defaults loading need the requester's host
-    # session. The polyfill resolves the source from a nested client that has one.
-    # Anchor rootPath at "/" so a non-root workspace cwd is not prefixed again.
+  let generateModule(ws: Workspace!): Changeset! {
+    # A module that depends on another by local path cannot resolve its own
+    # schema until that dependency has been generated, so overlay the generated
+    # closure onto the workspace first. The engine skips remote dependencies —
+    # assumed committed, as it does itself — and returns an empty changeset when
+    # there is nothing to stage.
+    let wsWithDeps = ws.withChanges(
+      ws.moduleSource(workspaceRef(rootPath)).generateLocalDependencies(ws),
+    )
 
-    # Create an overlay containing generated (local) dependencies so the generation
-    # can work.
-    #
-    # Only stage when there is a local dependency to stage: the call resolves
-    # module sources through the workspace's owning client, which a synthetic
-    # workspace (Directory.asWorkspace, as the e2e checks build) does not have,
-    # and an all-remote dependency list yields an empty changeset anyway.
-    # Remote dependencies are assumed committed, matching the engine.
-    let localDeps = ws
-      .moduleSource(workspaceRef(rootPath))
-      .dependencies
-      .{{kind}}
-      .filter { dep => dep.kind != ModuleSourceKind.GIT_SOURCE }
-    let wsWithDeps = if (localDeps.length == 0) {
-      ws
-    } else {
-      ws.withChanges(
-        polyfill.workspace(ws).moduleSource(workspaceRef(rootPath)).core.generateLocalDependencies(ws),
-      )
-    }
-
-    let modSource = polyfill.workspace(wsWithDeps).moduleSource(workspaceRef(modPathArg))
-    let name = modSource.core.moduleName
-    let introspectionJSON = modSource.core.introspectionSchemaJSON
+    let modSource = wsWithDeps.moduleSource(workspaceRef(rootPath))
+    let name = modSource.moduleName
+    let introspectionJSON = modSource.introspectionSchemaJSON
     let vendored = vendoredSdk(introspectionJSON, name)
 
     # the module as committed, with the whole committed sdk/ dropped (source and
     # any previously vendored jar) and the freshly vendored SDK sources overlaid,
     # plus any stale generated entrypoint dropped so the processor regenerates it
-    let baseDir = moduleDir(wsWithDeps, modPathArg)
+    let baseDir = moduleDir(wsWithDeps, rootPath)
       .withoutDirectory("sdk")
       .withDirectory("sdk", vendored)
       .withoutDirectory("src/generated")
     let entrypoint = generatedEntrypoint(baseDir, name)
 
-    let before = if (modPathArg == ".") {
-      wsWithDeps.directory("/", include: ["**"])
-    } else {
-      wsWithDeps.directory("/", include: [modPathArg + "/**"])
-    }
-    let staged = before
-      .withDirectory(joinPath(modPathArg, "sdk"), vendored)
-      .withDirectory(joinPath(modPathArg, "src/generated/java"), entrypoint)
+    let staged = wsWithDeps
+      .withNewDirectory(workspaceRef(joinPath(rootPath, "sdk")), vendored)
+      .withNewDirectory(workspaceRef(joinPath(rootPath, "src/generated/java")), entrypoint)
 
     let after = if (vendorSdkJar) {
-      staged.withDirectory(joinPath(modPathArg, "sdk/repo"), vendoredSdkJar(
-        introspectionJSON,
-        name,
-      ))
+      staged.withNewDirectory(
+        workspaceRef(joinPath(rootPath, "sdk/repo")),
+        vendoredSdkJar(introspectionJSON, name),
+      )
     } else {
       staged
     }
 
-    # The staging above is workspace-rooted, but the engine applies a returned
-    # changeset relative to the caller's cwd — so without re-rooting here every
-    # path ends up nested under the cwd a second time and the module is never
-    # actually generated. Selecting a subdirectory is metadata only, so this
-    # costs nothing.
-    let cwd = ws.cwd.trimPrefix("/").trimSuffix("/")
-    if (cwd == "") {
-      after.changes(before)
-    } else if (modPathArg == cwd or modPathArg.trimPrefix(cwd + "/") != modPathArg) {
-      after.directory(cwd).changes(before.directory(cwd))
-    } else {
-      # A cwd-relative changeset cannot express paths outside the cwd, so a
-      # module discovered above it (find-up) would be silently dropped and left
-      # ungenerated. Fail loudly until there is a policy for such modules.
-      raise "module " + modPathArg + " lies outside the current directory " + cwd + ": its generated changes cannot be expressed relative to the cwd"
-    }
+    # Baseline on the staged-dependency workspace, not the one handed in: the
+    # dependencies' generated code belongs to their own SDKs, not this changeset.
+    after.changes(wsWithDeps)
   }
 
   """
@@ -297,8 +264,8 @@ type Mod {
   }
 
   """
-  A module path as a workspace-root-absolute ref, the form Workspace.moduleSource
-  resolves from the workspace root rather than from the client's cwd.
+  A module path as a workspace-root-absolute path, the form Workspace resolves
+  from the workspace root rather than from the client's cwd.
   """
   let workspaceRef(modPathArg: String!): String! {
     if (modPathArg == ".") { "/" } else { "/" + modPathArg }
