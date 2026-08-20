@@ -189,11 +189,17 @@ public class Helpers {
     return builder.build();
   }
 
-  /** Fix using '$' char in javadoc */
+  /**
+   * Escape characters that have a special meaning in javadoc.
+   *
+   * <p>'$' is escaped for JavaPoet's format strings and '&amp;' as an HTML entity. The comment
+   * terminator is escaped so that a glob example such as {@code **&#47;target/**} cannot end the
+   * generated javadoc early.
+   */
   static String escapeJavadoc(String str) {
     if (str == null) {
       return "";
     }
-    return str.replace("$", "$$").replace("&", "&amp;");
+    return str.replace("$", "$$").replace("&", "&amp;").replace("*/", "*&#47;");
   }
 }
