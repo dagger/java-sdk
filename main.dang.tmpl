@@ -20,13 +20,6 @@ type JavaSdk {
   skipGenerateFilename: String! = ".dagger-java-sdk-skip-generate"
 
   """
-  Config filenames that mark a Dagger module root: the CLI 1.0
-  `dagger-module.toml` (workspace-managed modules) and the legacy `dagger.json`.
-  A managed module is discovered by whichever it uses.
-  """
-  let moduleConfigFilenames: [String!]! = ["dagger-module.toml", "dagger.json"]
-
-  """
   Commit the compiled Dagger Java SDK as a jar into each generated module so its
   runtime build compiles only the module's own code against the jar instead of
   recompiling the vendored SDK sources. The sources stay checked in for IDE use.
@@ -98,60 +91,24 @@ type JavaSdk {
   Return every Java SDK module this workspace manages that is visible from the
   client's current location.
 
-  Discovery is anchored at the client's cwd (never the workspace root): the
-  nearest enclosing module plus every module at or below the cwd, intersected
-  with the SDK's engine-owned list of managed modules
-  (currentModule.asSDK.modules). So running from a subdirectory acts on the
-  project you're in — and the projects beneath it — not the whole workspace.
-
-  Discovery is the polyfill's cwd-aware findConfigDirs (dagger/dagger#13688);
-  this maps its cwd-relative results to workspace-root-relative paths and keeps
-  the ones this SDK manages, whether they use dagger-module.toml or dagger.json.
+  The engine owns both the list and the cwd policy: currentModule.asSDK returns
+  the modules registered to this SDK that sit at or below the client's cwd, plus
+  the nearest enclosing one when the cwd is not itself a module. So running from
+  a subdirectory acts on the project you're in — and the projects beneath it —
+  not the whole workspace. Paths come back relative to the workspace root, the
+  currency Mod.rootPath uses.
   """
   modules(ws: Workspace!): [Mod!]! {
-    let managed = ws.sdk(name: currentModule.name).modules.{{source}}
-    let cwd = normalizePath(ws.cwd)
-    polyfill
-      .workspace(ws)
-      .findConfigDirs(moduleConfigFilenames, exclude: ["**/target/**"])
-      .map { dir => moduleRelPath(cwd, dir) }
-      .uniq
-      .filter { path => managed.filter { m => normalizePath(m.source) == path }.length > 0 }
-      .map { path => Mod(
-        rootPath: path,
+    currentModule
+      .asSDK(workspace: ws)
+      .modules
+      .{{path}}
+      .map { module => Mod(
+        rootPath: module.path,
         ws: ws,
         skipGenerateFilename: skipGenerateFilename,
         vendorSdkJar: vendorSdkJar,
       ) }
-  }
-
-  """
-  Normalize a workspace path: strip a leading "./" or "/" and any trailing "/",
-  and map the empty/root path to ".".
-  """
-  let normalizePath(path: String!): String! {
-    let normalized = path.trimPrefix("./").trimPrefix("/").trimSuffix("/")
-    if (normalized == "") { "." } else { normalized }
-  }
-
-  """
-  Resolve a findConfigDirs result — a cwd-relative path, at or below the cwd
-  ("." , "sub/dir") or a strict ancestor (".." , "../..") — against the cwd into a
-  workspace-root-relative path, the format both managed module sources and
-  Mod.rootPath use.
-  """
-  let moduleRelPath(cwd: String!, dir: String!): String! {
-    let base = if (cwd == "" or cwd == ".") { [] } else { cwd.split("/") }
-    let segs = dir.split("/").reduce(base) { acc, seg =>
-      if (seg == "..") {
-        acc.dropLast(1)
-      } else if (seg == "." or seg == "") {
-        acc
-      } else {
-        acc + [seg]
-      }
-    }
-    if (segs.length == 0) { "." } else { segs.join("/") }
   }
 
   """
