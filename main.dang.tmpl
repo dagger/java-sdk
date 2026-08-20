@@ -49,14 +49,12 @@ type JavaSdk {
       rawPath.trimSuffix("/")
     }
 
-    let before = if (modPath == ".") {
-      ws.directory("/", include: ["**"])
-    } else {
-      ws.directory("/", include: [modPath + "/**"])
-    }
-
     let selectedTemplate = if (template == "") { "default" } else { template }
-    before.withDirectory(modPath, renderedTemplate(name, selectedTemplate)).changes(before)
+    # `path` is workspace-root-relative, so anchor it: relative workspace paths
+    # resolve from ws.cwd and would be prefixed again when initModule is called
+    # directly from a subdirectory instead of being driven by the engine.
+    let target = if (modPath == ".") { "/" } else { "/" + modPath }
+    ws.withNewDirectory(target, renderedTemplate(name, selectedTemplate)).changes(ws)
   }
 
   """

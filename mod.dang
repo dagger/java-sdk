@@ -199,7 +199,9 @@ type Mod {
   Stage the vendored SDK + generated entrypoint for one module.
 
   The returned changeset is relative to the client's cwd, the form the engine
-  applies a generator's result in.
+  applies a generator's result in: past v1.0.0-beta.10 every Workspace.changes
+  result is measured from the workspace cwd, so staging onto the workspace value
+  and diffing it against the baseline the caller already holds is all this needs.
   """
   let generateModule(ws: Workspace!): Changeset! {
     # A module that depends on another by local path cannot resolve its own
@@ -225,40 +227,22 @@ type Mod {
       .withoutDirectory("src/generated")
     let entrypoint = generatedEntrypoint(baseDir, name)
 
-    let before = if (rootPath == ".") {
-      wsWithDeps.directory("/", include: ["**"])
-    } else {
-      wsWithDeps.directory("/", include: [rootPath + "/**"])
-    }
-    let staged = before
-      .withDirectory(joinPath(rootPath, "sdk"), vendored)
-      .withDirectory(joinPath(rootPath, "src/generated/java"), entrypoint)
+    let staged = wsWithDeps
+      .withNewDirectory(workspaceRef(joinPath(rootPath, "sdk")), vendored)
+      .withNewDirectory(workspaceRef(joinPath(rootPath, "src/generated/java")), entrypoint)
 
     let after = if (vendorSdkJar) {
-      staged.withDirectory(joinPath(rootPath, "sdk/repo"), vendoredSdkJar(
-        introspectionJSON,
-        name,
-      ))
+      staged.withNewDirectory(
+        workspaceRef(joinPath(rootPath, "sdk/repo")),
+        vendoredSdkJar(introspectionJSON, name),
+      )
     } else {
       staged
     }
 
-    # The staging above is workspace-rooted, but the engine applies a returned
-    # changeset relative to the caller's cwd — so without re-rooting here every
-    # path ends up nested under the cwd a second time and the module is never
-    # actually generated. Selecting a subdirectory is metadata only, so this
-    # costs nothing.
-    let cwd = ws.cwd.trimPrefix("/").trimSuffix("/")
-    if (cwd == "") {
-      after.changes(before)
-    } else if (rootPath == cwd or rootPath.trimPrefix(cwd + "/") != rootPath) {
-      after.directory(cwd).changes(before.directory(cwd))
-    } else {
-      # A cwd-relative changeset cannot express paths outside the cwd, so a
-      # module discovered above it (find-up) would be silently dropped and left
-      # ungenerated. Fail loudly until there is a policy for such modules.
-      raise "module " + rootPath + " lies outside the current directory " + cwd + ": its generated changes cannot be expressed relative to the cwd"
-    }
+    # Baseline on the staged-dependency workspace, not the one handed in: the
+    # dependencies' generated code belongs to their own SDKs, not this changeset.
+    after.changes(wsWithDeps)
   }
 
   """
@@ -280,8 +264,8 @@ type Mod {
   }
 
   """
-  A module path as a workspace-root-absolute ref, the form Workspace.moduleSource
-  resolves from the workspace root rather than from the client's cwd.
+  A module path as a workspace-root-absolute path, the form Workspace resolves
+  from the workspace root rather than from the client's cwd.
   """
   let workspaceRef(modPathArg: String!): String! {
     if (modPathArg == ".") { "/" } else { "/" + modPathArg }
