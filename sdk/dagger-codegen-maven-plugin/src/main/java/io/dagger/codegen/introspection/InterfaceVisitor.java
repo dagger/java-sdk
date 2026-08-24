@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import javax.lang.model.element.Modifier;
 
@@ -51,6 +52,15 @@ class InterfaceVisitor extends AbstractVisitor {
                 .addModifiers(Modifier.PUBLIC, Modifier.ABSTRACT);
 
         TypeName returnType = resolveReturnType(field);
+        // A field coerced to Optional because another type binds it to a nullable declaration is
+        // wrapped the same way as a directly nullable one — including the widening, since an
+        // implementation may still narrow the element type and Optional is invariant.
+        if (isNullableObject(field) || requiresOptionalObjectField(field)) {
+          if (field.getTypeRef().isInterface()) {
+            returnType = WildcardTypeName.subtypeOf(returnType);
+          }
+          returnType = ParameterizedTypeName.get(ClassName.get(Optional.class), returnType);
+        }
         methodBuilder.returns(returnType);
 
         // Add parameters for required args
@@ -89,7 +99,7 @@ class InterfaceVisitor extends AbstractVisitor {
   }
 
   /** Generates the FooClient class that implements the Foo interface via query building. */
-  private TypeSpec generateClientType(Type type) {
+  TypeSpec generateClientType(Type type) {
     String clientName = Helpers.formatName(type) + "Client";
     ClassName interfaceName = ClassName.bestGuess(Helpers.formatName(type));
 
@@ -128,6 +138,12 @@ class InterfaceVisitor extends AbstractVisitor {
             .addAnnotation(Override.class);
 
     TypeName returnType = resolveReturnType(field);
+    TypeName objectReturnType = returnType;
+    boolean nullableObject = isNullableObject(field);
+    boolean presentObject = !nullableObject && requiresOptionalObjectField(field);
+    if (nullableObject || presentObject) {
+      returnType = ParameterizedTypeName.get(ClassName.get(Optional.class), returnType);
+    }
     fieldMethodBuilder.returns(returnType);
 
     List<ParameterSpec> mandatoryParams =
@@ -192,14 +208,32 @@ class InterfaceVisitor extends AbstractVisitor {
           .addException(InterruptedException.class)
           .addException(ExecutionException.class)
           .addException(ClassName.get("io.dagger.client.exception", "DaggerQueryException"));
+    } else if (nullableObject) {
+      String graphqlTypeName = field.getTypeRef().getTypeName();
+      String clientClassName =
+          field.getTypeRef().isInterface()
+              ? graphqlTypeName + "Client"
+              : objectReturnType.toString();
+      fieldMethodBuilder.addStatement(
+          "QueryBuilder objectQueryBuilder = nextQueryBuilder.executeNullableObjectQuery($S)",
+          graphqlTypeName);
+      fieldMethodBuilder.addStatement(
+          "return Optional.ofNullable(objectQueryBuilder).map(qb -> new $L(qb))",
+          ClassName.bestGuess(clientClassName));
+      fieldMethodBuilder
+          .addException(InterruptedException.class)
+          .addException(ExecutionException.class)
+          .addException(ClassName.get("io.dagger.client.exception", "DaggerQueryException"));
     } else if (field.getTypeRef().isObjectOrInterface()) {
-      TypeName objectType = resolveReturnType(field);
       // For interface return types, instantiate the client class
-      if (field.getTypeRef().isInterface()) {
-        fieldMethodBuilder.addStatement(
-            "return new $LClient(nextQueryBuilder)", field.getTypeRef().getTypeName());
+      CodeBlock instantiation =
+          field.getTypeRef().isInterface()
+              ? CodeBlock.of("new $LClient(nextQueryBuilder)", field.getTypeRef().getTypeName())
+              : CodeBlock.of("new $L(nextQueryBuilder)", objectReturnType);
+      if (presentObject) {
+        fieldMethodBuilder.addStatement("return $T.of($L)", Optional.class, instantiation);
       } else {
-        fieldMethodBuilder.addStatement("return new $L(nextQueryBuilder)", objectType);
+        fieldMethodBuilder.addStatement("return $L", instantiation);
       }
     } else {
       fieldMethodBuilder.addStatement("return nextQueryBuilder.executeQuery($L.class)", returnType);
@@ -233,6 +267,12 @@ class InterfaceVisitor extends AbstractVisitor {
     return arg.getType().formatInput(expectedType);
   }
 
+  private boolean isNullableObject(Field field) {
+    return getSchema().supportsNullableObjects()
+        && field.getTypeRef().isOptional()
+        && field.getTypeRef().isObjectOrInterface();
+  }
+
   private boolean needsExceptions(Field field) {
     if (field.getTypeRef().isListOfObject() || field.getTypeRef().isList()) {
       return true;
@@ -241,7 +281,9 @@ class InterfaceVisitor extends AbstractVisitor {
       return true;
     }
     if (field.getTypeRef().isObjectOrInterface()) {
-      return false;
+      // A field coerced to Optional because an implemented interface declares it nullable stays
+      // lazy: it cannot be absent, so nothing is resolved and nothing can fail.
+      return isNullableObject(field);
     }
     return true; // scalar fields need exceptions
   }

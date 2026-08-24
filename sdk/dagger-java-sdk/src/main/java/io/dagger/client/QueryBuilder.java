@@ -206,6 +206,24 @@ class QueryBuilder {
     return jsonb.fromJson(value.toString(), klass);
   }
 
+  /**
+   * Resolve a nullable object field, returning a QueryBuilder that loads it via node(id:), or null
+   * when the field resolved to null.
+   *
+   * <p>The field's id has to be fetched to tell the two apart, so unlike a non-null object field
+   * this cannot stay lazy. What comes back is lazy again: the caller wraps it in a normal client
+   * object.
+   */
+  QueryBuilder executeNullableObjectQuery(String graphqlTypeName)
+      throws ExecutionException, InterruptedException, DaggerQueryException {
+    // chain(String), not chain(List): only parts are walked when reading the response back.
+    String id = chain("id").executeQuery(String.class);
+    if (id == null) {
+      return null;
+    }
+    return new QueryBuilder(this.client).chainNode(graphqlTypeName, id);
+  }
+
   <T> List<T> executeListQuery(Class<T> klass)
       throws ExecutionException, InterruptedException, DaggerQueryException {
     List<String> pathElts =

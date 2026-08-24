@@ -8,8 +8,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import org.apache.maven.artifact.versioning.ComparableVersion;
 
 public class Schema {
+
+  private static final ComparableVersion NULLABLE_OBJECTS_VERSION =
+      new ComparableVersion("1.0.0-beta.10");
 
   public static class SchemaContainer {
 
@@ -67,6 +71,26 @@ public class Schema {
 
   public String getVersion() {
     return version;
+  }
+
+  /**
+   * Whether the engine resolves nullable object and interface fields, which lets generated methods
+   * return {@code Optional}. Before v1.0.0-beta.10 the old lazy shape is generated instead.
+   *
+   * <p>A version that is absent or not a release version is a development build, and gets the
+   * current shape.
+   */
+  public boolean supportsNullableObjects() {
+    if (version == null || version.isBlank()) {
+      return true;
+    }
+
+    if (!version.matches("^v?\\d+\\.\\d+\\.\\d+.*$")) {
+      return true;
+    }
+
+    String normalized = version.startsWith("v") ? version.substring(1) : version;
+    return new ComparableVersion(normalized).compareTo(NULLABLE_OBJECTS_VERSION) >= 0;
   }
 
   public Type query() {
