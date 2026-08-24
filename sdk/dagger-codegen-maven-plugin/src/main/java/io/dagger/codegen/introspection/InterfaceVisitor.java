@@ -52,14 +52,13 @@ class InterfaceVisitor extends AbstractVisitor {
                 .addModifiers(Modifier.PUBLIC, Modifier.ABSTRACT);
 
         TypeName returnType = resolveReturnType(field);
-        if (isNullableObject(field)) {
-          if (field.getTypeRef().getKind() == TypeKind.INTERFACE) {
+        // A field coerced to Optional because another type binds it to a nullable declaration is
+        // wrapped the same way as a directly nullable one — including the widening, since an
+        // implementation may still narrow the element type and Optional is invariant.
+        if (isNullableObject(field) || requiresOptionalObjectField(field)) {
+          if (field.getTypeRef().isInterface()) {
             returnType = WildcardTypeName.subtypeOf(returnType);
           }
-          returnType = ParameterizedTypeName.get(ClassName.get(Optional.class), returnType);
-        } else if (requiresOptionalObjectField(field)) {
-          // An interface may narrow a nullable field of the interface it implements to non-null.
-          // It still has to return Optional, or it does not satisfy that declaration.
           returnType = ParameterizedTypeName.get(ClassName.get(Optional.class), returnType);
         }
         methodBuilder.returns(returnType);

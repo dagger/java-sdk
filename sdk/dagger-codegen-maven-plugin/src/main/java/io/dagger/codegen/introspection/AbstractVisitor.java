@@ -32,35 +32,39 @@ abstract class AbstractVisitor extends CodeWriter {
 
   /**
    * Whether a non-null object field has to be generated as {@code Optional} anyway, because a type
-   * it shares an {@code implements} relation with declares the same field nullable.
+   * that has to agree with it on this field declares it nullable.
    *
    * <p>GraphQL lets an implementation narrow a nullable field to non-null, and lets an object
-   * implement several interfaces that disagree on that. Java has one return type per method: an
-   * implementation must satisfy every interface it implements, so {@code Optional} is
-   * all-or-nothing across a whole {@code implements} component — otherwise the generated class
-   * cannot satisfy its own {@code implements} clause.
+   * implement several interfaces that disagree on that. Java has one return type per method, so
+   * every type bound to the same declaration has to agree — otherwise the generated class cannot
+   * satisfy its own {@code implements} clause.
    */
   boolean requiresOptionalObjectField(Field field) {
     if (!getSchema().supportsNullableObjects() || !field.getTypeRef().isObjectOrInterface()) {
       return false;
     }
-    return implementsComponent(field.getParentObject()).stream()
-        .filter(related -> related.getFields() != null)
-        .flatMap(related -> related.getFields().stream())
+    return overrideComponent(field.getParentObject(), field.getName()).stream()
+        .map(related -> declaredField(related, field.getName()))
+        .filter(Objects::nonNull)
         .anyMatch(
             declared ->
-                declared.getName().equals(field.getName())
-                    && declared.getTypeRef().isOptional()
-                    && declared.getTypeRef().isObjectOrInterface());
+                declared.getTypeRef().isOptional() && declared.getTypeRef().isObjectOrInterface());
   }
 
-  /** Every type reachable from this one through {@code implements}, in either direction. */
-  private Set<Type> implementsComponent(Type type) {
+  /**
+   * Every type whose declaration of this field the given type's has to stay compatible with.
+   *
+   * <p>Implementing an interface only binds the two types for the fields that interface actually
+   * declares. So the walk follows {@code implements} edges in either direction but never passes
+   * through a type that says nothing about the field: types that merely share an ancestor impose
+   * nothing on each other, and their nullability stays independent.
+   */
+  private Set<Type> overrideComponent(Type type, String fieldName) {
     Set<Type> component = new LinkedHashSet<>();
     Deque<Type> pending = new ArrayDeque<>(List.of(type));
     while (!pending.isEmpty()) {
       Type current = pending.poll();
-      if (!component.add(current)) {
+      if (declaredField(current, fieldName) == null || !component.add(current)) {
         continue;
       }
       Stream.concat(
@@ -72,6 +76,16 @@ abstract class AbstractVisitor extends CodeWriter {
           .forEach(pending::add);
     }
     return component;
+  }
+
+  private Field declaredField(Type type, String fieldName) {
+    if (type.getFields() == null) {
+      return null;
+    }
+    return type.getFields().stream()
+        .filter(declared -> fieldName.equals(declared.getName()))
+        .findFirst()
+        .orElse(null);
   }
 
   private Type typeNamed(String name) {
