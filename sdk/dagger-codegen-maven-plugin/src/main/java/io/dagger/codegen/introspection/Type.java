@@ -91,6 +91,11 @@ public class Type {
     this.directives = directives;
   }
 
+  /** Returns the module that contributed this type, or null if it belongs to core. */
+  public String getOwningModule() {
+    return Directive.getSourceMapModule(directives);
+  }
+
   /**
    * Checks if this type has an "id" field. With unified IDs, the id field returns the unified ID
    * scalar. Falls back to legacy FooID check.
