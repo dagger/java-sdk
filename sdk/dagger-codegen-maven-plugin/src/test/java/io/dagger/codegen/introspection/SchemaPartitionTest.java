@@ -12,10 +12,11 @@ import org.junit.jupiter.api.Test;
 class SchemaPartitionTest {
 
   /** A client schema for module {@code hello}: core plus one module, as the engine emits it. */
-  private static final String HELLO = clientSchema("hello", "Hello", "hello", "asHello");
+  private static final String HELLO = Fixtures.clientSchema("hello", "Hello", "hello", "asHello");
 
   /** The same core bound to a different module, to check core does not depend on the module. */
-  private static final String BUILDER = clientSchema("builder", "Builder", "builder", "asBuilder");
+  private static final String BUILDER =
+      Fixtures.clientSchema("builder", "Builder", "builder", "asBuilder");
 
   @Test
   void corePartitionKeepsOnlyUnownedTypes() throws Exception {
@@ -169,48 +170,5 @@ class SchemaPartitionTest {
   private static Schema parse(String json) throws Exception {
     return Schema.initialize(
         new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "v1.0.0-beta.10");
-  }
-
-  private static String owned(String module) {
-    return "\"directives\":[{\"name\":\"sourceMap\",\"args\":[{\"name\":\"module\",\"value\":\"\\\""
-        + module
-        + "\\\"\"}]}]";
-  }
-
-  private static String clientSchema(String module, String root, String entry, String binding) {
-    return "{\"__schema\":{\"queryType\":{\"name\":\"Query\"},\"types\":["
-        + "{\"name\":\"__Schema\",\"kind\":\"OBJECT\",\"fields\":[]},"
-        + "{\"name\":\"String\",\"kind\":\"SCALAR\"},"
-        + "{\"name\":\"ID\",\"kind\":\"SCALAR\"},"
-        + "{\"name\":\"Query\",\"kind\":\"OBJECT\",\"fields\":["
-        + "  {\"name\":\"container\",\"args\":[],\"type\":{\"kind\":\"NON_NULL\",\"ofType\":{\"kind\":\"OBJECT\",\"name\":\"Container\"}}},"
-        + "  {\"name\":\""
-        + entry
-        + "\",\"args\":[],\"type\":{\"kind\":\"NON_NULL\",\"ofType\":{\"kind\":\"OBJECT\",\"name\":\""
-        + root
-        + "\"}},"
-        + owned(module)
-        + "}]},"
-        + "{\"name\":\"Container\",\"kind\":\"OBJECT\",\"fields\":["
-        + "  {\"name\":\"id\",\"args\":[],\"type\":{\"kind\":\"NON_NULL\",\"ofType\":{\"kind\":\"SCALAR\",\"name\":\"ID\"}}},"
-        + "  {\"name\":\"withExec\",\"args\":[],\"type\":{\"kind\":\"NON_NULL\",\"ofType\":{\"kind\":\"OBJECT\",\"name\":\"Container\"}}}]},"
-        + "{\"name\":\"Binding\",\"kind\":\"OBJECT\",\"fields\":["
-        + "  {\"name\":\"asString\",\"args\":[],\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\"}},"
-        + "  {\"name\":\""
-        + binding
-        + "\",\"args\":[],\"type\":{\"kind\":\"OBJECT\",\"name\":\""
-        + root
-        + "\"},"
-        + owned(module)
-        + "}]},"
-        + "{\"name\":\""
-        + root
-        + "\",\"kind\":\"OBJECT\","
-        + owned(module)
-        + ",\"fields\":["
-        + "  {\"name\":\"greet\",\"args\":[],\"type\":{\"kind\":\"SCALAR\",\"name\":\"String\"},"
-        + owned(module)
-        + "}]}"
-        + "]}}";
   }
 }

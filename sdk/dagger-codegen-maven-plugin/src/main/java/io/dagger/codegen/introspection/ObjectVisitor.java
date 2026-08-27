@@ -17,9 +17,46 @@ import java.util.function.UnaryOperator;
 import javax.lang.model.element.Modifier;
 
 class ObjectVisitor extends AbstractVisitor {
+
+  private final ClientEntryPoint entryPoint;
+
   public ObjectVisitor(
-      Schema schema, TypeRegistry registry, Path targetDirectory, Charset encoding) {
+      Schema schema,
+      TypeRegistry registry,
+      ClientEntryPoint entryPoint,
+      Path targetDirectory,
+      Charset encoding) {
     super(schema, registry, targetDirectory, encoding);
+    this.entryPoint = entryPoint;
+  }
+
+  /**
+   * Who a generated field method chains from. An instance method chains from {@code
+   * this.queryBuilder}; a static one takes its receiver as a first parameter and chains from that
+   * receiver's builder, optionally after a preamble — the serve call of a module entry point.
+   */
+  private record Receiver(ClassName type, String name, String method, CodeBlock preamble) {
+    static final Receiver THIS = new Receiver(null, null, null, null);
+
+    boolean isStatic() {
+      return type != null;
+    }
+
+    /**
+     * A shim on a core type: static, and named after the schema field. The entry point is static
+     * too but renames itself to {@code from}.
+     */
+    boolean isShim() {
+      return isStatic() && method == null;
+    }
+
+    /**
+     * Every shim is emitted into the module's one root class, so two receivers carrying the same
+     * field name would name the same nested optional-arguments class.
+     */
+    String helperPrefix() {
+      return isShim() ? type.simpleName() : "";
+    }
   }
 
   @Override
@@ -83,16 +120,6 @@ class ObjectVisitor extends AbstractVisitor {
               .nextControlFlow("catch (Exception e)")
               .addStatement("throw new RuntimeException(\"Failed to load object from ID\", e)")
               .endControlFlow()
-              .build());
-
-      // queryBuilder: the root builder, for code that has to start a chain from the client —
-      // the serve preamble of a generated module client, chiefly.
-      classBuilder.addMethod(
-          MethodSpec.methodBuilder("queryBuilder")
-              .addModifiers(Modifier.PUBLIC)
-              .returns(registry().runtime("QueryBuilder"))
-              .addJavadoc("The query builder at the root of this client.\n")
-              .addStatement("return this.queryBuilder")
               .build());
 
       // nodeQueryBuilder: create a QueryBuilder for node(id:) + inline fragment
@@ -174,13 +201,27 @@ class ObjectVisitor extends AbstractVisitor {
             .build();
     classBuilder.addMethod(constructor);
 
+    // The builder behind this object, for code that chains from it without being it: the serve
+    // preamble of a module client, and the shims a module adds to core types.
+    classBuilder.addMethod(
+        MethodSpec.methodBuilder("queryBuilder")
+            .addModifiers(Modifier.PUBLIC)
+            .returns(registry().runtime("QueryBuilder"))
+            .addJavadoc("The query builder this object chains from.\n")
+            .addStatement("return this.queryBuilder")
+            .build());
+
     for (Field field : type.getFields()) {
       if (field.hasOptionalArgs()) {
-        buildFieldArgumentsHelpers(classBuilder, field, type);
+        buildFieldArgumentsHelpers(classBuilder, field, type, Receiver.THIS);
         buildFieldMethod(classBuilder, field, true);
       }
 
       buildFieldMethod(classBuilder, field, false);
+    }
+
+    if (entryPoint != null && type.getName().equals(entryPoint.rootTypeName())) {
+      buildEntryPoint(classBuilder, type);
     }
 
     if (List.of("Container", "Directory").contains(type.getName())) {
@@ -219,10 +260,83 @@ class ObjectVisitor extends AbstractVisitor {
     return field.getTypeRef().formatInput(registry(), expectedType);
   }
 
+  /**
+   * The module entry point on its root type: {@code from(Client, <constructor args>)} serves the
+   * bound module and returns its root; the alias named after the module delegates to it, for a
+   * static import; and one static shim per field the module adds to a core type, taking that core
+   * object as its first argument, since Java has no extension methods.
+   */
+  private void buildEntryPoint(TypeSpec.Builder classBuilder, Type type) {
+    ClientBinding binding = entryPoint.binding();
+    CodeBlock serve =
+        CodeBlock.of(
+            "$T.ensureServed(root, $S, $S, $S, $S);\n",
+            registry().runtime("ModuleBinding"),
+            binding.module(),
+            binding.kind(),
+            binding.ref(),
+            binding.pin());
+    Field entry = entryPoint.entryField();
+    Receiver dag = new Receiver(registry().forType("Query"), "dag", "from", serve);
+    if (entry.hasOptionalArgs()) {
+      buildFieldArgumentsHelpers(classBuilder, entry, type, dag);
+      classBuilder.addMethod(alias(buildFieldMethod(classBuilder, entry, true, dag), entry));
+    }
+    classBuilder.addMethod(alias(buildFieldMethod(classBuilder, entry, false, dag), entry));
+
+    entryPoint
+        .shims()
+        .forEach(
+            (typeName, fields) -> {
+              ClassName coreType = registry().forType(typeName);
+              String receiverName =
+                  Character.toLowerCase(typeName.charAt(0)) + typeName.substring(1);
+              Receiver receiver = new Receiver(coreType, receiverName, null, serve);
+              for (Field shim : fields) {
+                if (shim.hasOptionalArgs()) {
+                  buildFieldArgumentsHelpers(classBuilder, shim, type, receiver);
+                  buildFieldMethod(classBuilder, shim, true, receiver);
+                }
+                buildFieldMethod(classBuilder, shim, false, receiver);
+              }
+            });
+  }
+
+  /** The static-import alias of {@code from}: same signature, named after the module. */
+  private MethodSpec alias(MethodSpec from, Field entry) {
+    String args =
+        from.parameters().stream()
+            .map(p -> p.name())
+            .collect(java.util.stream.Collectors.joining(", "));
+    return MethodSpec.methodBuilder(Helpers.formatName(entry))
+        .addModifiers(from.modifiers())
+        .returns(from.returnType())
+        .addParameters(from.parameters())
+        .addExceptions(from.exceptions())
+        .addJavadoc(
+            "Alias for {@link #from}, for a static import: {@code $L(dag())}.\n",
+            Helpers.formatName(entry))
+        .addStatement("return from($L)", args)
+        .build();
+  }
+
   private void buildFieldMethod(
       TypeSpec.Builder classBuilder, Field field, boolean withOptionalArgs) {
+    buildFieldMethod(classBuilder, field, withOptionalArgs, Receiver.THIS);
+  }
+
+  private MethodSpec buildFieldMethod(
+      TypeSpec.Builder classBuilder, Field field, boolean withOptionalArgs, Receiver receiver) {
+    String methodName = receiver.method() != null ? receiver.method() : Helpers.formatName(field);
     MethodSpec.Builder fieldMethodBuilder =
-        MethodSpec.methodBuilder(Helpers.formatName(field)).addModifiers(Modifier.PUBLIC);
+        MethodSpec.methodBuilder(methodName).addModifiers(Modifier.PUBLIC);
+    if (receiver.isStatic()) {
+      fieldMethodBuilder.addModifiers(Modifier.STATIC);
+      fieldMethodBuilder.addParameter(
+          ParameterSpec.builder(receiver.type(), receiver.name())
+              .addJavadoc("the $L to chain from\n", receiver.type().simpleName())
+              .build());
+    }
     TypeName returnType = resolveReturnType(field);
     TypeName objectReturnType = returnType;
     boolean nullableObject =
@@ -248,20 +362,32 @@ class ObjectVisitor extends AbstractVisitor {
     fieldMethodBuilder.addParameters(mandatoryParams);
     if (withOptionalArgs && field.hasOptionalArgs()) {
       fieldMethodBuilder.addParameter(
-          ParameterSpec.builder(
-                  ClassName.bestGuess(capitalize(Helpers.formatName(field)) + "Arguments"),
-                  "optArgs")
+          ParameterSpec.builder(argumentsClass(field, receiver), "optArgs")
               .addJavadoc("$L optional arguments\n", Helpers.formatName(field))
               .build());
     }
     fieldMethodBuilder.addJavadoc(Helpers.escapeJavadoc(field.getDescription()));
 
-    if (field.getTypeRef().isScalar()
+    if (!receiver.isStatic()
+        && field.getTypeRef().isScalar()
         && !Helpers.isIdToConvert(field)
         && !"Query".equals(field.getParentObject().getName())) {
       fieldMethodBuilder.beginControlFlow("if (this.$L != null)", Helpers.formatName(field));
       fieldMethodBuilder.addStatement("return $L", Helpers.formatName(field));
       fieldMethodBuilder.endControlFlow();
+    }
+    String builder = "this.queryBuilder";
+    if (receiver.isStatic()) {
+      builder = receiver.name() + ".queryBuilder()";
+      if (receiver.preamble() != null) {
+        // A shim's receiver is a core object mid-chain, so its builder carries a selection path
+        // the serve query has no business continuing.
+        fieldMethodBuilder.addStatement(
+            "$T root = $L.queryBuilder().root()",
+            registry().runtime("QueryBuilder"),
+            receiver.name());
+        fieldMethodBuilder.addCode(receiver.preamble());
+      }
     }
     if (field.hasArgs()) {
       fieldMethodBuilder.addStatement(
@@ -282,13 +408,15 @@ class ObjectVisitor extends AbstractVisitor {
     }
     if (field.hasArgs()) {
       fieldMethodBuilder.addStatement(
-          "$T nextQueryBuilder = this.queryBuilder.chain($S, fieldArgs)",
+          "$T nextQueryBuilder = $L.chain($S, fieldArgs)",
           registry().runtime("QueryBuilder"),
+          builder,
           field.getName());
     } else {
       fieldMethodBuilder.addStatement(
-          "$T nextQueryBuilder = this.queryBuilder.chain($S)",
+          "$T nextQueryBuilder = $L.chain($S)",
           registry().runtime("QueryBuilder"),
+          builder,
           field.getName());
     }
 
@@ -321,7 +449,7 @@ class ObjectVisitor extends AbstractVisitor {
           .addException(registry().runtime("exception", "DaggerQueryException"));
     } else if (Helpers.isIdToConvert(field)) {
       fieldMethodBuilder.addStatement("nextQueryBuilder.executeQuery()");
-      fieldMethodBuilder.addStatement("return this");
+      fieldMethodBuilder.addStatement("return $L", receiver.isStatic() ? receiver.name() : "this");
       fieldMethodBuilder
           .addException(InterruptedException.class)
           .addException(ExecutionException.class)
@@ -363,12 +491,22 @@ class ObjectVisitor extends AbstractVisitor {
           .addException(registry().runtime("exception", "DaggerQueryException"));
     }
 
+    if (receiver.preamble() != null) {
+      // The serve call in the preamble can fail even when the field itself is lazy.
+      fieldMethodBuilder
+          .addException(InterruptedException.class)
+          .addException(ExecutionException.class)
+          .addException(registry().runtime("exception", "DaggerQueryException"));
+    }
+
     if (field.isDeprecated()) {
       fieldMethodBuilder.addAnnotation(Deprecated.class);
       fieldMethodBuilder.addJavadoc("@deprecated $L\n", field.getDeprecationReason());
     }
 
-    classBuilder.addMethod(fieldMethodBuilder.build());
+    MethodSpec method = fieldMethodBuilder.build();
+    classBuilder.addMethod(method);
+    return method;
   }
 
   /**
@@ -378,12 +516,13 @@ class ObjectVisitor extends AbstractVisitor {
    * @param field
    * @param type
    */
-  private void buildFieldArgumentsHelpers(TypeSpec.Builder classBuilder, Field field, Type type) {
-    String fieldArgumentsClassName = capitalize(Helpers.formatName(field)) + "Arguments";
+  private void buildFieldArgumentsHelpers(
+      TypeSpec.Builder classBuilder, Field field, Type type, Receiver receiver) {
+    ClassName fieldArgumentsClassName = argumentsClass(field, receiver);
 
     /* Inner class XXXArguments */
     TypeSpec.Builder fieldArgumentsClassBuilder =
-        TypeSpec.classBuilder(fieldArgumentsClassName)
+        TypeSpec.classBuilder(fieldArgumentsClassName.simpleName())
             .addModifiers(Modifier.PUBLIC, Modifier.STATIC);
     List<FieldSpec> optionalArgFields =
         field.getOptionalArgs().stream()
@@ -402,7 +541,7 @@ class ObjectVisitor extends AbstractVisitor {
                     Helpers.withSetter(
                         arg,
                         resolveArgType(arg, field),
-                        ClassName.bestGuess(fieldArgumentsClassName),
+                        fieldArgumentsClassName,
                         arg.getDescription()))
             .toList();
     fieldArgumentsClassBuilder.addMethods(optionalArgFieldWithMethods);
@@ -431,5 +570,11 @@ class ObjectVisitor extends AbstractVisitor {
         registry().forType(type.getName()).simpleName(),
         Helpers.formatName(field));
     classBuilder.addType(fieldArgumentsClassBuilder.build());
+  }
+
+  /** The nested class holding a field's optional arguments, as the enclosing class names it. */
+  private ClassName argumentsClass(Field field, Receiver receiver) {
+    return ClassName.bestGuess(
+        receiver.helperPrefix() + capitalize(Helpers.formatName(field)) + "Arguments");
   }
 }

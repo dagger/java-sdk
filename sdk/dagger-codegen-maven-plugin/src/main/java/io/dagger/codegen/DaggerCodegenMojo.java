@@ -66,6 +66,7 @@ public class DaggerCodegenMojo extends AbstractMojo {
           new CodegenVisitor(
               schema,
               TypeRegistry.core("io.dagger.client", "io.dagger.sdk"),
+              null,
               dest,
               Charset.forName(outputEncoding));
       schema.visit(

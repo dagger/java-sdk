@@ -5,18 +5,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.palantir.javapoet.JavaFile;
 import com.palantir.javapoet.TypeSpec;
 import java.io.ByteArrayInputStream;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
-import javax.tools.DiagnosticCollector;
-import javax.tools.JavaCompiler;
-import javax.tools.JavaFileObject;
-import javax.tools.SimpleJavaFileObject;
-import javax.tools.ToolProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -200,7 +193,7 @@ class NullableObjectCodegenTest {
         sources.put(
             qualifiedName,
             javaFile(
-                new ObjectVisitor(schema, REGISTRY, Path.of("."), StandardCharsets.UTF_8)
+                new ObjectVisitor(schema, REGISTRY, null, Path.of("."), StandardCharsets.UTF_8)
                     .generateType(type)));
       }
     }
@@ -296,49 +289,6 @@ class NullableObjectCodegenTest {
   }
 
   private void assertCompiles(Map<String, String> sources) {
-    JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-    assertThat(compiler).isNotNull();
-
-    DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-    List<JavaFileObject> compilationUnits =
-        sources.entrySet().stream()
-            .map(entry -> new SourceFile(entry.getKey(), entry.getValue()))
-            .collect(Collectors.toList());
-    boolean compiled =
-        compiler
-            .getTask(
-                null,
-                null,
-                diagnostics,
-                List.of(
-                    "--release", "17", "-proc:none", "-d", compilationOutputDirectory.toString()),
-                null,
-                compilationUnits)
-            .call();
-
-    assertThat(compiled)
-        .withFailMessage(
-            "Generated sources did not compile:%n%s",
-            diagnostics.getDiagnostics().stream()
-                .map(Object::toString)
-                .collect(Collectors.joining("\n")))
-        .isTrue();
-  }
-
-  private static final class SourceFile extends SimpleJavaFileObject {
-    private final String source;
-
-    private SourceFile(String className, String source) {
-      super(
-          URI.create(
-              "string:///" + className.replace('.', '/') + JavaFileObject.Kind.SOURCE.extension),
-          JavaFileObject.Kind.SOURCE);
-      this.source = source;
-    }
-
-    @Override
-    public CharSequence getCharContent(boolean ignoreEncodingErrors) {
-      return source;
-    }
+    CompileSupport.assertCompiles(compilationOutputDirectory, sources);
   }
 }

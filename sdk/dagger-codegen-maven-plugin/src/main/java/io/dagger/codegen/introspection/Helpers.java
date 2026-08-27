@@ -65,6 +65,22 @@ public class Helpers {
           "super",
           "while");
 
+  /**
+   * The locals a generated field method declares around the arguments it takes. A schema argument
+   * with one of these names shadows the local — "variable already defined" — so it is escaped
+   * exactly as a Java keyword is.
+   */
+  private static final List<String> RESERVED_LOCALS =
+      List.of(
+          "dag",
+          "root",
+          "builder",
+          "builders",
+          "fieldArgs",
+          "optArgs",
+          "nextQueryBuilder",
+          "objectQueryBuilder");
+
   static ClassName convertScalarToObject(
       TypeRegistry registry, String typeName, String expectedType) {
     if (expectedType != null && !expectedType.isEmpty()) {
@@ -124,6 +140,26 @@ public class Helpers {
     return schemaType.getFields().stream().filter(f -> f.getTypeRef().isScalar()).toList();
   }
 
+  /**
+   * The package segment a module's client lives under: {@code io.dagger.client.<segment>}. Only
+   * lowercase letters and digits survive, so {@code my-module} is {@code mymodule}; a leading digit
+   * or a Java keyword is escaped rather than rejected.
+   */
+  static String packageSegment(String moduleName) {
+    String segment = moduleName.toLowerCase().replaceAll("[^a-z0-9]", "");
+    if (segment.isEmpty()) {
+      throw new IllegalArgumentException(
+          "module name " + moduleName + " has no letters or digits to name a package with");
+    }
+    if (Character.isDigit(segment.charAt(0))) {
+      segment = "_" + segment;
+    }
+    if (JAVA_KEYWORDS.contains(segment)) {
+      segment = segment + "_";
+    }
+    return segment;
+  }
+
   static String formatName(Type type) {
     return formatName(type.getName());
   }
@@ -148,7 +184,7 @@ public class Helpers {
   }
 
   static String formatName(InputObject arg) {
-    if (JAVA_KEYWORDS.contains(arg.getName())) {
+    if (JAVA_KEYWORDS.contains(arg.getName()) || RESERVED_LOCALS.contains(arg.getName())) {
       return "_" + arg.getName();
     } else {
       return arg.getName();
