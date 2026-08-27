@@ -1,0 +1,15 @@
+name = "app"
+engineVersion = "v1.0.0-beta.10"
+
+[runtime]
+  source = "java"
+
+[[dependencies]]
+  name = "dep"
+  source = "../dep"
+
+# The same module under another name: the engine applies the alias with
+# withName, so its client has to chain and serve "greeter", not "dep".
+[[dependencies]]
+  name = "greeter"
+  source = "../dep"
