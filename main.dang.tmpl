@@ -61,6 +61,14 @@ type JavaSdk {
   Render a Java init template, substituting the requested module name.
   """
   let renderedTemplate(name: String!, template: String!): Directory! {
+    renderedTemplateDir(name, "templates/" + template)
+  }
+
+  """
+  Render a template directory of the module source, substituting the requested
+  module name into every path and file it holds.
+  """
+  let renderedTemplateDir(name: String!, dir: String!): Directory! {
     container
       .from("golang:1.25-alpine")
       .withoutEntrypoint
@@ -76,7 +84,7 @@ type JavaSdk {
       # that then breaks the scaffolded module's build.
       .withDirectory(
         "/template",
-        currentModule.source.directory("templates/" + template),
+        currentModule.source.directory(dir),
         exclude: ["**/target/**"],
       )
       .withWorkdir("/helper")
@@ -121,5 +129,101 @@ type JavaSdk {
         .filter { mod => mod.skipGenerate(ws) == false }
         .map { mod => mod.generate(ws) },
     )
+  }
+
+  """
+  Generate a typed Java client for the module at `module`, written to `path`.
+  `module` is a workspace path (leading "/", "./" or a bare path) or a git ref.
+  """
+  generateClient(ws: Workspace!, module: String!, path: String!): Changeset! {
+    let clientPath = cleanClientPath(path)
+    # A git ref opens on its host, so only a dot in the first segment makes one:
+    # `libs/my.mod` is a workspace path, `github.com/dagger/hello` is not.
+    let firstSegment = module.split("/")[0] ?? module
+    let local = module.hasPrefix("/")
+      or module.hasPrefix("./")
+      or module == "."
+      or (firstSegment.contains(".") == false)
+    let src = if (local) {
+      ws.moduleSource("/" + module.trimPrefix("./").trimPrefix("/"))
+    } else {
+      moduleSource(refString: module)
+    }
+    Client(
+      rootPath: clientPath,
+      module: src.moduleName,
+      kindJSON: JSON.encode(src.kind),
+      canonicalRef: src.asString,
+      rootSubpath: src.sourceRootSubpath,
+      pin: src.pin,
+      engineVersion: src.engineVersion,
+      schemaJSON: src.clientSchemaIntrospectionJSON.contents,
+    ).generate(ws, clientPom(clientPath))
+  }
+
+  """
+  Seed the SDK-owned files a new Java client needs at `path`: a pom that builds
+  the generated sources. The engine records the managed client in workspace
+  config and materializes the client itself through the `@generate` hook.
+  """
+  initClient(
+    ws: Workspace!,
+    path: String!,
+    module: String!,
+    dev: Boolean! = false,
+  ): Changeset! {
+    let clientPath = cleanClientPath(path)
+    Client(rootPath: clientPath).init(ws, clientPom(clientPath))
+  }
+
+  """
+  Regenerate every Java client registered on this SDK that is visible from the
+  client's current location (runs at `dagger generate`). As with modules, the
+  engine owns the list, the cwd policy, and the resolution of each bound module.
+  """
+  generateAllClient(ws: Workspace!): Changeset! @generate {
+    changeset.withChangesets(
+      currentModule
+        .asSDK(workspace: ws)
+        .clients
+        .{{path, moduleSource.{{moduleName, kind, asString, sourceRootSubpath, pin, engineVersion, clientSchemaIntrospectionJSON.{{contents}}}}}}
+        .map { client =>
+          Client(
+            rootPath: client.path,
+            module: client.moduleSource.moduleName,
+            kindJSON: JSON.encode(client.moduleSource.kind),
+            canonicalRef: client.moduleSource.asString,
+            rootSubpath: client.moduleSource.sourceRootSubpath,
+            pin: client.moduleSource.pin,
+            engineVersion: client.moduleSource.engineVersion,
+            schemaJSON: client.moduleSource.clientSchemaIntrospectionJSON.contents,
+          ).generate(ws, clientPom(client.path))
+        },
+    )
+  }
+
+  """
+  The pom of a client at `path`, named after its directory.
+  """
+  let clientPom(path: String!): File! {
+    let name = if (path == ".") { "client" } else { path.split("/").reduce("client") { acc, seg => seg } }
+    renderedTemplateDir(name, "client-template").file("pom.xml")
+  }
+
+  """
+  A client path as workspace-root-relative, "." for the root.
+  """
+  let cleanClientPath(path: String!): String! {
+    let rawPath = path.trimPrefix("./").trimPrefix("/")
+    if (rawPath == "" or rawPath == ".") {
+      "."
+    } else if (rawPath == ".."
+      or rawPath.trimPrefix("../") != rawPath
+      or rawPath.contains("/../")
+      or rawPath.trimSuffix("/..") != rawPath) {
+      raise "path escapes workspace: " + rawPath
+    } else {
+      rawPath.trimSuffix("/")
+    }
   }
 }

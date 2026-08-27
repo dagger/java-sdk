@@ -1,0 +1,104 @@
+"""
+A generated Java client: a plain Maven project bound to one Dagger module.
+
+The client is byte-for-byte the package a module receives when it declares that
+same module as a dependency — the same generator, the same plan entry — with the
+core API and the SDK runtime vendored next to it under sdk/ so the project
+builds with a plain `mvn package`.
+"""
+type Client {
+  """
+  Workspace-root-relative directory the client is written to.
+  """
+  pub rootPath: String!
+
+  """
+  The bound module's final name.
+  """
+  pub module: String! = ""
+
+  """
+  The bound module's source kind, JSON-encoded as the engine reports it.
+  """
+  pub kindJSON: String! = ""
+
+  """
+  The bound module's canonical ref (a git module) or workspace-relative root.
+  """
+  pub canonicalRef: String! = ""
+
+  pub rootSubpath: String! = ""
+
+  pub pin: String! = ""
+
+  pub engineVersion: String! = ""
+
+  """
+  The bound module's client-facing schema, as introspection JSON.
+  """
+  pub schemaJSON: String! = ""
+
+  let codegen: Codegen! { Codegen() }
+
+  """
+  Generate the client under rootPath: the SDK runtime and the generated packages
+  under sdk/, and the given pom when the directory has none. Both core and the
+  client come from the bound module's client-facing schema, which hides nothing:
+  a client is allowed everything the CLI is.
+  """
+  generate(ws: Workspace!, pom: File!): Changeset! {
+    let plan = codegen.withClientEntry(
+      codegen.corePlan(schemaJSON),
+      module,
+      kindJSON,
+      canonicalRef,
+      rootSubpath,
+      pin,
+      engineVersion,
+      schemaJSON,
+    )
+    let built = codegen.sdkBuilt(plan, directory, "", "client-" + module)
+    let out = seeded(ws, pom)
+      .withoutDirectory("sdk")
+      .withDirectory("sdk/src/main/java", built.directory("/dagger-io/dagger-java-sdk/src/main/java"))
+      .withDirectory("sdk/src/generated/java", built.directory(codegen.generatedSourcesPath))
+    # sdk/ is dropped on the workspace as well as in `out`: withNewDirectory
+    # merges into what the workspace already holds, so a package this
+    # generation no longer produces would survive the clean directory.
+    ws
+      .withoutDirectory(codegen.workspaceRef(joinPath("sdk")))
+      .withNewDirectory(codegen.workspaceRef(rootPath), out)
+      .changes(ws)
+  }
+
+  """
+  Seed the client directory with the given pom, leaving anything already there
+  alone: init must never remove a user's files.
+  """
+  init(ws: Workspace!, pom: File!): Changeset! {
+    ws.withNewDirectory(codegen.workspaceRef(rootPath), seeded(ws, pom)).changes(ws)
+  }
+
+  """
+  The client directory as it is, with the pom added when it has none.
+  """
+  let seeded(ws: Workspace!, pom: File!): Directory! {
+    let existing = existingDir(ws)
+    if (existing.exists("pom.xml")) { existing } else { existing.withFile("pom.xml", pom) }
+  }
+
+  """
+  Join the client root with a sub-path, handling the root (".") client.
+  """
+  let joinPath(sub: String!): String! {
+    if (rootPath == ".") { sub } else { rootPath + "/" + sub }
+  }
+
+  """
+  Existing contents of the client directory, empty when it doesn't exist yet.
+  """
+  let existingDir(ws: Workspace!): Directory! {
+    let filtered = ws.directory("/", include: [rootPath + "/**"])
+    if (filtered.exists(rootPath)) { filtered.directory(rootPath) } else { directory }
+  }
+}
