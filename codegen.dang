@@ -1,0 +1,214 @@
+"""
+The Java SDK's code generation: the vendored SDK reactor built against a
+generation plan, in containers this module controls.
+"""
+type Codegen {
+  """
+  Maven container used for codegen (pinned digest, matches the builtin runtime).
+  """
+  mvn: Container! {
+    container.from("maven:3.9.9-eclipse-temurin-21-alpine@sha256:4cbb8bf76c46b97e028998f2486ed014759a8e932480431039bdb93dffe6813e")
+  }
+
+  """
+  The vendored Java SDK Maven reactor shipped with this module.
+  """
+  let sdkSourceDir: Directory! { currentModule.source.directory("sdk") }
+
+  let prebuiltCodegenRepo: String! { "prebuilt/m2" }
+
+  let prebuiltCodegenPlugin: String! { "prebuilt/dagger-codegen-maven-plugin.jar" }
+
+  """
+  Where the codegen plugin writes generated sources inside the SDK reactor.
+  """
+  generatedSourcesPath: String! { "/dagger-io/dagger-java-sdk/target/generated-sources/dagger" }
+
+  """
+  The live engine version, without build metadata.
+
+  Codegen only reads the engine version off the CLI when it has to query the
+  schema itself. Here the schema is handed to it, so without this the version
+  stays whatever the pom happens to say, and generation cannot tell which shapes
+  the engine on the other end actually supports.
+
+  The `+<commit>` suffix is dropped: it changes on every engine build and would
+  make every module's SDK rebuild for no reason.
+  """
+  let engineVersion: String! { version.split("+")[0] ?? version }
+
+  """
+  A maven container with the codegen plugin available in the local repository.
+
+  Fast path: when the packager module has committed the plugin's local Maven
+  repository under prebuilt/m2, drop it into ~/.m2/repository with a plain copy —
+  no maven invocation. Otherwise fall back to installing a committed plugin jar,
+  and finally to compiling the plugin from the vendored sources.
+  """
+  let codegenBase: Container! {
+    # Locked: concurrent installs into one local repository corrupt its
+    # maven-metadata files, and every generate runs two of them.
+    let base = mvn
+      .withoutEntrypoint
+      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"), sharing: CacheSharingMode.LOCKED)
+      .withDirectory("/dagger-io", sdkSourceDir)
+      .withWorkdir("/dagger-io")
+
+    if (currentModule.source.exists(prebuiltCodegenRepo + "/io/dagger")) {
+      base
+        .withDirectory("/prebuilt-m2", currentModule.source.directory(prebuiltCodegenRepo))
+        .withExec(["sh", "-c", "mkdir -p /root/.m2/repository && cp -r /prebuilt-m2/. /root/.m2/repository/"])
+    } else if (currentModule.source.exists(prebuiltCodegenPlugin)) {
+      base
+        .withMountedFile("/codegen-plugin.jar", currentModule.source.file(prebuiltCodegenPlugin))
+        .withExec(["mvn", "install:install-file", "-Dfile=/dagger-io/pom.xml", "-Dpackaging=pom", "-DpomFile=/dagger-io/pom.xml", "--no-transfer-progress"])
+        .withExec(["mvn", "install:install-file", "-Dfile=/codegen-plugin.jar", "-DpomFile=/dagger-io/dagger-codegen-maven-plugin/pom.xml", "--no-transfer-progress"])
+    } else {
+      base.withExec(["mvn", "--projects", "dagger-codegen-maven-plugin", "--also-make", "install", "-T1C", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+    }
+  }
+
+  """
+  Build and install the SDK + annotation processor jars against a generation
+  plan, returning the maven container.
+
+  The plan is a directory of entries the codegen plugin turns into packages in one
+  run: core into io.dagger.core, one io.dagger.client.<module> per client entry.
+  `seed` is dropped into the generated-sources tree before codegen runs — the
+  client packages a previous generation produced — and `keep` names the module
+  whose package survives untouched among them; every other package the plan does
+  not mention is removed.
+
+  Uses install (rather than generate-sources) so the compiled jars land in the
+  local Maven repository — the dagger-prebuilt-sdk pom profile compiles the
+  entrypoint against them instead of recompiling the vendored SDK sources. Jars
+  are installed under a per-module version so modules that resolve to different
+  schemas (different dependencies, or a different engine) never share a Maven
+  coordinate; the codegen plugin keeps its own fixed version and resolves from the
+  prebuilt repo. Cached across a module's own edits.
+  """
+  sdkBuilt(plan: Directory!, seed: Directory!, keep: String!, name: String!): Container! {
+    codegenBase
+      .withDirectory("/plan", plan)
+      .withDirectory(generatedSourcesPath, seed)
+      .withExec(["mvn", "versions:set", "-DnewVersion=" + name, "-DgenerateBackupPoms=false", "--no-transfer-progress"])
+      .withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", "-Ddaggerengine.plan=/plan", "-Ddaggerengine.keep=" + keep, "-Ddaggerengine.version=" + engineVersion, "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+      # Directory.digest covers permissions, and the seed of a second pass comes
+      # back from the engine at 0666 while a fresh file is written at 0644. Left
+      # alone, the same bytes hash differently depending on how many passes
+      # produced them, and a client generated in a module stops matching the
+      # standalone one.
+      .withExec(["sh", "-c", "find " + generatedSourcesPath + " -type d -exec chmod 0755 {} + ; find " + generatedSourcesPath + " -type f -exec chmod 0644 {} +"])
+  }
+
+  """
+  Vendor the Java SDK as buildable source out of a built reactor:
+    src/main/java        the hand-written SDK runtime
+    src/processor/java   the annotation processor that generates the entrypoint
+    src/generated/java   io.dagger.core and one io.dagger.client.<module> per client
+    src/processor/resources/META-INF/services/...Processor
+  The returned directory is dropped at <module>/sdk.
+  """
+  vendoredSdk(built: Container!): Directory! {
+    directory
+      .withDirectory("src/main/java", built.directory("/dagger-io/dagger-java-sdk/src/main/java"))
+      .withDirectory(
+        "src/processor/java",
+        built.directory("/dagger-io/dagger-java-annotation-processor/src/main/java"),
+      )
+      .withDirectory("src/generated/java", built.directory(generatedSourcesPath))
+      .withNewFile(
+        "src/processor/resources/META-INF/services/javax.annotation.processing.Processor",
+        "io.dagger.annotation.processor.DaggerModuleAnnotationProcessor\n",
+      )
+  }
+
+  """
+  Capture the compiled SDK jar as a small local Maven repository to commit under
+  <module>/sdk/repo. Stored at a fixed version so the module pom's
+  dagger-vendored-sdk-jar profile resolves it; the runtime build then compiles
+  only the module's own code against the jar rather than the vendored sources.
+  """
+  vendoredSdkJar(built: Container!, name: String!): Directory! {
+    let jar = built
+      .withExec(["sh", "-c", "mkdir -p /out && cp /root/.m2/repository/io/dagger/dagger-java-sdk/" + name + "/dagger-java-sdk-" + name + ".jar /out/dagger-java-sdk-0.21.4.jar"])
+      .file("/out/dagger-java-sdk-0.21.4.jar")
+    directory
+      .withFile("io/dagger/dagger-java-sdk/0.21.4/dagger-java-sdk-0.21.4.jar", jar)
+      .withNewFile(
+        "io/dagger/dagger-java-sdk/0.21.4/dagger-java-sdk-0.21.4.pom",
+        "<project><modelVersion>4.0.0</modelVersion><groupId>io.dagger</groupId><artifactId>dagger-java-sdk</artifactId><version>0.21.4</version><packaging>jar</packaging></project>\n",
+      )
+  }
+
+  """
+  A plan holding only a core entry, generated from the given schema.
+  """
+  corePlan(schemaJSON: String!): Directory! {
+    directory
+      .withNewFile("core/schema.json", schemaJSON)
+      .withNewFile("core/meta.json", "{\"mode\":\"core\"}")
+  }
+
+  """
+  The meta.json of a client plan entry: which module the package binds, and
+  where that module lives so the generated serve preamble can reach it.
+  """
+  clientMeta(module: String!, kindJSON: String!, ref: String!, pin: String!): String! {
+    "{\"mode\":\"client\",\"module\":" + JSON.encode(module)
+      + ",\"binding\":{\"kind\":" + kindJSON + ",\"ref\":" + JSON.encode(ref) + ",\"pin\":" + JSON.encode(pin) + "}}"
+  }
+
+  """
+  Add a client entry for a module to a plan, from the module source's fields:
+  its final name, kind (JSON-encoded), canonical ref, workspace-relative root,
+  pin, declared engine version and client-facing schema. A git module is reached
+  by its canonical ref and pin, which resolve from anywhere; a local one by its
+  workspace-root-relative path through the workspace.
+
+  A pre-1.0 module is refused first (see requireModernEngine).
+  """
+  withClientEntry(
+    plan: Directory!,
+    name: String!,
+    kindJSON: String!,
+    canonicalRef: String!,
+    rootSubpath: String!,
+    pin: String!,
+    engineVersion: String!,
+    schemaJSON: String!,
+  ): Directory! {
+    requireModernEngine(name, engineVersion)
+    # Anything that is not git lives in the workspace: LOCAL_SOURCE on the host,
+    # DIR_SOURCE in a workspace built from a directory value. Both are served by
+    # workspace path, and baking the same kind for both keeps the generated
+    # bytes identical wherever the client was generated.
+    let git = kindJSON.contains("GIT")
+    let ref = if (git) { canonicalRef } else { workspaceRef(rootSubpath) }
+    let kind = if (git) { "\"GIT_SOURCE\"" } else { "\"LOCAL_SOURCE\"" }
+    plan
+      .withNewFile("client-" + name + "/schema.json", schemaJSON)
+      .withNewFile("client-" + name + "/meta.json", clientMeta(name, kind, ref, if (git) { pin } else { "" }))
+  }
+
+  """
+  Refuse a module the engine would render core through a pre-1.0 compatibility
+  view for: that view carries per-type ID scalars io.dagger.core does not have,
+  so without this it fails in the compiler instead of here. Both spellings the
+  engine accepts are rejected.
+  """
+  requireModernEngine(name: String!, engineVersion: String!): Void {
+    if (engineVersion.hasPrefix("v0.") or engineVersion.hasPrefix("0.")) {
+      raise "module " + name + " declares engineVersion " + engineVersion + "; the Java SDK needs v1.0.0-0 or later"
+    }
+    null
+  }
+
+  """
+  A workspace-root-relative path as a workspace-root-absolute one, the form
+  Workspace resolves from the workspace root rather than from the client's cwd.
+  """
+  workspaceRef(path: String!): String! {
+    if (path == "." or path == "") { "/" } else { "/" + path.trimPrefix("/") }
+  }
+}
