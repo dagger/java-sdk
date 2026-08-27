@@ -1,6 +1,6 @@
 package io.dagger.sdk;
 
-import io.dagger.client.Client;
+import io.dagger.core.Client;
 import io.dagger.sdk.engineconn.Connection;
 import java.io.IOException;
 

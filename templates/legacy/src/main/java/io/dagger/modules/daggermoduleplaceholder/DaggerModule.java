@@ -2,9 +2,9 @@ package io.dagger.modules.daggermoduleplaceholder;
 
 import static io.dagger.sdk.Dagger.dag;
 
-import io.dagger.client.Container;
+import io.dagger.core.Container;
 import io.dagger.sdk.exception.DaggerQueryException;
-import io.dagger.client.Directory;
+import io.dagger.core.Directory;
 import io.dagger.module.annotation.Function;
 import io.dagger.module.annotation.Object;
 import java.util.List;

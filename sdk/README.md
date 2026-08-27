@@ -149,7 +149,7 @@ Here is a code snippet using the Dagger client
 ```java
 package io.dagger.sample;
 
-import io.dagger.client.Client;
+import io.dagger.core.Client;
 import io.dagger.sdk.Dagger;
 
 import java.util.List;

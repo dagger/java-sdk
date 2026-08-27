@@ -1,12 +1,8 @@
 package io.dagger.codegen;
 
-import io.dagger.codegen.introspection.CodegenVisitor;
-import io.dagger.codegen.introspection.Schema;
-import io.dagger.codegen.introspection.SchemaVisitor;
-import io.dagger.codegen.introspection.Type;
-import io.dagger.codegen.introspection.TypeRegistry;
 import java.io.*;
 import java.nio.charset.Charset;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import org.apache.maven.plugin.AbstractMojo;
@@ -46,73 +42,36 @@ public class DaggerCodegenMojo extends AbstractMojo {
   @Parameter(defaultValue = "${project.build.directory}/generated-sources/dagger")
   private File outputDirectory;
 
+  /** A generation plan directory (see {@link GenerationPlan}); overrides the single schema. */
+  @Parameter(property = "dagger.plan")
+  protected String plan;
+
+  /**
+   * A module whose already generated client package a full plan leaves in place (see {@link
+   * Generator#generate}).
+   */
+  @Parameter(property = "dagger.keep")
+  protected String keep;
+
   @Override
   public void execute() throws MojoExecutionException, MojoFailureException {
     outputEncoding = validateEncoding(outputEncoding);
 
-    // Ensure that the output directory path is all intact so that
-    // we can just write into it.
-    //
     File outputDir = getOutputDirectory();
-
     if (!outputDir.exists()) {
       outputDir.mkdirs();
     }
-
     Path dest = outputDir.toPath();
-    try (InputStream in = getInstrospectionJson()) {
-      Schema schema = Schema.initialize(in, version);
-      SchemaVisitor codegen =
-          new CodegenVisitor(
-              schema,
-              TypeRegistry.core("io.dagger.client", "io.dagger.sdk"),
-              null,
-              dest,
-              Charset.forName(outputEncoding));
-      schema.visit(
-          new SchemaVisitor() {
-            @Override
-            public void visitScalar(Type type) {
-              getLog().info(String.format("Generating scalar %s", type.getName()));
-              codegen.visitScalar(type);
-            }
 
-            @Override
-            public void visitObject(Type type) {
-              getLog().info(String.format("Generating object %s", type.getName()));
-              codegen.visitObject(type);
-            }
-
-            @Override
-            public void visitInterface(Type type) {
-              getLog().info(String.format("Generating interface %s", type.getName()));
-              codegen.visitInterface(type);
-            }
-
-            @Override
-            public void visitInput(Type type) {
-              getLog().info(String.format("Generating input %s", type.getName()));
-              codegen.visitInput(type);
-            }
-
-            @Override
-            public void visitEnum(Type type) {
-              getLog().info(String.format("Generating enum %s", type.getName()));
-              codegen.visitEnum(type);
-            }
-
-            @Override
-            public void visitVersion(String version) {
-              getLog().info(String.format("Generating interface Version"));
-              codegen.visitVersion(version);
-            }
-
-            @Override
-            public void visitIDAbles(List<Type> types) {
-              getLog().info(String.format("Generate helpers for IDAbles"));
-              codegen.visitIDAbles(types);
-            }
-          });
+    try {
+      List<GenerationPlan.Entry> entries;
+      if (plan != null && !plan.isBlank() && Files.isDirectory(Path.of(plan))) {
+        entries = GenerationPlan.read(Path.of(plan));
+      } else {
+        entries = GenerationPlan.core(schemaFile());
+      }
+      Generator.generate(
+          entries, version, dest, Charset.forName(outputEncoding), keep, getLog()::info);
     } catch (IOException | InterruptedException e) {
       throw new MojoFailureException(e);
     }
@@ -123,25 +82,26 @@ public class DaggerCodegenMojo extends AbstractMojo {
     }
   }
 
-  private InputStream getInstrospectionJson()
-      throws IOException, MojoFailureException, InterruptedException {
+  /** The schema to generate core from: the configured file, else the local CLI's own. */
+  private Path schemaFile() throws IOException, MojoFailureException, InterruptedException {
     if (this.introspectionJson != null && !this.introspectionJson.isEmpty()) {
       File f = new File(this.introspectionJson);
       if (f.exists()) {
-        return new FileInputStream(f);
+        return f.toPath();
       }
     }
     this.bin = DaggerCLIUtils.getBinary(this.bin);
-    return daggerSchema();
-  }
-
-  private InputStream daggerSchema()
-      throws IOException, InterruptedException, MojoFailureException {
     String actualVersion = DaggerCLIUtils.getVersion(this.bin);
     getLog()
         .info(String.format("Querying local dagger CLI for schema (version=%s)", actualVersion));
     this.version = actualVersion;
-    return DaggerCLIUtils.query(DaggerCLIUtils.introspectionQuery(getClass()), this.bin);
+    Path schema = Files.createTempFile("dagger-schema", ".json");
+    schema.toFile().deleteOnExit();
+    try (InputStream in =
+        DaggerCLIUtils.query(DaggerCLIUtils.introspectionQuery(getClass()), this.bin)) {
+      Files.copy(in, schema, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+    }
+    return schema;
   }
 
   public File getOutputDirectory() {

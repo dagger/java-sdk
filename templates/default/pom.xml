@@ -168,7 +168,8 @@
                 entrypoint as compilation roots:
                   - sdk/src/main/java       the hand-written SDK library
                   - sdk/src/processor/java  the annotation processor (generates the entrypoint)
-                  - sdk/src/generated/java  the client bindings generated from the engine schema
+                  - sdk/src/generated/java  io.dagger.core, the engine API, plus one
+                                            io.dagger.client.<module> per bound module
                   - src/generated/java      io.dagger.gen.entrypoint.Entrypoint, generated
                                             from the module code (see maven-compiler-plugin)
                 -->

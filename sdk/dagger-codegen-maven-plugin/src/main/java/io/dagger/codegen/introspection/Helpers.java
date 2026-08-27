@@ -145,7 +145,7 @@ public class Helpers {
    * lowercase letters and digits survive, so {@code my-module} is {@code mymodule}; a leading digit
    * or a Java keyword is escaped rather than rejected.
    */
-  static String packageSegment(String moduleName) {
+  public static String packageSegment(String moduleName) {
     String segment = moduleName.toLowerCase().replaceAll("[^a-z0-9]", "");
     if (segment.isEmpty()) {
       throw new IllegalArgumentException(

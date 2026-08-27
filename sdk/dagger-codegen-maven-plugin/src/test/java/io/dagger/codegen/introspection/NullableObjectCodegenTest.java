@@ -15,8 +15,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 class NullableObjectCodegenTest {
 
-  private static final TypeRegistry REGISTRY =
-      TypeRegistry.core("io.dagger.client", "io.dagger.sdk");
+  private static final TypeRegistry REGISTRY = TypeRegistry.core("io.dagger.core", "io.dagger.sdk");
 
   @TempDir Path compilationOutputDirectory;
 
@@ -164,11 +163,11 @@ class NullableObjectCodegenTest {
     Map<String, String> generated =
         sources(root, nullableSibling, nonNullSibling, nullableImplementation, implementation);
 
-    assertThat(generated.get("io.dagger.client.NullableSibling")).contains("Optional<Foo> child()");
-    assertThat(generated.get("io.dagger.client.NonNullSibling"))
+    assertThat(generated.get("io.dagger.core.NullableSibling")).contains("Optional<Foo> child()");
+    assertThat(generated.get("io.dagger.core.NonNullSibling"))
         .contains("Foo child();")
         .doesNotContain("Optional<Foo> child()");
-    assertThat(generated.get("io.dagger.client.NonNullImplementation"))
+    assertThat(generated.get("io.dagger.core.NonNullImplementation"))
         .contains("Foo child()")
         .doesNotContain("Optional<Foo> child()");
   }
@@ -183,7 +182,7 @@ class NullableObjectCodegenTest {
 
     Map<String, String> sources = new HashMap<>(supportSources());
     for (Type type : types) {
-      String qualifiedName = "io.dagger.client." + type.getName();
+      String qualifiedName = "io.dagger.core." + type.getName();
       if (type.getKind() == TypeKind.INTERFACE) {
         InterfaceVisitor visitor =
             new InterfaceVisitor(schema, REGISTRY, Path.of("."), StandardCharsets.UTF_8);
@@ -207,18 +206,18 @@ class NullableObjectCodegenTest {
    */
   private static Map<String, String> supportSources() {
     return Map.of(
-        "io.dagger.client.Animal",
-        "package io.dagger.client; public interface Animal {}",
-        "io.dagger.client.AnimalClient",
-        "package io.dagger.client; public class AnimalClient implements Animal {"
+        "io.dagger.core.Animal",
+        "package io.dagger.core; public interface Animal {}",
+        "io.dagger.core.AnimalClient",
+        "package io.dagger.core; public class AnimalClient implements Animal {"
             + " public AnimalClient(io.dagger.sdk.QueryBuilder queryBuilder) {} }",
-        "io.dagger.client.Dog",
-        "package io.dagger.client; public class Dog implements Animal {"
+        "io.dagger.core.Dog",
+        "package io.dagger.core; public class Dog implements Animal {"
             + " public Dog(io.dagger.sdk.QueryBuilder queryBuilder) {} }",
-        "io.dagger.client.Pet",
-        "package io.dagger.client; public interface Pet {}",
-        "io.dagger.client.PetClient",
-        "package io.dagger.client; public class PetClient implements Pet {"
+        "io.dagger.core.Pet",
+        "package io.dagger.core; public interface Pet {}",
+        "io.dagger.core.PetClient",
+        "package io.dagger.core; public class PetClient implements Pet {"
             + " public PetClient(io.dagger.sdk.QueryBuilder queryBuilder) {} }",
         "io.dagger.sdk.QueryBuilder",
         "package io.dagger.sdk; public class QueryBuilder {"
@@ -233,7 +232,7 @@ class NullableObjectCodegenTest {
   }
 
   private static String javaFile(TypeSpec typeSpec) {
-    return JavaFile.builder("io.dagger.client", typeSpec).build().toString();
+    return JavaFile.builder("io.dagger.core", typeSpec).build().toString();
   }
 
   private static String generateInterface(Type type, String version) throws Exception {

@@ -8,7 +8,7 @@ import java.lang.annotation.Target;
 /**
  * Default load path
  *
- * <p>This applies to io.dagger.client.Directory or io.dagger.client.File types.
+ * <p>This applies to io.dagger.core.Directory or io.dagger.core.File types.
  *
  * <p>Path is relative to root directory.
  */

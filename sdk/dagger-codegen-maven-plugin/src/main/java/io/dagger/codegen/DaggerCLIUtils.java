@@ -298,6 +298,9 @@ public class DaggerCLIUtils {
     return matcher.matches();
   }
 
+  private static final Pattern VERSION_LINE =
+      Pattern.compile("^version:\\s+(\\S+)", Pattern.MULTILINE);
+
   /**
    * Gets the value given returned by "dagger version". If the version is of the form vX.Y.Z then
    * the "v" prefix is stripped
@@ -306,12 +309,22 @@ public class DaggerCLIUtils {
    * @return the version
    */
   public static String getVersion(String binPath) {
-    ByteArrayOutputStream out = new ByteArrayOutputStream();
-    String output =
+    return parseVersion(
         FluentProcess.start(binPath, "version")
             .withTimeout(Duration.of(60, ChronoUnit.SECONDS))
-            .get();
-    String version = output.split("\\s")[1];
+            .get());
+  }
+
+  /**
+   * The version out of {@code dagger version}, which prints five aligned {@code key: value} lines.
+   * Splitting on whitespace lands on the padding, not on the value.
+   */
+  static String parseVersion(String output) {
+    Matcher matcher = VERSION_LINE.matcher(output);
+    if (!matcher.find()) {
+      throw new IllegalStateException("`dagger version` printed no version line:\n" + output);
+    }
+    String version = matcher.group(1);
     return isStandardVersionFormat(version) ? version.substring(1) : version;
   }
 }

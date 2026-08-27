@@ -3,9 +3,9 @@ package io.dagger.annotation.processor;
 import com.palantir.javapoet.ClassName;
 import com.palantir.javapoet.CodeBlock;
 import com.palantir.javapoet.ParameterizedTypeName;
-import io.dagger.sdk.Dagger;
-import io.dagger.client.TypeDefKind;
+import io.dagger.core.TypeDefKind;
 import io.dagger.module.info.TypeInfo;
+import io.dagger.sdk.Dagger;
 import java.util.Set;
 import javax.lang.model.type.TypeKind;
 

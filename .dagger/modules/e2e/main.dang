@@ -303,7 +303,7 @@ type E2e {
       + "\n"
       + "import static io.dagger.sdk.Dagger.dag;\n"
       + "\n"
-      + "import io.dagger.client.Directory;\n"
+      + "import io.dagger.core.Directory;\n"
       + "import io.dagger.module.annotation.Function;\n"
       + "import io.dagger.module.annotation.Object;\n"
       + "import java.util.Optional;\n"
