@@ -103,6 +103,21 @@ type E2e {
     null
   }
 
+  """
+  initModule onto a directory that already holds files should lay the template
+  over them and leave them in place: a user running init inside an existing
+  project must not lose their work.
+  """
+  initExistingCheck(ws: Workspace!): Void @check {
+    let p = fixtureRoot + "/init-existing"
+    let changes = javaSdk.initModule(ws, name: "init-existing", path: p)
+
+    assertAdded(changes, p + "/pom.xml")
+    assert(changes.removedPaths.length == 0, "init removed a file already in the target directory")
+
+    null
+  }
+
   let testWS(ws: Workspace!): Workspace! {
     ws.directory("/").withoutFile("dagger.toml").asWorkspace(cwd: ".dagger/modules/e2e/fixtures")
   }
