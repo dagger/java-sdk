@@ -30,7 +30,7 @@ type Packager {
   let codegenPluginRepo(ws: Workspace!): Directory! {
     mvn
       .withoutEntrypoint
-      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
+      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"), sharing: CacheSharingMode.LOCKED)
       .withDirectory("/dagger-io", sdkSource(ws))
       .withWorkdir("/dagger-io")
       .withExec(["mvn", "--projects", "dagger-codegen-maven-plugin", "--also-make", "install", "-T1C", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "-Dproject.build.outputTimestamp=2024-01-01T00:00:00Z", "--no-transfer-progress"])
@@ -67,7 +67,7 @@ type Packager {
       .introspectionSchemaJSON
     mvn
       .withoutEntrypoint
-      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
+      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"), sharing: CacheSharingMode.LOCKED)
       .withMountedFile("/schema.json", introspectionJSON)
       .withDirectory("/dagger-io", sdkSource(ws))
       .withWorkdir("/dagger-io")
