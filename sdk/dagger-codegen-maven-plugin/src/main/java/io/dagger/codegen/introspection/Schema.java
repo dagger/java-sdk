@@ -15,6 +15,10 @@ public class Schema {
   private static final ComparableVersion NULLABLE_OBJECTS_VERSION =
       new ComparableVersion("1.0.0-beta.10");
 
+  /** GraphQL scalars with a direct Java counterpart, which are never generated. */
+  static final List<String> BUILTIN_SCALARS =
+      List.of("Boolean", "String", "Float", "Int", "DateTime");
+
   public static class SchemaContainer {
 
     @JsonbProperty("__schema")
@@ -98,37 +102,6 @@ public class Schema {
         .filter(type -> queryType.getName().equals(type.getName()))
         .findFirst()
         .get();
-  }
-
-  public void visit(SchemaVisitor visitor) {
-    List<Type> filteredTypes = types.stream().filter(t -> !t.getName().startsWith("_")).toList();
-
-    filteredTypes.stream()
-        .filter(t -> t.getKind() == TypeKind.SCALAR)
-        .filter(
-            t -> !List.of("Boolean", "String", "Float", "Int", "DateTime").contains(t.getName()))
-        .forEach(visitor::visitScalar);
-
-    filteredTypes.stream()
-        .filter(t -> t.getKind() == TypeKind.INPUT_OBJECT)
-        .forEach(visitor::visitInput);
-
-    filteredTypes.stream()
-        .filter(t -> t.getKind() == TypeKind.INTERFACE)
-        .forEach(visitor::visitInterface);
-
-    filteredTypes.stream()
-        .filter(t -> t.getKind() == TypeKind.OBJECT)
-        .forEach(visitor::visitObject);
-
-    filteredTypes.stream().filter(t -> t.getKind() == TypeKind.ENUM).forEach(visitor::visitEnum);
-
-    visitor.visitVersion(version);
-
-    visitor.visitIDAbles(
-        filteredTypes.stream()
-            .filter(t -> t.getKind() == TypeKind.OBJECT && t.providesId())
-            .toList());
   }
 
   @Override
