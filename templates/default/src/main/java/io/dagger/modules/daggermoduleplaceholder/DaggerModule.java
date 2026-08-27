@@ -1,11 +1,11 @@
 package io.dagger.modules.daggermoduleplaceholder;
 
-import static io.dagger.client.Dagger.dag;
+import static io.dagger.sdk.Dagger.dag;
 
-import io.dagger.client.Container;
-import io.dagger.client.exception.DaggerQueryException;
-import io.dagger.client.Directory;
-import io.dagger.client.Workspace;
+import io.dagger.core.Container;
+import io.dagger.sdk.exception.DaggerQueryException;
+import io.dagger.core.Directory;
+import io.dagger.core.Workspace;
 import io.dagger.module.annotation.Default;
 import io.dagger.module.annotation.Function;
 import io.dagger.module.annotation.Object;

@@ -64,6 +64,29 @@ public class Directive {
     return null;
   }
 
+  /**
+   * Get the owning module name from a list of directives, if present. Returns the unquoted module
+   * name from @sourceMap(module: "foo"); null for core types and fields, which carry no module.
+   */
+  public static String getSourceMapModule(List<Directive> directives) {
+    if (directives == null) {
+      return null;
+    }
+    for (Directive d : directives) {
+      if ("sourceMap".equals(d.getName())) {
+        String val = d.getArgValue("module");
+        if (val != null) {
+          // The value comes as a JSON-encoded string, e.g. "\"hello\""
+          if (val.startsWith("\"") && val.endsWith("\"")) {
+            val = val.substring(1, val.length() - 1);
+          }
+          return val.isEmpty() ? null : val;
+        }
+      }
+    }
+    return null;
+  }
+
   @Override
   public String toString() {
     return "Directive{" + "name='" + name + '\'' + ", args=" + args + '}';

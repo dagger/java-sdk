@@ -14,6 +14,12 @@ type E2e {
   let managedTomlModulePath: String! = fixtureRoot + "/managed-toml/app"
   # A module using a different SDK; this SDK must never manage it.
   let nonJavaModulePath: String! = fixtureRoot + "/lookup/not-java"
+  # Two real Java modules, app depending on dep, registered by a workspace
+  # config of their own (fixtures/clients/workspace.toml, placed at the root by
+  # clientsWS) so the module inventory the discovery checks assert stays as it is.
+  let clientsRoot: String! = fixtureRoot + "/clients"
+  let depModulePath: String! = clientsRoot + "/dep"
+  let appModulePath: String! = clientsRoot + "/app"
 
   """
   Fail the current check when a condition is false.
@@ -235,7 +241,7 @@ type E2e {
       .withDirectory(".", initialized.layer)
 
     # Module-relative paths of the two artifacts generation stages.
-    let vendoredClient = "sdk/src/main/java/io/dagger/client/Dagger.java"
+    let vendoredClient = "sdk/src/main/java/io/dagger/sdk/Dagger.java"
     let entrypoint = "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"
 
     # From the module's parent the module is one level down, so its changes are
@@ -301,9 +307,9 @@ type E2e {
   let nullableReturnSource: String! {
     "package io.dagger.modules.generateapp;\n"
       + "\n"
-      + "import static io.dagger.client.Dagger.dag;\n"
+      + "import static io.dagger.sdk.Dagger.dag;\n"
       + "\n"
-      + "import io.dagger.client.Directory;\n"
+      + "import io.dagger.core.Directory;\n"
       + "import io.dagger.module.annotation.Function;\n"
       + "import io.dagger.module.annotation.Object;\n"
       + "import java.util.Optional;\n"
@@ -318,5 +324,224 @@ type E2e {
       + "    return Optional.of(dag().directory().withNewFile(\"found\", \"\"));\n"
       + "  }\n"
       + "}\n"
+  }
+
+  """
+  The clients fixtures as buildable modules: both initialized in memory from the
+  default template, their committed sources and config overlaid, the
+  fixture-wide skip marker removed so generation runs, and the clients workspace
+  config at the root. The root is where the engine reads the generator rollup
+  it scopes a local dependency's generation to, so it has to be the same config
+  the SDK's own module list comes from; the other fixtures' config is left out
+  so find-up from the app cannot reach it first.
+  """
+  let clientsWS(ws: Workspace!): Directory! {
+    let depInit = javaSdk.initModule(ws, name: "dep", path: depModulePath)
+    let appInit = javaSdk.initModule(ws, name: "app", path: appModulePath)
+    testWS(ws)
+      .directory("/", exclude: [fixtureRoot + "/.dagger-java-sdk-skip-generate", fixtureRoot + "/dagger.toml"])
+      .withFile("dagger.toml", currentModule.source.file("fixtures/clients/workspace.toml"))
+      # initModule's changeset is rooted at the workspace, not at the module
+      .withDirectory(".", depInit.layer)
+      .withDirectory(".", appInit.layer)
+      .withDirectory(depModulePath, currentModule.source.directory("fixtures/clients/dep"))
+      .withDirectory(appModulePath, currentModule.source.directory("fixtures/clients/app"))
+  }
+
+  let generatedRoot: String! = "sdk/src/generated/java/io/dagger"
+
+  let mavenImage: String! = "maven:3.9.9-eclipse-temurin-21-alpine@sha256:4cbb8bf76c46b97e028998f2486ed014759a8e932480431039bdb93dffe6813e"
+
+  """
+  A tree with uniform permissions, so two of them can be compared on their bytes.
+
+  Directory.digest covers permissions, and a changeset layer does not carry the
+  ones generation produced: the engine writes a module's generated tree into the
+  workspace at 0666/0777 while a standalone client's lands at 0644/0755, from
+  identical 0644 input. Verified by exporting both trees. Normalizing here keeps
+  the comparison a digest — every byte and the whole shape — without asserting
+  on a mode the workspace, not this SDK, decides.
+  """
+  let sameModes(tree: Directory!): Directory! {
+    container
+      .from(mavenImage)
+      .withoutEntrypoint
+      .withDirectory("/tree", tree)
+      .withExec(["sh", "-c", "find /tree -type d -exec chmod 0755 {} + ; find /tree -type f -exec chmod 0644 {} +"])
+      .directory("/tree")
+  }
+
+  """
+  Dependencies become clients, and a module gets one for itself. Generating the
+  app fixture — which depends on dep — from nothing must produce core, the dep
+  client and app's own client; with that client in place app can call itself,
+  and generating again picks the new function up; and a run with no edits must
+  change nothing.
+  """
+  clientsGenerateCheck(ws: Workspace!): Void @check {
+    let root1 = clientsWS(ws)
+    let first = javaSdk.generateAll(root1.asWorkspace(cwd: appModulePath))
+    assertAdded(first, generatedRoot + "/core/Container.java")
+    assertAdded(first, generatedRoot + "/client/dep/Dep.java")
+    assertAdded(first, generatedRoot + "/client/greeter/Greeter.java")
+    assertAdded(first, generatedRoot + "/client/app/App.java")
+    assertAdded(first, "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
+    assert(
+      contains(first.addedPaths, generatedRoot + "/core/Host.java") == false,
+      "Host must stay hidden from module code",
+    )
+
+    let dep = first.layer.file(generatedRoot + "/client/dep/Dep.java").contents
+    assertContains(dep, "public static Dep from(Client dag)", "the dependency client should expose from(Client)")
+    assertContains(dep, "public static Dep dep(Client dag)", "the dependency client should expose the static-import alias")
+    assertContains(
+      dep,
+      "ModuleBinding.ensureServed(root, \"dep\", \"LOCAL_SOURCE\", \"/" + depModulePath + "\", \"\")",
+      "the dependency client should serve dep by its workspace path",
+    )
+    assertContains(dep, "import io.dagger.core.Directory;", "a core type returned by the dependency should resolve to io.dagger.core")
+
+    # app declares dep twice, the second time as "greeter": the alias is the
+    # module's final name, so the aliased client chains and serves that name and
+    # both clients live on one session.
+    let greeter = first.layer.file(generatedRoot + "/client/greeter/Greeter.java").contents
+    assertContains(greeter, "public static Greeter greeter(Client dag)", "the aliased dependency should be named after the alias")
+    assertContains(
+      greeter,
+      "ModuleBinding.ensureServed(root, \"greeter\", \"LOCAL_SOURCE\", \"/" + depModulePath + "\", \"\")",
+      "the aliased client should serve the alias, from the aliased module's own path",
+    )
+
+    let selfClient = first.layer.file(generatedRoot + "/client/app/App.java").contents
+    assertContains(selfClient, "public static App app(Client dag)", "the module should get a client for itself")
+    assertContains(selfClient, "greetViaDep(", "the self client should expose the module's functions")
+
+    # With the self client vendored, the module can call itself; the previous
+    # self client is carried through the first pass so this compiles. The stale
+    # package stands in for a dependency dropped from dagger-module.toml: it is
+    # committed, this generation does not produce it, and it has to go.
+    # A changeset reports a directory that went away as one removed path, not as
+    # one per file it held.
+    let stalePath = generatedRoot + "/client/gone/"
+    let root2 = root1
+      .withDirectory(appModulePath, first.layer)
+      .withNewFile(
+        appModulePath + "/" + stalePath + "Gone.java",
+        "package io.dagger.client.gone;\n\npublic class Gone {}\n",
+      )
+      .withFile(
+        appModulePath + "/src/main/java/io/dagger/modules/app/App.java",
+        currentModule.source.file("fixtures/clients/app-self/App.java"),
+      )
+    let second = javaSdk.generateAll(root2.asWorkspace(cwd: appModulePath))
+    assertContains(
+      second.layer.file(generatedRoot + "/client/app/App.java").contents,
+      "greetSelf(",
+      "the self client should pick up a function added since the last generation",
+    )
+    assert(
+      contains(second.removedPaths, stalePath),
+      "a committed client package this generation does not produce should be removed",
+    )
+
+    # A changeset removes as well as adds, and withDirectory only merges, so the
+    # removals are replayed before the layer is applied.
+    let root3 = second
+      .removedPaths
+      .reduce(root2) { dir, removed => dir.withoutDirectory(appModulePath + "/" + removed) }
+      .withDirectory(appModulePath, second.layer)
+    let third = javaSdk.generateAll(root3.asWorkspace(cwd: appModulePath))
+    assert(
+      third.addedPaths.length == 0 and third.modifiedPaths.length == 0 and third.removedPaths.length == 0,
+      "generating an unchanged module again should change nothing",
+    )
+    null
+  }
+
+  """
+  A standalone client for dep is byte-identical to the client app vendors for
+  it, sees everything a client is allowed to, and builds as a plain Maven
+  project with a main that uses it.
+  """
+  standaloneClientCheck(ws: Workspace!): Void @check {
+    let root = clientsWS(ws)
+    let appChanges = javaSdk.generateAll(root.asWorkspace(cwd: appModulePath))
+    let depChanges = javaSdk.generateAll(root.asWorkspace(cwd: depModulePath))
+    let withDep = root.withDirectory(depModulePath, depChanges.layer)
+
+    let client = javaSdk.generateClient(
+      withDep.asWorkspace(cwd: clientsRoot),
+      module: "/" + depModulePath,
+      path: clientsRoot + "/dep-client",
+    )
+    assertAdded(client, "dep-client/pom.xml")
+    assertAdded(client, "dep-client/sdk/src/main/java/io/dagger/sdk/Dagger.java")
+    assertAdded(client, "dep-client/sdk/src/generated/java/io/dagger/client/dep/Dep.java")
+    assertAdded(client, "dep-client/sdk/src/generated/java/io/dagger/core/Host.java")
+    assertContains(
+      client.layer.file("dep-client/pom.xml").contents,
+      "<artifactId>dep-client</artifactId>",
+      "the client pom should be named after its directory",
+    )
+    assert(
+      sameModes(client.layer.directory("dep-client/" + generatedRoot + "/client/dep")).digest
+        == sameModes(appChanges.layer.directory(generatedRoot + "/client/dep")).digest,
+      "the standalone client must be byte-identical to the one app vendors as its dependency",
+    )
+
+    let project = client
+      .layer
+      .directory("dep-client")
+      .withFile(
+        "src/main/java/io/dagger/clients/depclient/Main.java",
+        currentModule.source.file("fixtures/clients/dep-client/Main.java"),
+      )
+    container
+      .from(mavenImage)
+      .withoutEntrypoint
+      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"), sharing: CacheSharingMode.LOCKED)
+      .withDirectory("/client", project)
+      .withWorkdir("/client")
+      .withExec(["mvn", "-q", "package", "-DskipTests", "--no-transfer-progress"])
+      .sync
+    null
+  }
+
+  """
+  A client registered in workspace config is seeded by initClient and
+  materialized by the generate hook, with the engine resolving the bound module.
+  """
+  registeredClientCheck(ws: Workspace!): Void @check {
+    let root = clientsWS(ws)
+    let depChanges = javaSdk.generateAll(root.asWorkspace(cwd: depModulePath))
+    let registered = root
+      .withDirectory(depModulePath, depChanges.layer)
+      .withNewFile(
+        "dagger.toml",
+        currentModule.source.file("fixtures/clients/workspace.toml").contents
+          + "\n[[modules.java-sdk.as-sdk.clients]]\npath = \""
+          + clientsRoot
+          + "/dep-client\"\nmodule = \""
+          + depModulePath
+          + "\"\n",
+      )
+
+    let seeded = javaSdk.initClient(registered.asWorkspace(cwd: clientsRoot), path: clientsRoot + "/dep-client", module: "dep")
+    assertAdded(seeded, "dep-client/pom.xml")
+    assert(seeded.addedPaths.length == 1, "initClient should seed the pom and nothing else")
+
+    let withSeed = registered.withDirectory(clientsRoot, seeded.layer)
+    let all = javaSdk.generateAllClient(withSeed.asWorkspace(cwd: clientsRoot))
+    assertAdded(all, "dep-client/sdk/src/generated/java/io/dagger/client/dep/Dep.java")
+    assertAdded(all, "dep-client/sdk/src/generated/java/io/dagger/core/Client.java")
+
+    let again = javaSdk.generateAllClient(
+      withSeed.withDirectory(clientsRoot, all.layer).asWorkspace(cwd: clientsRoot),
+    )
+    assert(
+      again.addedPaths.length == 0 and again.modifiedPaths.length == 0 and again.removedPaths.length == 0,
+      "regenerating an unchanged registered client should change nothing",
+    )
+    null
   }
 }

@@ -8,8 +8,9 @@ import java.nio.file.Path;
 import javax.lang.model.element.Modifier;
 
 class ScalarVisitor extends AbstractVisitor {
-  public ScalarVisitor(Schema schema, Path targetDirectory, Charset encoding) {
-    super(schema, targetDirectory, encoding);
+  public ScalarVisitor(
+      Schema schema, TypeRegistry registry, Path targetDirectory, Charset encoding) {
+    super(schema, registry, targetDirectory, encoding);
   }
 
   @Override
@@ -20,24 +21,26 @@ class ScalarVisitor extends AbstractVisitor {
             .addModifiers(Modifier.PUBLIC)
             .superclass(
                 ParameterizedTypeName.get(
-                    ClassName.bestGuess("Scalar"), ClassName.get(String.class)))
+                    registry().runtime("Scalar"), ClassName.get(String.class)))
             .addAnnotation(
                 AnnotationSpec.builder(JsonbTypeSerializer.class)
-                    .addMember("value", "$T.class", ClassName.bestGuess("ScalarSerializer"))
+                    .addMember("value", "$T.class", registry().runtime("ScalarSerializer"))
                     .build())
             .addAnnotation(
                 AnnotationSpec.builder(JsonbTypeDeserializer.class)
-                    .addMember("value", "$T.class", ClassName.bestGuess("ScalarStringDeserializer"))
+                    .addMember("value", "$T.class", registry().runtime("ScalarStringDeserializer"))
                     .build());
 
+    // Public: QueryBuilder instantiates scalars reflectively from io.dagger.sdk.
     MethodSpec constructor =
         MethodSpec.constructorBuilder()
+            .addModifiers(Modifier.PUBLIC)
             .addParameter(ClassName.get(String.class), "value")
             .addStatement("super(value)")
             .build();
     classBuilder.addMethod(constructor);
 
-    ClassName className = ClassName.bestGuess(Helpers.formatName(type));
+    ClassName className = registry().forType(type.getName());
     MethodSpec fromMethod =
         MethodSpec.methodBuilder("from")
             .addModifiers(Modifier.PUBLIC, Modifier.STATIC)

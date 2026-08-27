@@ -23,6 +23,8 @@ type Mod {
   """
   let vendorSdkJar: Boolean!
 
+  let codegen: Codegen! { Codegen() }
+
   """
   This module root relative to the client's current location: "." when the cwd is
   the module itself, "sub/mod" for a module beneath it, ".." for an enclosing one.
@@ -72,140 +74,115 @@ type Mod {
   }
 
   """
-  Maven container used for codegen (pinned digest, matches the builtin runtime).
-  """
-  let mvn: Container! {
-    container.from("maven:3.9.9-eclipse-temurin-21-alpine@sha256:4cbb8bf76c46b97e028998f2486ed014759a8e932480431039bdb93dffe6813e")
-  }
-
-  """
-  The vendored Java SDK Maven reactor shipped with this module.
-  """
-  let sdkSourceDir: Directory! { currentModule.source.directory("sdk") }
-
-  """
-  Vendor the Java SDK as buildable source for a module:
-    src/main/java        the hand-written SDK library
-    src/processor/java   the annotation processor that generates the entrypoint
-    src/generated/java   the client bindings generated from the engine schema
-    src/processor/resources/META-INF/services/...Processor
-  The returned directory is dropped at <module>/sdk.
-  """
-  let prebuiltCodegenRepo: String! { "prebuilt/m2" }
-
-  let prebuiltCodegenPlugin: String! { "prebuilt/dagger-codegen-maven-plugin.jar" }
-
-  """
-  A maven container with the codegen plugin available in the local repository.
-
-  Fast path: when the packager module has committed the plugin's local Maven
-  repository under prebuilt/m2, drop it into ~/.m2/repository with a plain copy —
-  no maven invocation. Otherwise fall back to installing a committed plugin jar,
-  and finally to compiling the plugin from the vendored sources.
-  """
-  let codegenBase(introspectionJSON: File!): Container! {
-    let base = mvn
-      .withoutEntrypoint
-      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
-      .withMountedFile("/schema.json", introspectionJSON)
-      .withDirectory("/dagger-io", sdkSourceDir)
-      .withWorkdir("/dagger-io")
-
-    if (currentModule.source.exists(prebuiltCodegenRepo + "/io/dagger")) {
-      base
-        .withDirectory("/prebuilt-m2", currentModule.source.directory(prebuiltCodegenRepo))
-        .withExec(["sh", "-c", "mkdir -p /root/.m2/repository && cp -r /prebuilt-m2/. /root/.m2/repository/"])
-    } else if (currentModule.source.exists(prebuiltCodegenPlugin)) {
-      base
-        .withMountedFile("/codegen-plugin.jar", currentModule.source.file(prebuiltCodegenPlugin))
-        .withExec(["mvn", "install:install-file", "-Dfile=/dagger-io/pom.xml", "-Dpackaging=pom", "-DpomFile=/dagger-io/pom.xml", "--no-transfer-progress"])
-        .withExec(["mvn", "install:install-file", "-Dfile=/codegen-plugin.jar", "-DpomFile=/dagger-io/dagger-codegen-maven-plugin/pom.xml", "--no-transfer-progress"])
-    } else {
-      base.withExec(["mvn", "--projects", "dagger-codegen-maven-plugin", "--also-make", "install", "-T1C", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
-    }
-  }
-
-  """
-  Build and install the SDK + annotation processor jars, returning the maven
-  container.
-
-  Uses install (rather than generate-sources) so the compiled jars land in the
-  local Maven repository — the dagger-prebuilt-sdk pom profile compiles the
-  entrypoint against them instead of recompiling the vendored SDK sources. Jars
-  are installed under a per-module version so modules that resolve to different
-  schemas (different dependencies, or a different engine) never share a Maven
-  coordinate; the codegen plugin keeps its own fixed version and resolves from the
-  prebuilt repo. Cached across a module's own edits.
-  """
-  let sdkBuilt(introspectionJSON: File!, name: String!): Container! {
-    codegenBase(introspectionJSON)
-      .withExec(["mvn", "versions:set", "-DnewVersion=" + name, "-DgenerateBackupPoms=false", "--no-transfer-progress"])
-      .withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", "-Ddaggerengine.schema=/schema.json", "-Ddaggerengine.version=" + engineVersion, "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
-  }
-
-  """
-  The live engine version, without build metadata.
-
-  Codegen only reads the engine version off the CLI when it has to query the
-  schema itself. Here the schema is handed to it, so without this the version
-  stays whatever the pom happens to say, and generation cannot tell which shapes
-  the engine on the other end actually supports.
-
-  The `+<commit>` suffix is dropped: it changes on every engine build and would
-  make every module's SDK rebuild for no reason.
-  """
-  let engineVersion: String! { version.split("+")[0] ?? version }
-
-  let vendoredSdk(introspectionJSON: File!, name: String!): Directory! {
-    let built = sdkBuilt(introspectionJSON, name)
-    directory
-      .withDirectory("src/main/java", built.directory("/dagger-io/dagger-java-sdk/src/main/java"))
-      .withDirectory(
-        "src/processor/java",
-        built.directory("/dagger-io/dagger-java-annotation-processor/src/main/java"),
-      )
-      .withDirectory(
-        "src/generated/java",
-        built.directory("/dagger-io/dagger-java-sdk/target/generated-sources/dagger"),
-      )
-      .withNewFile(
-        "src/processor/resources/META-INF/services/javax.annotation.processing.Processor",
-        "io.dagger.annotation.processor.DaggerModuleAnnotationProcessor\n",
-      )
-  }
-
-  """
-  Capture the compiled SDK jar as a small local Maven repository to commit under
-  <module>/sdk/repo. Stored at a fixed version so the module pom's
-  dagger-vendored-sdk-jar profile resolves it; the runtime build then compiles
-  only the module's own code against the jar rather than the vendored sources.
-  """
-  let vendoredSdkJar(introspectionJSON: File!, name: String!): Directory! {
-    let jar = sdkBuilt(introspectionJSON, name)
-      .withExec(["sh", "-c", "mkdir -p /out && cp /root/.m2/repository/io/dagger/dagger-java-sdk/" + name + "/dagger-java-sdk-" + name + ".jar /out/dagger-java-sdk-0.21.4.jar"])
-      .file("/out/dagger-java-sdk-0.21.4.jar")
-    directory
-      .withFile("io/dagger/dagger-java-sdk/0.21.4/dagger-java-sdk-0.21.4.jar", jar)
-      .withNewFile(
-        "io/dagger/dagger-java-sdk/0.21.4/dagger-java-sdk-0.21.4.pom",
-        "<project><modelVersion>4.0.0</modelVersion><groupId>io.dagger</groupId><artifactId>dagger-java-sdk</artifactId><version>0.21.4</version><packaging>jar</packaging></project>\n",
-      )
-  }
-
-  """
   Compile the module with the annotation processor enabled (proc=full) so it
   emits io.dagger.gen.entrypoint.Entrypoint, and return the generated-sources
   directory (the entrypoint) for vendoring under <module>/src/generated/java.
   """
   let generatedEntrypoint(moduleDir: Directory!, name: String!): Directory! {
-    mvn
+    codegen.mvn
       .withoutEntrypoint
-      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
+      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"), sharing: CacheSharingMode.LOCKED)
       .withDirectory("/module", moduleDir)
       .withWorkdir("/module")
       .withEnvVariable("_DAGGER_JAVA_SDK_MODULE_NAME", name)
       .withExec(["mvn", "compile", "-Ddagger.proc=full", "-Ddagger.sdk=prebuilt", "-Ddagger.sdk.version=" + name, "--no-transfer-progress"])
       .directory("/module/target/generated-sources/annotations")
+  }
+
+  """
+  The workspace with every local dependency this SDK manages generated and
+  staged, recursively, so their client-facing schemas can be read.
+
+  Done here rather than through the engine's generateLocalDependencies: that
+  routes through the workspace's generator rollup, which the engine leaves
+  empty for a value workspace — where every in-memory check runs — and which
+  does not carry this SDK's own generators in this repository. Ownership is the
+  engine's rule: a dependency is ours when it sits in the modules registered to
+  this SDK; a dependency of another SDK, or a remote one, is assumed committed.
+  """
+  withLocalDependenciesGenerated(ws: Workspace!): Workspace! {
+    # The registry, not modules(ws): that list is scoped to the caller's cwd,
+    # and a dependency is usually a sibling, outside it. A workspace that
+    # registers this SDK under another key has no such record, and the engine
+    # errors rather than returning nothing, which would fail every generate;
+    # an empty registry means "every dependency is assumed committed".
+    let managed = ws.sdk(name: currentModule.name).modules.{{source}}.map { m => normalizePath(m.source) } rescue []
+    ws.moduleSource(workspaceRef(rootPath))
+      .dependencies
+      .{{kind, sourceRootSubpath}}
+      # A dependency inside the workspace is LOCAL_SOURCE on the host and
+      # DIR_SOURCE in a workspace built from a directory value; both live at
+      # sourceRootSubpath. Only a git dependency is somewhere else.
+      .filter { dep => JSON.encode(dep.kind).contains("GIT") == false }
+      .filter { dep => managed.contains(normalizePath(dep.sourceRootSubpath)) }
+      .reduce(ws) { staged, dep =>
+        # Overlaid as directories, not applied as a changeset: a changeset is
+        # measured from the caller's cwd and may not reach a sibling.
+        let mod = Mod(
+          rootPath: dep.sourceRootSubpath,
+          ws: staged,
+          skipGenerateFilename: skipGenerateFilename,
+          vendorSdkJar: vendorSdkJar,
+        )
+        if (mod.skipGenerate(staged)) {
+          staged
+        } else {
+          let depStaged = mod.withLocalDependenciesGenerated(staged)
+          withOverlay(depStaged, dep.sourceRootSubpath, mod.generatedOverlay(depStaged))
+        }
+      }
+  }
+
+  """
+  A workspace with a module's generated overlay in place of what it had.
+
+  Dropped before it is written: withNewDirectory merges into what is already
+  there, so a client package a dependency no longer produces — one dropped from
+  dagger-module.toml, or renamed by an alias — would survive every generate.
+  """
+  let withOverlay(ws: Workspace!, modPath: String!, overlay: Directory!): Workspace! {
+    let sdkPath = workspaceRef(joinPath(modPath, "sdk"))
+    let entrypointPath = workspaceRef(joinPath(modPath, "src/generated/java"))
+    ws
+      .withoutDirectory(sdkPath)
+      .withNewDirectory(sdkPath, overlay.directory("sdk"))
+      .withoutDirectory(entrypointPath)
+      .withNewDirectory(entrypointPath, overlay.directory("src/generated/java"))
+  }
+
+  """
+  The plan for this module: core from its own module-facing schema — which
+  leaves the types hidden from module code hidden — plus one client per
+  declared dependency, each from that dependency's client-facing schema.
+  """
+  let modulePlan(modSource: ModuleSource!): Directory! {
+    # A list of engine objects cannot be folded over directly: select what each
+    # entry needs — its schema as text included — and fold over the records.
+    modSource
+      .dependencies
+      .{{moduleName, kind, asString, sourceRootSubpath, pin, engineVersion, clientSchemaIntrospectionJSON.{{contents}}}}
+      .reduce(codegen.corePlan(modSource.introspectionSchemaJSON.contents)) { plan, dep =>
+        codegen.withClientEntry(
+          plan,
+          dep.moduleName,
+          JSON.encode(dep.kind),
+          dep.asString,
+          dep.sourceRootSubpath,
+          dep.pin,
+          dep.engineVersion,
+          dep.clientSchemaIntrospectionJSON.contents,
+        )
+      }
+  }
+
+  """
+  A one-entry plan for this module's own client, bound to the module by its
+  workspace path.
+  """
+  let selfPlan(schema: File!, name: String!): Directory! {
+    directory
+      .withFile("client-" + name + "/schema.json", schema)
+      .withNewFile("client-" + name + "/meta.json", codegen.clientMeta(name, "\"LOCAL_SOURCE\"", workspaceRef(rootPath), ""))
   }
 
   """
@@ -217,45 +194,75 @@ type Mod {
   and diffing it against the baseline the caller already holds is all this needs.
   """
   let generateModule(ws: Workspace!): Changeset! {
-    # A module that depends on another by local path cannot resolve its own
-    # schema until that dependency has been generated, so overlay the generated
-    # closure onto the workspace first. The engine skips remote dependencies —
-    # assumed committed, as it does itself — and returns an empty changeset when
-    # there is nothing to stage.
-    let wsWithDeps = ws.withChanges(
-      ws.moduleSource(workspaceRef(rootPath)).generateLocalDependencies(ws),
-    )
+    let wsWithDeps = withLocalDependenciesGenerated(ws)
+    # Baseline on the staged-dependency workspace, not the one handed in: the
+    # dependencies' generated code belongs to their own SDKs, not this changeset.
+    withOverlay(wsWithDeps, rootPath, generatedOverlay(wsWithDeps)).changes(wsWithDeps)
+  }
 
-    let modSource = wsWithDeps.moduleSource(workspaceRef(rootPath))
+  """
+  Everything generation writes for this module, rooted at the module: sdk/ —
+  the vendored runtime and processor, io.dagger.core, one io.dagger.client
+  package per dependency and the module's own, plus the committed jar when
+  enabled — and src/generated/java, the entrypoint.
+
+  `ws` is expected to carry this module's local dependencies generated already
+  (withLocalDependenciesGenerated): a module cannot read a local dependency's
+  schema before that dependency has been generated, and staging the closure
+  here as well would walk the whole dependency graph twice per generate.
+  """
+  generatedOverlay(ws: Workspace!): Directory! {
+    let modSource = ws.moduleSource(workspaceRef(rootPath))
     let name = modSource.moduleName
-    let introspectionJSON = modSource.introspectionSchemaJSON
-    let vendored = vendoredSdk(introspectionJSON, name)
+    # Before the first pass: the self client comes off this module's own schema,
+    # which the engine renders through this very version, and the plan that
+    # carries it is only built after an expensive build.
+    codegen.requireModernEngine(name, modSource.engineVersion)
+    let committed = moduleDir(ws, rootPath)
+
+    # First pass: core and one client per dependency. The client packages the
+    # previous generation produced are carried in, and this module's own kept:
+    # module code that already calls its self client has to keep compiling
+    # until that client is regenerated below.
+    let clientsPath = "sdk/src/generated/java/io/dagger/client"
+    let carried = if (committed.exists(clientsPath)) { committed.directory(clientsPath) } else { directory }
+    let firstBuild = codegen.sdkBuilt(modulePlan(modSource), directory.withDirectory("io/dagger/client", carried), name, name)
+    let firstVendored = codegen.vendoredSdk(firstBuild)
 
     # the module as committed, with the whole committed sdk/ dropped (source and
     # any previously vendored jar) and the freshly vendored SDK sources overlaid,
     # plus any stale generated entrypoint dropped so the processor regenerates it
-    let baseDir = moduleDir(wsWithDeps, rootPath)
+    let baseDir = committed
       .withoutDirectory("sdk")
-      .withDirectory("sdk", vendored)
+      .withDirectory("sdk", firstVendored)
       .withoutDirectory("src/generated")
     let entrypoint = generatedEntrypoint(baseDir, name)
 
-    let staged = wsWithDeps
-      .withNewDirectory(workspaceRef(joinPath(rootPath, "sdk")), vendored)
-      .withNewDirectory(workspaceRef(joinPath(rootPath, "src/generated/java")), entrypoint)
+    # With the SDK and the entrypoint staged the module builds, so the engine can
+    # load it and hand back its client-facing schema: this is what breaks the
+    # circularity of a module needing its own client to be generated.
+    # Overlaid with withOverlay, which drops the committed tree first: a stale
+    # committed package would otherwise be compiled into this bootstrap build.
+    let bootstrapped = withOverlay(
+      ws,
+      rootPath,
+      directory.withDirectory("sdk", firstVendored).withDirectory("src/generated/java", entrypoint),
+    )
+    let selfSchema = bootstrapped.moduleSource(workspaceRef(rootPath)).clientSchemaIntrospectionJSON
 
-    let after = if (vendorSdkJar) {
-      staged.withNewDirectory(
-        workspaceRef(joinPath(rootPath, "sdk/repo")),
-        vendoredSdkJar(introspectionJSON, name),
-      )
+    # Second pass: the self client, generated over the first pass's output so the
+    # vendored tree is exactly core, the dependency clients and this client.
+    let secondBuild = codegen.sdkBuilt(selfPlan(selfSchema, name), firstBuild.directory(codegen.generatedSourcesPath), "", name)
+    let vendored = codegen.vendoredSdk(secondBuild)
+
+    let overlay = directory
+      .withDirectory("sdk", vendored)
+      .withDirectory("src/generated/java", entrypoint)
+    if (vendorSdkJar) {
+      overlay.withDirectory("sdk/repo", codegen.vendoredSdkJar(secondBuild, name))
     } else {
-      staged
+      overlay
     }
-
-    # Baseline on the staged-dependency workspace, not the one handed in: the
-    # dependencies' generated code belongs to their own SDKs, not this changeset.
-    after.changes(wsWithDeps)
   }
 
   """
@@ -282,6 +289,15 @@ type Mod {
   """
   let workspaceRef(modPathArg: String!): String! {
     if (modPathArg == ".") { "/" } else { "/" + modPathArg }
+  }
+
+  """
+  A workspace path in the form the registry and the engine agree on: no
+  leading "./" or "/", no trailing "/", "." for the root.
+  """
+  let normalizePath(path: String!): String! {
+    let normalized = path.trimPrefix("./").trimPrefix("/").trimSuffix("/")
+    if (normalized == "") { "." } else { normalized }
   }
 
   """

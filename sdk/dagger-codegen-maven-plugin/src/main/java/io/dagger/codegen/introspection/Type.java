@@ -91,6 +91,31 @@ public class Type {
     this.directives = directives;
   }
 
+  /** Returns the module that contributed this type, or null if it belongs to core. */
+  public String getOwningModule() {
+    return Directive.getSourceMapModule(directives);
+  }
+
+  /**
+   * A copy of this type carrying only the given fields, which are re-parented to the copy. Used to
+   * narrow a type to one partition without touching the schema it came from.
+   */
+  Type withFields(List<Field> narrowed) {
+    Type copy = new Type();
+    copy.kind = kind;
+    copy.name = name;
+    copy.description = description;
+    copy.inputFields = inputFields;
+    copy.enumValues = enumValues;
+    copy.interfaces = interfaces;
+    copy.possibleTypes = possibleTypes;
+    copy.directives = directives;
+    // The fields are shared with the schema this narrows, and re-parenting them there would
+    // rewrite it; the visitors only ever read the parent's name, which the copy keeps.
+    copy.fields = narrowed;
+    return copy;
+  }
+
   /**
    * Checks if this type has an "id" field. With unified IDs, the id field returns the unified ID
    * scalar. Falls back to legacy FooID check.

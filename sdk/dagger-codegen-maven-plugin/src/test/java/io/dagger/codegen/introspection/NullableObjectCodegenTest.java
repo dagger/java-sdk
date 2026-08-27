@@ -5,22 +5,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.palantir.javapoet.JavaFile;
 import com.palantir.javapoet.TypeSpec;
 import java.io.ByteArrayInputStream;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
-import javax.tools.DiagnosticCollector;
-import javax.tools.JavaCompiler;
-import javax.tools.JavaFileObject;
-import javax.tools.SimpleJavaFileObject;
-import javax.tools.ToolProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class NullableObjectCodegenTest {
+
+  private static final TypeRegistry REGISTRY = TypeRegistry.core("io.dagger.core", "io.dagger.sdk");
 
   @TempDir Path compilationOutputDirectory;
 
@@ -132,8 +127,8 @@ class NullableObjectCodegenTest {
   }
 
   /**
-   * Interfaces that merely share an ancestor do not impose an override obligation on one another.
-   * A nullable field on one sibling must not make a same-named non-null field on another sibling
+   * Interfaces that merely share an ancestor do not impose an override obligation on one another. A
+   * nullable field on one sibling must not make a same-named non-null field on another sibling
    * Optional when their common ancestor does not declare that field.
    */
   @Test
@@ -154,28 +149,25 @@ class NullableObjectCodegenTest {
     Type nullableImplementation = type("NullableImplementation", TypeKind.OBJECT);
     nullableImplementation.setInterfaces(
         List.of(
-            typeRef(TypeKind.INTERFACE, "NullableSibling"),
-            typeRef(TypeKind.INTERFACE, "Root")));
+            typeRef(TypeKind.INTERFACE, "NullableSibling"), typeRef(TypeKind.INTERFACE, "Root")));
     nullableImplementation.setFields(
         List.of(field("child", typeRef(TypeKind.OBJECT, "Foo"), nullableImplementation)));
 
     Type implementation = type("NonNullImplementation", TypeKind.OBJECT);
     implementation.setInterfaces(
         List.of(
-            typeRef(TypeKind.INTERFACE, "NonNullSibling"),
-            typeRef(TypeKind.INTERFACE, "Root")));
+            typeRef(TypeKind.INTERFACE, "NonNullSibling"), typeRef(TypeKind.INTERFACE, "Root")));
     implementation.setFields(
         List.of(field("child", nonNull(typeRef(TypeKind.OBJECT, "Foo")), implementation)));
 
     Map<String, String> generated =
         sources(root, nullableSibling, nonNullSibling, nullableImplementation, implementation);
 
-    assertThat(generated.get("io.dagger.client.NullableSibling"))
-        .contains("Optional<Foo> child()");
-    assertThat(generated.get("io.dagger.client.NonNullSibling"))
+    assertThat(generated.get("io.dagger.core.NullableSibling")).contains("Optional<Foo> child()");
+    assertThat(generated.get("io.dagger.core.NonNullSibling"))
         .contains("Foo child();")
         .doesNotContain("Optional<Foo> child()");
-    assertThat(generated.get("io.dagger.client.NonNullImplementation"))
+    assertThat(generated.get("io.dagger.core.NonNullImplementation"))
         .contains("Foo child()")
         .doesNotContain("Optional<Foo> child()");
   }
@@ -190,17 +182,17 @@ class NullableObjectCodegenTest {
 
     Map<String, String> sources = new HashMap<>(supportSources());
     for (Type type : types) {
-      String qualifiedName = "io.dagger.client." + type.getName();
+      String qualifiedName = "io.dagger.core." + type.getName();
       if (type.getKind() == TypeKind.INTERFACE) {
         InterfaceVisitor visitor =
-            new InterfaceVisitor(schema, Path.of("."), StandardCharsets.UTF_8);
+            new InterfaceVisitor(schema, REGISTRY, Path.of("."), StandardCharsets.UTF_8);
         sources.put(qualifiedName, javaFile(visitor.generateType(type)));
         sources.put(qualifiedName + "Client", javaFile(visitor.generateClientType(type)));
       } else {
         sources.put(
             qualifiedName,
             javaFile(
-                new ObjectVisitor(schema, Path.of("."), StandardCharsets.UTF_8)
+                new ObjectVisitor(schema, REGISTRY, null, Path.of("."), StandardCharsets.UTF_8)
                     .generateType(type)));
       }
     }
@@ -214,39 +206,40 @@ class NullableObjectCodegenTest {
    */
   private static Map<String, String> supportSources() {
     return Map.of(
-        "io.dagger.client.Animal",
-        "package io.dagger.client; public interface Animal {}",
-        "io.dagger.client.AnimalClient",
-        "package io.dagger.client; public class AnimalClient implements Animal {"
-            + " AnimalClient(QueryBuilder queryBuilder) {} }",
-        "io.dagger.client.Dog",
-        "package io.dagger.client; public class Dog implements Animal {"
-            + " Dog(QueryBuilder queryBuilder) {} }",
-        "io.dagger.client.Pet",
-        "package io.dagger.client; public interface Pet {}",
-        "io.dagger.client.PetClient",
-        "package io.dagger.client; public class PetClient implements Pet {"
-            + " PetClient(QueryBuilder queryBuilder) {} }",
-        "io.dagger.client.QueryBuilder",
-        "package io.dagger.client; public class QueryBuilder {"
-            + " QueryBuilder chain(String field) { return this; }"
-            + " QueryBuilder executeNullableObjectQuery(String typeName)"
+        "io.dagger.core.Animal",
+        "package io.dagger.core; public interface Animal {}",
+        "io.dagger.core.AnimalClient",
+        "package io.dagger.core; public class AnimalClient implements Animal {"
+            + " public AnimalClient(io.dagger.sdk.QueryBuilder queryBuilder) {} }",
+        "io.dagger.core.Dog",
+        "package io.dagger.core; public class Dog implements Animal {"
+            + " public Dog(io.dagger.sdk.QueryBuilder queryBuilder) {} }",
+        "io.dagger.core.Pet",
+        "package io.dagger.core; public interface Pet {}",
+        "io.dagger.core.PetClient",
+        "package io.dagger.core; public class PetClient implements Pet {"
+            + " public PetClient(io.dagger.sdk.QueryBuilder queryBuilder) {} }",
+        "io.dagger.sdk.QueryBuilder",
+        "package io.dagger.sdk; public class QueryBuilder {"
+            + " public QueryBuilder chain(String field) { return this; }"
+            + " public QueryBuilder executeNullableObjectQuery(String typeName)"
             + " throws InterruptedException, java.util.concurrent.ExecutionException,"
-            + " io.dagger.client.exception.DaggerQueryException { return this; }"
+            + " io.dagger.sdk.exception.DaggerQueryException { return this; }"
             + " }",
-        "io.dagger.client.exception.DaggerQueryException",
-        "package io.dagger.client.exception;"
+        "io.dagger.sdk.exception.DaggerQueryException",
+        "package io.dagger.sdk.exception;"
             + " public class DaggerQueryException extends Exception {}");
   }
 
   private static String javaFile(TypeSpec typeSpec) {
-    return JavaFile.builder("io.dagger.client", typeSpec).build().toString();
+    return JavaFile.builder("io.dagger.core", typeSpec).build().toString();
   }
 
   private static String generateInterface(Type type, String version) throws Exception {
-    return new InterfaceVisitor(schemaAtVersion(version), Path.of("."), StandardCharsets.UTF_8)
-        .generateType(type)
-        .toString();
+    return javaFile(
+        new InterfaceVisitor(
+                schemaAtVersion(version), REGISTRY, Path.of("."), StandardCharsets.UTF_8)
+            .generateType(type));
   }
 
   private static Schema schemaAtVersion(String version) throws Exception {
@@ -295,49 +288,6 @@ class NullableObjectCodegenTest {
   }
 
   private void assertCompiles(Map<String, String> sources) {
-    JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-    assertThat(compiler).isNotNull();
-
-    DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-    List<JavaFileObject> compilationUnits =
-        sources.entrySet().stream()
-            .map(entry -> new SourceFile(entry.getKey(), entry.getValue()))
-            .collect(Collectors.toList());
-    boolean compiled =
-        compiler
-            .getTask(
-                null,
-                null,
-                diagnostics,
-                List.of(
-                    "--release", "17", "-proc:none", "-d", compilationOutputDirectory.toString()),
-                null,
-                compilationUnits)
-            .call();
-
-    assertThat(compiled)
-        .withFailMessage(
-            "Generated sources did not compile:%n%s",
-            diagnostics.getDiagnostics().stream()
-                .map(Object::toString)
-                .collect(Collectors.joining("\n")))
-        .isTrue();
-  }
-
-  private static final class SourceFile extends SimpleJavaFileObject {
-    private final String source;
-
-    private SourceFile(String className, String source) {
-      super(
-          URI.create(
-              "string:///" + className.replace('.', '/') + JavaFileObject.Kind.SOURCE.extension),
-          JavaFileObject.Kind.SOURCE);
-      this.source = source;
-    }
-
-    @Override
-    public CharSequence getCharContent(boolean ignoreEncodingErrors) {
-      return source;
-    }
+    CompileSupport.assertCompiles(compilationOutputDirectory, sources);
   }
 }

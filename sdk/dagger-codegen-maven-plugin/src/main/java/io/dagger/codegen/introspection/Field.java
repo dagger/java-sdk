@@ -94,6 +94,14 @@ public class Field {
     return Directive.getExpectedType(directives);
   }
 
+  /**
+   * Returns the module that contributed this field, or null if it belongs to core. A module-owned
+   * field on a core type (Query.hello, Binding.asHello) is how a module extends core.
+   */
+  public String getOwningModule() {
+    return Directive.getSourceMapModule(directives);
+  }
+
   boolean hasArgs() {
     return getArgs().size() > 0;
   }

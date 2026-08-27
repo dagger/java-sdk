@@ -1,0 +1,15 @@
+# Placed at the workspace root by the e2e checks, so that both the SDK's module
+# list and the engine's generator rollup for local dependencies see the same
+# config. Not named dagger.toml so that find-up from another fixture never
+# reads it.
+[modules.java-sdk]
+source = "."
+
+[modules.java-sdk.as-sdk]
+name = "java"
+
+[[modules.java-sdk.as-sdk.modules]]
+path = ".dagger/modules/e2e/fixtures/clients/dep"
+
+[[modules.java-sdk.as-sdk.modules]]
+path = ".dagger/modules/e2e/fixtures/clients/app"
