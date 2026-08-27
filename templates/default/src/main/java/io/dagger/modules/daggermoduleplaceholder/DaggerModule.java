@@ -1,9 +1,9 @@
 package io.dagger.modules.daggermoduleplaceholder;
 
-import static io.dagger.client.Dagger.dag;
+import static io.dagger.sdk.Dagger.dag;
 
 import io.dagger.client.Container;
-import io.dagger.client.exception.DaggerQueryException;
+import io.dagger.sdk.exception.DaggerQueryException;
 import io.dagger.client.Directory;
 import io.dagger.client.Workspace;
 import io.dagger.module.annotation.Default;

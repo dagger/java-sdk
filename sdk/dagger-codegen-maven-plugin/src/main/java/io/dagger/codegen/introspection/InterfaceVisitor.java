@@ -161,7 +161,8 @@ class InterfaceVisitor extends AbstractVisitor {
 
     // Build the query
     if (field.hasArgs()) {
-      fieldMethodBuilder.addStatement("Arguments.Builder builder = Arguments.newBuilder()");
+      fieldMethodBuilder.addStatement(
+          "$1T.Builder builder = $1T.newBuilder()", registry().runtime("Arguments"));
     }
     field
         .getRequiredArgs()
@@ -170,15 +171,19 @@ class InterfaceVisitor extends AbstractVisitor {
                 fieldMethodBuilder.addStatement(
                     "builder.add($1S, $2L)", arg.getName(), Helpers.formatName(arg)));
     if (field.hasArgs()) {
-      fieldMethodBuilder.addStatement("Arguments fieldArgs = builder.build()");
+      fieldMethodBuilder.addStatement(
+          "$T fieldArgs = builder.build()", registry().runtime("Arguments"));
     }
     if (field.hasArgs()) {
       fieldMethodBuilder.addStatement(
-          "QueryBuilder nextQueryBuilder = this.queryBuilder.chain($S, fieldArgs)",
+          "$T nextQueryBuilder = this.queryBuilder.chain($S, fieldArgs)",
+          registry().runtime("QueryBuilder"),
           field.getName());
     } else {
       fieldMethodBuilder.addStatement(
-          "QueryBuilder nextQueryBuilder = this.queryBuilder.chain($S)", field.getName());
+          "$T nextQueryBuilder = this.queryBuilder.chain($S)",
+          registry().runtime("QueryBuilder"),
+          field.getName());
     }
 
     if (field.getTypeRef().isListOfObject()) {
@@ -190,7 +195,9 @@ class InterfaceVisitor extends AbstractVisitor {
       fieldMethodBuilder.addStatement(
           "nextQueryBuilder = nextQueryBuilder.chain(List.of($S))", "id");
       fieldMethodBuilder.addStatement(
-          "List<QueryBuilder> builders = nextQueryBuilder.executeObjectListQuery($S)", objName);
+          "List<$T> builders = nextQueryBuilder.executeObjectListQuery($S)",
+          registry().runtime("QueryBuilder"),
+          objName);
       fieldMethodBuilder.addStatement(
           "return builders.stream().map(qb -> new $T(qb)).toList()", clientClass);
       fieldMethodBuilder
@@ -219,7 +226,8 @@ class InterfaceVisitor extends AbstractVisitor {
               ? registry().forInterfaceClient(graphqlTypeName)
               : objectReturnType;
       fieldMethodBuilder.addStatement(
-          "QueryBuilder objectQueryBuilder = nextQueryBuilder.executeNullableObjectQuery($S)",
+          "$T objectQueryBuilder = nextQueryBuilder.executeNullableObjectQuery($S)",
+          registry().runtime("QueryBuilder"),
           graphqlTypeName);
       fieldMethodBuilder.addStatement(
           "return Optional.ofNullable(objectQueryBuilder).map(qb -> new $T(qb))", clientClass);

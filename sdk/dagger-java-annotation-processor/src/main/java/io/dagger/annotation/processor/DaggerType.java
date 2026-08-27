@@ -3,7 +3,7 @@ package io.dagger.annotation.processor;
 import com.palantir.javapoet.ClassName;
 import com.palantir.javapoet.CodeBlock;
 import com.palantir.javapoet.ParameterizedTypeName;
-import io.dagger.client.Dagger;
+import io.dagger.sdk.Dagger;
 import io.dagger.client.TypeDefKind;
 import io.dagger.module.info.TypeInfo;
 import java.util.Set;
@@ -72,7 +72,7 @@ public abstract class DaggerType {
       var clazz = Class.forName(name);
       if (clazz.isEnum()) {
         return new Enum(name, name.substring(name.lastIndexOf('.') + 1));
-      } else if (io.dagger.client.Scalar.class.isAssignableFrom(clazz)) {
+      } else if (io.dagger.sdk.Scalar.class.isAssignableFrom(clazz)) {
         return new Scalar(name, name.substring(name.lastIndexOf('.') + 1));
       }
     } catch (ClassNotFoundException e) {

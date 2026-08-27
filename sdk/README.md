@@ -150,7 +150,7 @@ Here is a code snippet using the Dagger client
 package io.dagger.sample;
 
 import io.dagger.client.Client;
-import io.dagger.client.Dagger;
+import io.dagger.sdk.Dagger;
 
 import java.util.List;
 

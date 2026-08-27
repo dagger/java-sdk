@@ -235,7 +235,7 @@ type E2e {
       .withDirectory(".", initialized.layer)
 
     # Module-relative paths of the two artifacts generation stages.
-    let vendoredClient = "sdk/src/main/java/io/dagger/client/Dagger.java"
+    let vendoredClient = "sdk/src/main/java/io/dagger/sdk/Dagger.java"
     let entrypoint = "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"
 
     # From the module's parent the module is one level down, so its changes are
@@ -301,7 +301,7 @@ type E2e {
   let nullableReturnSource: String! {
     "package io.dagger.modules.generateapp;\n"
       + "\n"
-      + "import static io.dagger.client.Dagger.dag;\n"
+      + "import static io.dagger.sdk.Dagger.dag;\n"
       + "\n"
       + "import io.dagger.client.Directory;\n"
       + "import io.dagger.module.annotation.Function;\n"

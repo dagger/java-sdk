@@ -32,11 +32,6 @@ public final class TypeRegistry {
     this.ownedTypeNames = Set.copyOf(ownedTypeNames);
   }
 
-  /** Everything in one package: the shape generated before packages were split. */
-  public static TypeRegistry singlePackage(String pkg) {
-    return new TypeRegistry(pkg, pkg, pkg, pkg, Set.of());
-  }
-
   /** Emitting the core package, with the runtime elsewhere. */
   public static TypeRegistry core(String corePackage, String runtimePackage) {
     return new TypeRegistry(corePackage, corePackage, corePackage, runtimePackage, Set.of());

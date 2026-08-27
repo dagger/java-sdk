@@ -22,7 +22,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 class NullableObjectCodegenTest {
 
-  private static final TypeRegistry REGISTRY = TypeRegistry.singlePackage("io.dagger.client");
+  private static final TypeRegistry REGISTRY =
+      TypeRegistry.core("io.dagger.client", "io.dagger.sdk");
 
   @TempDir Path compilationOutputDirectory;
 
@@ -134,8 +135,8 @@ class NullableObjectCodegenTest {
   }
 
   /**
-   * Interfaces that merely share an ancestor do not impose an override obligation on one another.
-   * A nullable field on one sibling must not make a same-named non-null field on another sibling
+   * Interfaces that merely share an ancestor do not impose an override obligation on one another. A
+   * nullable field on one sibling must not make a same-named non-null field on another sibling
    * Optional when their common ancestor does not declare that field.
    */
   @Test
@@ -156,24 +157,21 @@ class NullableObjectCodegenTest {
     Type nullableImplementation = type("NullableImplementation", TypeKind.OBJECT);
     nullableImplementation.setInterfaces(
         List.of(
-            typeRef(TypeKind.INTERFACE, "NullableSibling"),
-            typeRef(TypeKind.INTERFACE, "Root")));
+            typeRef(TypeKind.INTERFACE, "NullableSibling"), typeRef(TypeKind.INTERFACE, "Root")));
     nullableImplementation.setFields(
         List.of(field("child", typeRef(TypeKind.OBJECT, "Foo"), nullableImplementation)));
 
     Type implementation = type("NonNullImplementation", TypeKind.OBJECT);
     implementation.setInterfaces(
         List.of(
-            typeRef(TypeKind.INTERFACE, "NonNullSibling"),
-            typeRef(TypeKind.INTERFACE, "Root")));
+            typeRef(TypeKind.INTERFACE, "NonNullSibling"), typeRef(TypeKind.INTERFACE, "Root")));
     implementation.setFields(
         List.of(field("child", nonNull(typeRef(TypeKind.OBJECT, "Foo")), implementation)));
 
     Map<String, String> generated =
         sources(root, nullableSibling, nonNullSibling, nullableImplementation, implementation);
 
-    assertThat(generated.get("io.dagger.client.NullableSibling"))
-        .contains("Optional<Foo> child()");
+    assertThat(generated.get("io.dagger.client.NullableSibling")).contains("Optional<Foo> child()");
     assertThat(generated.get("io.dagger.client.NonNullSibling"))
         .contains("Foo child();")
         .doesNotContain("Optional<Foo> child()");
@@ -220,24 +218,24 @@ class NullableObjectCodegenTest {
         "package io.dagger.client; public interface Animal {}",
         "io.dagger.client.AnimalClient",
         "package io.dagger.client; public class AnimalClient implements Animal {"
-            + " AnimalClient(QueryBuilder queryBuilder) {} }",
+            + " public AnimalClient(io.dagger.sdk.QueryBuilder queryBuilder) {} }",
         "io.dagger.client.Dog",
         "package io.dagger.client; public class Dog implements Animal {"
-            + " Dog(QueryBuilder queryBuilder) {} }",
+            + " public Dog(io.dagger.sdk.QueryBuilder queryBuilder) {} }",
         "io.dagger.client.Pet",
         "package io.dagger.client; public interface Pet {}",
         "io.dagger.client.PetClient",
         "package io.dagger.client; public class PetClient implements Pet {"
-            + " PetClient(QueryBuilder queryBuilder) {} }",
-        "io.dagger.client.QueryBuilder",
-        "package io.dagger.client; public class QueryBuilder {"
-            + " QueryBuilder chain(String field) { return this; }"
-            + " QueryBuilder executeNullableObjectQuery(String typeName)"
+            + " public PetClient(io.dagger.sdk.QueryBuilder queryBuilder) {} }",
+        "io.dagger.sdk.QueryBuilder",
+        "package io.dagger.sdk; public class QueryBuilder {"
+            + " public QueryBuilder chain(String field) { return this; }"
+            + " public QueryBuilder executeNullableObjectQuery(String typeName)"
             + " throws InterruptedException, java.util.concurrent.ExecutionException,"
-            + " io.dagger.client.exception.DaggerQueryException { return this; }"
+            + " io.dagger.sdk.exception.DaggerQueryException { return this; }"
             + " }",
-        "io.dagger.client.exception.DaggerQueryException",
-        "package io.dagger.client.exception;"
+        "io.dagger.sdk.exception.DaggerQueryException",
+        "package io.dagger.sdk.exception;"
             + " public class DaggerQueryException extends Exception {}");
   }
 
@@ -247,7 +245,8 @@ class NullableObjectCodegenTest {
 
   private static String generateInterface(Type type, String version) throws Exception {
     return javaFile(
-        new InterfaceVisitor(schemaAtVersion(version), REGISTRY, Path.of("."), StandardCharsets.UTF_8)
+        new InterfaceVisitor(
+                schemaAtVersion(version), REGISTRY, Path.of("."), StandardCharsets.UTF_8)
             .generateType(type));
   }
 

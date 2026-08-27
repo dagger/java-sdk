@@ -45,7 +45,9 @@ class ObjectVisitor extends AbstractVisitor {
               .addModifiers(Modifier.PUBLIC)
               .addParameter(registry().runtime("engineconn", "Connection"), "connection")
               .addStatement("this.connection = connection")
-              .addStatement("this.queryBuilder = new QueryBuilder(connection.getGraphQLClient())")
+              .addStatement(
+                  "this.queryBuilder = new $T(connection.getGraphQLClient())",
+                  registry().runtime("QueryBuilder"))
               .build();
       classBuilder.addMethod(constructor);
       classBuilder.addField(
@@ -73,9 +75,11 @@ class ObjectVisitor extends AbstractVisitor {
               .addJavadoc("Load any object by its ID using node(id:) with an inline fragment.\n")
               .beginControlFlow("try")
               .addStatement(
-                  "QueryBuilder qb = this.queryBuilder.chainNode(clazz.getSimpleName(), id)")
+                  "$T qb = this.queryBuilder.chainNode(clazz.getSimpleName(), id)",
+                  registry().runtime("QueryBuilder"))
               .addStatement(
-                  "return clazz.getDeclaredConstructor(QueryBuilder.class).newInstance(qb)")
+                  "return clazz.getDeclaredConstructor($T.class).newInstance(qb)",
+                  registry().runtime("QueryBuilder"))
               .nextControlFlow("catch (Exception e)")
               .addStatement("throw new RuntimeException(\"Failed to load object from ID\", e)")
               .endControlFlow()
@@ -260,7 +264,8 @@ class ObjectVisitor extends AbstractVisitor {
       fieldMethodBuilder.endControlFlow();
     }
     if (field.hasArgs()) {
-      fieldMethodBuilder.addStatement("Arguments.Builder builder = Arguments.newBuilder()");
+      fieldMethodBuilder.addStatement(
+          "$1T.Builder builder = $1T.newBuilder()", registry().runtime("Arguments"));
     }
     field
         .getRequiredArgs()
@@ -269,18 +274,22 @@ class ObjectVisitor extends AbstractVisitor {
                 fieldMethodBuilder.addStatement(
                     "builder.add($1S, $2L)", arg.getName(), Helpers.formatName(arg)));
     if (field.hasArgs()) {
-      fieldMethodBuilder.addStatement("Arguments fieldArgs = builder.build()");
+      fieldMethodBuilder.addStatement(
+          "$T fieldArgs = builder.build()", registry().runtime("Arguments"));
     }
     if (withOptionalArgs && field.hasOptionalArgs()) {
       fieldMethodBuilder.addStatement("fieldArgs = fieldArgs.merge(optArgs.toArguments())");
     }
     if (field.hasArgs()) {
       fieldMethodBuilder.addStatement(
-          "QueryBuilder nextQueryBuilder = this.queryBuilder.chain($S, fieldArgs)",
+          "$T nextQueryBuilder = this.queryBuilder.chain($S, fieldArgs)",
+          registry().runtime("QueryBuilder"),
           field.getName());
     } else {
       fieldMethodBuilder.addStatement(
-          "QueryBuilder nextQueryBuilder = this.queryBuilder.chain($S)", field.getName());
+          "$T nextQueryBuilder = this.queryBuilder.chain($S)",
+          registry().runtime("QueryBuilder"),
+          field.getName());
     }
 
     if (field.getTypeRef().isListOfObject()) {
@@ -293,7 +302,9 @@ class ObjectVisitor extends AbstractVisitor {
       fieldMethodBuilder.addStatement(
           "nextQueryBuilder = nextQueryBuilder.chain(List.of($S))", "id");
       fieldMethodBuilder.addStatement(
-          "List<QueryBuilder> builders = nextQueryBuilder.executeObjectListQuery($S)", objName);
+          "List<$T> builders = nextQueryBuilder.executeObjectListQuery($S)",
+          registry().runtime("QueryBuilder"),
+          objName);
       fieldMethodBuilder.addStatement(
           "return builders.stream().map(qb -> new $T(qb)).toList()", clientClass);
       fieldMethodBuilder
@@ -322,7 +333,8 @@ class ObjectVisitor extends AbstractVisitor {
               ? registry().forInterfaceClient(graphqlTypeName)
               : objectReturnType;
       fieldMethodBuilder.addStatement(
-          "QueryBuilder objectQueryBuilder = nextQueryBuilder.executeNullableObjectQuery($S)",
+          "$T objectQueryBuilder = nextQueryBuilder.executeNullableObjectQuery($S)",
+          registry().runtime("QueryBuilder"),
           graphqlTypeName);
       fieldMethodBuilder.addStatement(
           "return Optional.ofNullable(objectQueryBuilder).map(qb -> new $T(qb))", clientClass);
@@ -409,7 +421,7 @@ class ObjectVisitor extends AbstractVisitor {
     MethodSpec toArguments =
         MethodSpec.methodBuilder("toArguments")
             .returns(registry().runtime("Arguments"))
-            .addStatement("Arguments.Builder builder = Arguments.newBuilder()")
+            .addStatement("$1T.Builder builder = $1T.newBuilder()", registry().runtime("Arguments"))
             .addCode(CodeBlock.join(blocks, "\n"))
             .addStatement("\nreturn builder.build()")
             .build();
