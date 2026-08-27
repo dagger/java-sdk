@@ -69,6 +69,19 @@ public class QueryBuilder {
     this.inlineFragmentType = inlineFragmentType;
   }
 
+  /**
+   * A builder on the same session with no selection, for a query that has to start at the root
+   * rather than continue this one.
+   */
+  public QueryBuilder root() {
+    return new QueryBuilder(this.client);
+  }
+
+  /** The session this builder talks to, as the identity of that session. */
+  GraphQLClient client() {
+    return this.client;
+  }
+
   public QueryBuilder chain(String operation) {
     return chain(operation, Arguments.noArgs());
   }

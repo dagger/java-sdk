@@ -15,7 +15,7 @@ public class Dagger {
    *
    * @return Global Dagger client
    */
-  public static Client dag() {
+  public static synchronized Client dag() {
     if (dag == null) {
       try {
         dag = new Client(Connection.get(System.getProperty("user.dir")));
