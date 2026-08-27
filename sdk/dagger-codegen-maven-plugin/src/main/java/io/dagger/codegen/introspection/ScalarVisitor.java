@@ -31,8 +31,10 @@ class ScalarVisitor extends AbstractVisitor {
                     .addMember("value", "$T.class", registry().runtime("ScalarStringDeserializer"))
                     .build());
 
+    // Public: QueryBuilder instantiates scalars reflectively from io.dagger.sdk.
     MethodSpec constructor =
         MethodSpec.constructorBuilder()
+            .addModifiers(Modifier.PUBLIC)
             .addParameter(ClassName.get(String.class), "value")
             .addStatement("super(value)")
             .build();

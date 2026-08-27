@@ -42,6 +42,7 @@ class ObjectVisitor extends AbstractVisitor {
     if ("Query".equals(type.getName())) {
       MethodSpec constructor =
           MethodSpec.constructorBuilder()
+              .addModifiers(Modifier.PUBLIC)
               .addParameter(registry().runtime("engineconn", "Connection"), "connection")
               .addStatement("this.connection = connection")
               .addStatement("this.queryBuilder = new QueryBuilder(connection.getGraphQLClient())")
@@ -78,6 +79,16 @@ class ObjectVisitor extends AbstractVisitor {
               .nextControlFlow("catch (Exception e)")
               .addStatement("throw new RuntimeException(\"Failed to load object from ID\", e)")
               .endControlFlow()
+              .build());
+
+      // queryBuilder: the root builder, for code that has to start a chain from the client —
+      // the serve preamble of a generated module client, chiefly.
+      classBuilder.addMethod(
+          MethodSpec.methodBuilder("queryBuilder")
+              .addModifiers(Modifier.PUBLIC)
+              .returns(registry().runtime("QueryBuilder"))
+              .addJavadoc("The query builder at the root of this client.\n")
+              .addStatement("return this.queryBuilder")
               .build());
 
       // nodeQueryBuilder: create a QueryBuilder for node(id:) + inline fragment
@@ -149,9 +160,11 @@ class ObjectVisitor extends AbstractVisitor {
       }
     }
 
-    // Object constructor for query building
+    // Object constructor for query building. Public: a generated client package builds core
+    // types it returns, and a core type is loaded by ID from any package.
     MethodSpec constructor =
         MethodSpec.constructorBuilder()
+            .addModifiers(Modifier.PUBLIC)
             .addParameter(registry().runtime("QueryBuilder"), "queryBuilder")
             .addCode("this.queryBuilder = queryBuilder;")
             .build();
