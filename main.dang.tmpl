@@ -54,7 +54,8 @@ type JavaSdk {
     # resolve from ws.cwd and would be prefixed again when initModule is called
     # directly from a subdirectory instead of being driven by the engine.
     let target = if (modPath == ".") { "/" } else { "/" + modPath }
-    ws.withNewDirectory(target, renderedTemplate(name, selectedTemplate)).changes(ws)
+    # Init must never remove files already in the target directory.
+    ws.withDirectory(target, renderedTemplate(name, selectedTemplate)).changes(ws)
   }
 
   """
