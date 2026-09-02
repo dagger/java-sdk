@@ -41,6 +41,7 @@ import io.dagger.module.info.ObjectInfo;
 import io.dagger.module.info.ParameterInfo;
 import io.dagger.module.info.TypeInfo;
 import java.io.IOException;
+import java.io.Writer;
 import java.lang.reflect.InvocationTargetException;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -69,6 +70,8 @@ import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
+import javax.tools.FileObject;
+import javax.tools.StandardLocation;
 
 @SupportedAnnotationTypes({
   "io.dagger.module.annotation.Module",
@@ -84,6 +87,8 @@ import javax.lang.model.util.Elements;
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 @AutoService(Processor.class)
 public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
+
+  static final String DANG_ENTRYPOINT_PATH = "dagger/entrypoint/main.dang";
 
   private Elements elementUtils;
 
@@ -793,11 +798,28 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
       JavaFile f = generate(moduleInfo);
 
       f.writeTo(processingEnv.getFiler());
+      writeDangEntrypoint(moduleInfo);
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
 
     return true;
+  }
+
+  /**
+   * Emit the manifest-v2 entrypoint beside the compiled classes.
+   *
+   * <p>CLASS_OUTPUT rather than SOURCE_OUTPUT: the generation step vendors the whole
+   * SOURCE_OUTPUT tree as the module's Java sources, and this is not Java.
+   */
+  private void writeDangEntrypoint(ModuleInfo moduleInfo) throws IOException {
+    FileObject file =
+        processingEnv
+            .getFiler()
+            .createResource(StandardLocation.CLASS_OUTPUT, "", DANG_ENTRYPOINT_PATH);
+    try (Writer writer = file.openWriter()) {
+      writer.write(DangEntrypointRenderer.render(moduleInfo));
+    }
   }
 
   private static Boolean isNotBlank(String str) {
