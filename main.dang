@@ -111,6 +111,39 @@ type JavaSdk {
   }
 
   """
+  Generate a manifest-v2 entrypoint and manifest for one Java module.
+
+  An inspiration prototype for manifest v2, the Java counterpart to
+  dagger/go-sdk#36. Nothing loads the result yet: the generated Dang names a
+  `ModuleEntrypoint` interface and a `Workspace.cwd` field that engine
+  v1.0.0-beta.11 does not have. See
+  hack/designs/2026-09-02-manifest-v2-prototype.md.
+
+  Deliberately not a `@generate` function: `dagger generate` would otherwise
+  build and commit that dead entrypoint into every managed module in the
+  workspace.
+
+  `path` is relative to the workspace root, not to the caller's current
+  directory, so the default `.` means the workspace root.
+  """
+  pub generateV2(ws: Workspace!, path: String! = "."): Changeset! {
+    # cleanModulePath rejects paths that escape the workspace. It lives on Mod, so
+    # resolve through one before building the Mod for the requested path.
+    let paths = Mod(
+      rootPath: ".",
+      ws: ws,
+      skipGenerateFilename: skipGenerateFilename,
+      vendorSdkJar: vendorSdkJar,
+    )
+    Mod(
+      rootPath: paths.cleanModulePath(path),
+      ws: ws,
+      skipGenerateFilename: skipGenerateFilename,
+      vendorSdkJar: vendorSdkJar,
+    ).generateV2Module(ws)
+  }
+
+  """
   Generate every managed Java SDK module visible from the client's current
   location (runs at `dagger generate`). Discovery goes through modules(ws), so
   running from a subdirectory generates only the project you're in and the

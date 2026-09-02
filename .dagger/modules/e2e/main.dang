@@ -334,4 +334,191 @@ type E2e {
       + "  }\n"
       + "}\n"
   }
+
+  """
+  generateV2 should emit a Dang ModuleEntrypoint describing the same schema the
+  Java entrypoint registers at run time, plus a manifest-v2 body pointing at it.
+
+  Reuses the generate fixture rather than adding a managed module, so the module
+  inventory the discovery checks assert stays as it is.
+  """
+  manifestV2Check(ws: Workspace!): Void @check {
+    let changes = generatedV2(ws)
+    let entrypoint = changes.layer.file("src/generated/dang/entrypoint/main.dang").contents
+
+    assertContains(
+      entrypoint,
+      "type Entrypoint implements ModuleEntrypoint {",
+      "the generated Dang should implement ModuleEntrypoint",
+    )
+    assertContains(
+      entrypoint,
+      "pub types(workspace: Workspace!): [TypeDef!]! {",
+      "the entrypoint should expose types()",
+    )
+    assertContains(entrypoint, "): JSON! {", "the entrypoint should expose call()")
+    # An earlier informal draft of the interface had a third field naming the
+    # module's root object. The engine finds it from the constructor instead.
+    assert(
+      entrypoint.contains("main(") == false,
+      "ModuleEntrypoint has no main field",
+    )
+    assertContains(
+      entrypoint,
+      "receiverType: String!,",
+      "call should take a non-null receiverType",
+    )
+    assertContains(entrypoint, "fnArgs: JSON!,", "call should take fnArgs as JSON")
+    # types() returns every type the module defines. There is no separate field
+    # for the class whose name matches the module, and no special treatment of
+    # it: the engine finds the entry object from the type that has a constructor.
+    assertContains(
+      entrypoint,
+      "typeDef.withObject(\"GenerateApp\")",
+      "types() should include the module's own main class",
+    )
+    # The engine finds the entry object from the type that has a constructor, and
+    # accepts one across the whole module.
+    assert(
+      entrypoint.split(".withConstructor(").length == 2,
+      "exactly one type should declare a constructor",
+    )
+    assertContains(
+      entrypoint,
+      "function(\"greet\", typeDef.withKind(TypeDefKind.STRING_KIND))",
+      "types() should describe the module's own function",
+    )
+    assertContains(
+      entrypoint,
+      "experimentalPrivilegedNesting: true,",
+      "call() should run the module with nesting enabled",
+    )
+
+    let manifest = changes.layer.file("dagger-module.v2.toml").contents
+    assertContains(manifest, "manifestVersion = 2", "the manifest should declare version 2")
+    assertContains(manifest, "[entrypoint]", "the manifest should carry an entrypoint table")
+    assertContains(manifest, "kind = \"dang\"", "the entrypoint kind should be dang")
+    assertContains(
+      manifest,
+      "source = \"./src/generated/dang/entrypoint\"",
+      "the entrypoint source should be the generated Dang directory",
+    )
+    # A v2 manifest carries manifestVersion, name and entrypoint. The engine
+    # rejects any other top-level key.
+    assert(
+      manifest.contains("engineVersion") == false,
+      "the v2 manifest should not carry engineVersion",
+    )
+
+    # The v1 manifest has to keep working: this SDK reads a module's schema by
+    # asking the engine to load it, and beta.11 loads manifest v1 only. Paths in
+    # this changeset are module-relative, the workspace being anchored at the
+    # module. The fixture is configured by the legacy dagger.json, so a manifest
+    # replacement would land as a new dagger-module.toml beside it.
+    assert(
+      contains(changes.addedPaths, "dagger-module.toml") == false,
+      "generateV2 should not write a v1 manifest of its own",
+    )
+    assert(
+      contains(changes.modifiedPaths, "dagger.json") == false,
+      "generateV2 should not rewrite the fixture's legacy manifest",
+    )
+
+    null
+  }
+
+  """
+  The exported dispatcher should answer a manifest-v2 call request as a plain
+  process. The engine cannot load a manifest-v2 module yet, so this runs the
+  generated jar the way the generated call() field would, without a session:
+  no DAGGER_SESSION_* variables, so a dispatch that needed the engine would fail.
+  """
+  manifestV2DispatchCheck(ws: Workspace!): Void @check {
+    # receiverValue and fnArgs reach the entrypoint as JSON scalars, so JSON.encode
+    # writes them into the request as strings holding JSON text. A function call
+    # carries real receiver state; only a constructor sends the text "null".
+    let request = "{\"receiverType\": \"GenerateApp\", \"receiverValue\": \"{}\", \"fnName\": \"greet\", \"fnArgs\": \"{\\\"name\\\": \\\"World\\\"}\"}"
+
+    let output = container
+      .from("maven:3.9.9-eclipse-temurin-21-alpine@sha256:4cbb8bf76c46b97e028998f2486ed014759a8e932480431039bdb93dffe6813e")
+      .withoutEntrypoint
+      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
+      .withDirectory("/src", v2Module(ws), exclude: ["**/target/**"])
+      .withWorkdir("/src")
+      .withNewFile("/request.json", request)
+      .withExec(["mvn", "package", "-DskipTests", "--threads", "1C", "--no-transfer-progress"])
+      # The shade plugin leaves the pre-shaded artifact beside the shaded one.
+      .withExec([
+        "sh",
+        "-c",
+        "jar=$(ls -1 target/*.jar | grep -v '/original-' | head -n1); java -jar \"$jar\" engine-call < /request.json",
+      ])
+      .stdout
+
+    assertContains(
+      output,
+      "\"Hello, World\"",
+      "engine-call should dispatch the request and print the JSON result; got: " + output,
+    )
+
+    null
+  }
+
+  """
+  The generate fixture with a module that has one pure function, so a dispatch
+  needs no engine session.
+  """
+  let v2Root(ws: Workspace!): Directory! {
+    testWS(ws)
+      .directory("/", exclude: [fixtureRoot + "/.dagger-java-sdk-skip-generate"])
+      .withDirectory(
+        ".",
+        javaSdk.initModule(ws, name: "generate-app", path: generateModulePath).layer,
+      )
+      .withNewFile(
+        generateModulePath + "/src/main/java/io/dagger/modules/generateapp/GenerateApp.java",
+        greetSource,
+      )
+  }
+
+  """generateV2 run over that fixture."""
+  let generatedV2(ws: Workspace!): Changeset! {
+    javaSdk.generateV2(
+      v2Root(ws).asWorkspace(cwd: generateModulePath),
+      path: generateModulePath,
+    )
+  }
+
+  """The fixture module with the manifest-v2 output applied, ready to build."""
+  let v2Module(ws: Workspace!): Directory! {
+    v2Root(ws).directory(generateModulePath).withDirectory(".", generatedV2(ws).layer)
+  }
+
+  """
+  A module whose only function needs nothing from the engine, with a constructor
+  so the generated types() carries the one the engine looks for.
+  """
+  let greetSource: String! {
+    "package io.dagger.modules.generateapp;\n"
+      + "\n"
+      + "import io.dagger.module.annotation.Default;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class GenerateApp {\n"
+      + "  private String greeting;\n"
+      + "\n"
+      + "  public GenerateApp() {}\n"
+      + "\n"
+      + "  public GenerateApp(@Default(\"Hello\") String greeting) {\n"
+      + "    this.greeting = greeting;\n"
+      + "  }\n"
+      + "\n"
+      + "  @Function\n"
+      + "  public String greet(String name) {\n"
+      + "    return \"Hello, \" + name;\n"
+      + "  }\n"
+      + "}\n"
+  }
 }
