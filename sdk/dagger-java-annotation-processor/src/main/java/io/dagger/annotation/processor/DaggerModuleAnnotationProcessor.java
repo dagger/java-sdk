@@ -17,6 +17,7 @@ import io.dagger.client.FunctionCallArgValue;
 import io.dagger.client.ID;
 import io.dagger.client.JSON;
 import io.dagger.client.JsonConverter;
+import io.dagger.client.ModuleDispatcher;
 import io.dagger.client.TypeDef;
 import io.dagger.client.exception.DaggerExecException;
 import io.dagger.client.exception.DaggerQueryException;
@@ -446,9 +447,10 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
       rm.addCode(";\n") // end of module instantiation
           .addStatement("return module.id()");
 
+      // The manifest-v2 entrypoint calls this directly, with no ambient FunctionCall.
       var im =
-          MethodSpec.methodBuilder("invoke")
-              .addModifiers(Modifier.PRIVATE)
+          MethodSpec.methodBuilder("daggerDispatch")
+              .addModifiers(Modifier.PUBLIC, Modifier.STATIC)
               .returns(JSON.class)
               .addException(Exception.class)
               .addParameter(JSON.class, "parentJson")
@@ -520,6 +522,14 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                               .returns(void.class)
                               .addParameter(String[].class, "args")
                               .beginControlFlow(
+                                  "if (args.length > 0 && $S.equals(args[0]))", "engine-call")
+                              .addStatement(
+                                  "$T.exit($T.engineCallMain($T::daggerDispatch))",
+                                  System.class,
+                                  ModuleDispatcher.class,
+                                  ClassName.get("io.dagger.gen.entrypoint", "Entrypoint"))
+                              .endControlFlow()
+                              .beginControlFlow(
                                   "try ($T telemetry = new $T())", Telemetry.class, Telemetry.class)
                               .addStatement(
                                   "new Entrypoint().dispatch($T.dag().currentFunctionCall())",
@@ -558,7 +568,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                               .addStatement("result = $T.toJSON(modID)", JsonConverter.class)
                               .nextControlFlow("else")
                               .addStatement(
-                                  "result = invoke(parentJson, parentName, fnName, inputArgs)")
+                                  "result = daggerDispatch(parentJson, parentName, fnName, inputArgs)")
                               .endControlFlow()
                               .addStatement("fnCall.returnValue(result)")
                               .addStatement("return null")
