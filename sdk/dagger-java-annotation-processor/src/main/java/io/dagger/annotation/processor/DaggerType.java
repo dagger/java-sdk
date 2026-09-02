@@ -18,6 +18,12 @@ public abstract class DaggerType {
 
   abstract CodeBlock toDaggerTypeDef();
 
+  /**
+   * The same type definition as {@link #toDaggerTypeDef()}, rendered as Dang source for a
+   * manifest-v2 module entrypoint. The two must describe the same schema.
+   */
+  abstract String toDangTypeDef();
+
   abstract CodeBlock toJavaType();
 
   CodeBlock toClass() {
@@ -130,6 +136,11 @@ public abstract class DaggerType {
     }
 
     @Override
+    String toDangTypeDef() {
+      return "typeDef.withEnum(" + Dang.quote(simpleName) + ")";
+    }
+
+    @Override
     CodeBlock toJavaType() {
       return CodeBlock.of("$T", ClassName.bestGuess(qualifiedName));
     }
@@ -144,25 +155,35 @@ public abstract class DaggerType {
       this.isOptional = isOptional;
     }
 
-    @Override
-    CodeBlock toDaggerTypeDef() {
+    private String kindName() {
       String name =
           switch (simpleName) {
             case "byte", "short", "int", "long", "char" -> "integer";
             case "float", "double" -> "float";
             default -> simpleName;
           };
+      return "%s_KIND".formatted(name.toUpperCase());
+    }
+
+    @Override
+    CodeBlock toDaggerTypeDef() {
       CodeBlock.Builder cb =
           CodeBlock.builder()
               .add(
                   "$T.dag().typeDef().withKind($T.$L)",
                   Dagger.class,
                   TypeDefKind.class,
-                  "%s_KIND".formatted(name.toUpperCase()));
+                  kindName());
       if (isOptional) {
         cb.add(".withOptional(true)");
       }
       return cb.build();
+    }
+
+    @Override
+    String toDangTypeDef() {
+      String def = "typeDef.withKind(TypeDefKind." + kindName() + ")";
+      return isOptional ? def + ".withOptional(true)" : def;
     }
 
     @Override
@@ -206,6 +227,11 @@ public abstract class DaggerType {
     }
 
     @Override
+    String toDangTypeDef() {
+      return "typeDef.withScalar(" + Dang.quote(simpleName) + ")";
+    }
+
+    @Override
     CodeBlock toJavaType() {
       return CodeBlock.of("$T", ClassName.bestGuess(qualifiedName));
     }
@@ -221,6 +247,11 @@ public abstract class DaggerType {
     @Override
     CodeBlock toDaggerTypeDef() {
       return CodeBlock.builder().add(inner.toDaggerTypeDef()).add(".withOptional(true)").build();
+    }
+
+    @Override
+    String toDangTypeDef() {
+      return inner.toDangTypeDef() + ".withOptional(true)";
     }
 
     @Override
@@ -249,6 +280,11 @@ public abstract class DaggerType {
     }
 
     @Override
+    String toDangTypeDef() {
+      return "typeDef.withObject(" + Dang.quote(simpleName) + ")";
+    }
+
+    @Override
     CodeBlock toJavaType() {
       return CodeBlock.of("$T", ClassName.bestGuess(qualifiedName));
     }
@@ -269,6 +305,11 @@ public abstract class DaggerType {
               .add(of(innerName).toDaggerTypeDef())
               .add(")");
       return cb.build();
+    }
+
+    @Override
+    String toDangTypeDef() {
+      return "typeDef.withListOf(" + of(innerName).toDangTypeDef() + ")";
     }
 
     @Override
@@ -305,6 +346,11 @@ public abstract class DaggerType {
               .add(of(innerName).toDaggerTypeDef())
               .add(")");
       return cb.build();
+    }
+
+    @Override
+    String toDangTypeDef() {
+      return "typeDef.withListOf(" + of(innerName).toDangTypeDef() + ")";
     }
 
     @Override
