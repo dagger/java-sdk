@@ -17,6 +17,7 @@ import io.dagger.client.FunctionCallArgValue;
 import io.dagger.client.ID;
 import io.dagger.client.JSON;
 import io.dagger.client.JsonConverter;
+import io.dagger.client.ModuleDispatcher;
 import io.dagger.client.TypeDef;
 import io.dagger.client.exception.DaggerExecException;
 import io.dagger.client.exception.DaggerQueryException;
@@ -40,6 +41,7 @@ import io.dagger.module.info.ObjectInfo;
 import io.dagger.module.info.ParameterInfo;
 import io.dagger.module.info.TypeInfo;
 import java.io.IOException;
+import java.io.Writer;
 import java.lang.reflect.InvocationTargetException;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -68,6 +70,8 @@ import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
+import javax.tools.FileObject;
+import javax.tools.StandardLocation;
 
 @SupportedAnnotationTypes({
   "io.dagger.module.annotation.Module",
@@ -83,6 +87,8 @@ import javax.lang.model.util.Elements;
 @SupportedSourceVersion(SourceVersion.RELEASE_17)
 @AutoService(Processor.class)
 public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
+
+  static final String DANG_ENTRYPOINT_PATH = "dagger/entrypoint/main.dang";
 
   private Elements elementUtils;
 
@@ -446,9 +452,10 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
       rm.addCode(";\n") // end of module instantiation
           .addStatement("return module.id()");
 
+      // The manifest-v2 entrypoint calls this directly, with no ambient FunctionCall.
       var im =
-          MethodSpec.methodBuilder("invoke")
-              .addModifiers(Modifier.PRIVATE)
+          MethodSpec.methodBuilder("daggerDispatch")
+              .addModifiers(Modifier.PUBLIC, Modifier.STATIC)
               .returns(JSON.class)
               .addException(Exception.class)
               .addParameter(JSON.class, "parentJson")
@@ -520,6 +527,14 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                               .returns(void.class)
                               .addParameter(String[].class, "args")
                               .beginControlFlow(
+                                  "if (args.length > 0 && $S.equals(args[0]))", "engine-call")
+                              .addStatement(
+                                  "$T.exit($T.engineCallMain($T::daggerDispatch))",
+                                  System.class,
+                                  ModuleDispatcher.class,
+                                  ClassName.get("io.dagger.gen.entrypoint", "Entrypoint"))
+                              .endControlFlow()
+                              .beginControlFlow(
                                   "try ($T telemetry = new $T())", Telemetry.class, Telemetry.class)
                               .addStatement(
                                   "new Entrypoint().dispatch($T.dag().currentFunctionCall())",
@@ -558,7 +573,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                               .addStatement("result = $T.toJSON(modID)", JsonConverter.class)
                               .nextControlFlow("else")
                               .addStatement(
-                                  "result = invoke(parentJson, parentName, fnName, inputArgs)")
+                                  "result = daggerDispatch(parentJson, parentName, fnName, inputArgs)")
                               .endControlFlow()
                               .addStatement("fnCall.returnValue(result)")
                               .addStatement("return null")
@@ -783,11 +798,28 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
       JavaFile f = generate(moduleInfo);
 
       f.writeTo(processingEnv.getFiler());
+      writeDangEntrypoint(moduleInfo);
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
 
     return true;
+  }
+
+  /**
+   * Emit the manifest-v2 entrypoint beside the compiled classes.
+   *
+   * <p>CLASS_OUTPUT rather than SOURCE_OUTPUT: the generation step vendors the whole
+   * SOURCE_OUTPUT tree as the module's Java sources, and this is not Java.
+   */
+  private void writeDangEntrypoint(ModuleInfo moduleInfo) throws IOException {
+    FileObject file =
+        processingEnv
+            .getFiler()
+            .createResource(StandardLocation.CLASS_OUTPUT, "", DANG_ENTRYPOINT_PATH);
+    try (Writer writer = file.openWriter()) {
+      writer.write(DangEntrypointRenderer.render(moduleInfo));
+    }
   }
 
   private static Boolean isNotBlank(String str) {

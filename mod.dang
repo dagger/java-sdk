@@ -198,6 +198,25 @@ type Mod {
   directory (the entrypoint) for vendoring under <module>/src/generated/java.
   """
   let generatedEntrypoint(moduleDir: Directory!, name: String!): Directory! {
+    processed(moduleDir, name).directory("/module/target/generated-sources/annotations")
+  }
+
+  """
+  The manifest-v2 entrypoint the processor emits alongside the Java one, as Dang.
+
+  It is written as a resource rather than a source file, so it lands beside the
+  compiled classes instead of in the generated-sources tree that becomes the
+  module's committed Java.
+  """
+  let generatedDangEntrypoint(moduleDir: Directory!, name: String!): File! {
+    processed(moduleDir, name).file("/module/target/classes/dagger/entrypoint/main.dang")
+  }
+
+  """
+  Run the annotation processor over a module and return the container, so both
+  of its outputs come from one build.
+  """
+  let processed(moduleDir: Directory!, name: String!): Container! {
     mvn
       .withoutEntrypoint
       .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
@@ -205,7 +224,6 @@ type Mod {
       .withWorkdir("/module")
       .withEnvVariable("_DAGGER_JAVA_SDK_MODULE_NAME", name)
       .withExec(["mvn", "compile", "-Ddagger.proc=full", "-Ddagger.sdk=prebuilt", "-Ddagger.sdk.version=" + name, "--no-transfer-progress"])
-      .directory("/module/target/generated-sources/annotations")
   }
 
   """
@@ -256,6 +274,89 @@ type Mod {
     # Baseline on the staged-dependency workspace, not the one handed in: the
     # dependencies' generated code belongs to their own SDKs, not this changeset.
     after.changes(wsWithDeps)
+  }
+
+  """
+  Stage the manifest-v2 entrypoint and manifest for this module, on top of the
+  regular generated output.
+
+  Prototype only — nothing loads either file yet. See
+  hack/designs/2026-09-02-manifest-v2-prototype.md.
+
+  The manifest is written as dagger-module.v2.toml rather than replacing
+  dagger-module.toml: this SDK reads a module's schema by asking the engine to
+  load it, and engine v1.0.0-beta.11 loads manifest v1 only. Replacing the
+  manifest would make the module unloadable, so this function could never run on
+  it twice.
+  """
+  let generateV2Module(ws: Workspace!): Changeset! {
+    let wsWithDeps = ws.withChanges(
+      ws.moduleSource(workspaceRef(rootPath)).generateLocalDependencies(ws),
+    )
+
+    let modSource = wsWithDeps.moduleSource(workspaceRef(rootPath))
+    let name = modSource.moduleName
+    let introspectionJSON = modSource.introspectionSchemaJSON
+    let vendored = vendoredSdk(introspectionJSON, name)
+
+    let baseDir = moduleDir(wsWithDeps, rootPath)
+      .withoutDirectory("sdk")
+      .withDirectory("sdk", vendored)
+      .withoutDirectory("src/generated")
+
+    let staged = wsWithDeps
+      .withNewDirectory(workspaceRef(joinPath(rootPath, "sdk")), vendored)
+      .withNewDirectory(
+        workspaceRef(joinPath(rootPath, "src/generated/java")),
+        generatedEntrypoint(baseDir, name),
+      )
+      .withNewFile(
+        workspaceRef(joinPath(rootPath, "src/generated/dang/entrypoint/main.dang")),
+        generatedDangEntrypoint(baseDir, name).contents,
+      )
+      .withNewFile(
+        workspaceRef(joinPath(rootPath, "dagger-module.v2.toml")),
+        # Exactly the three top-level keys a v2 manifest may carry. The engine
+        # rejects any other, engineVersion included.
+        "manifestVersion = 2\n"
+          + "name = \""
+          + tomlString(modSource.moduleOriginalName)
+          + "\"\n"
+          + "\n"
+          + "[entrypoint]\n"
+          + "kind = \"dang\"\n"
+          + "source = \"./src/generated/dang/entrypoint\"\n",
+      )
+
+    let after = if (vendorSdkJar) {
+      staged.withNewDirectory(
+        workspaceRef(joinPath(rootPath, "sdk/repo")),
+        vendoredSdkJar(introspectionJSON, name),
+      )
+    } else {
+      staged
+    }
+
+    after.changes(wsWithDeps)
+  }
+
+  """
+  Escape a value for a TOML basic string.
+
+  TOML gives backslash, quote, backspace, form feed, newline, carriage return and
+  tab their own escapes and forbids the remaining control characters outright.
+  Covering all seven means a module name cannot produce a manifest the engine
+  reads differently from the one intended.
+  """
+  let tomlString(value: String!): String! {
+    value
+      .replace("\\", "\\\\")
+      .replace("\"", "\\\"")
+      .replace("\u0008", "\\b")
+      .replace("\u000c", "\\f")
+      .replace("\n", "\\n")
+      .replace("\r", "\\r")
+      .replace("\t", "\\t")
   }
 
   """
