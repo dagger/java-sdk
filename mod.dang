@@ -24,51 +24,12 @@ type Mod {
   let vendorSdkJar: Boolean!
 
   """
-  This module root relative to the client's current location: "." when the cwd is
-  the module itself, "sub/mod" for a module beneath it, ".." for an enclosing one.
-  A cwd-relative view of rootPath, so listings read the way a shell user would.
+  Whether this module root or an ancestor holds the configured generate skip
+  marker. Looked up from the workspace root: rootPath is workspace-relative, and
+  a relative findUp would resolve from the client's cwd instead.
   """
-  path: String! {
-    let cwd = ws.cwd.trimPrefix("/").trimSuffix("/")
-    if (rootPath == cwd) {
-      "."
-    } else if (cwd == "") {
-      rootPath
-    } else if (rootPath.trimPrefix(cwd + "/") != rootPath) {
-      rootPath.trimPrefix(cwd + "/")
-    } else if (rootPath == "." or cwd.trimPrefix(rootPath + "/") != cwd) {
-      let rootDepth = if (rootPath == ".") { 0 } else { rootPath.split("/").length }
-      cwd.split("/").dropFirst(rootDepth).map { segment => ".." }.join("/")
-    } else {
-      rootPath
-    }
-  }
-
-  """
-  Whether this module or an ancestor contains the configured generate skip marker.
-  """
-  skipGenerate(ws: Workspace!): Boolean! {
-    hasMarker(ws, skipGenerateFilename)
-  }
-
-  """
-  Whether this module root or an ancestor containes a marker filename.
-  """
-  let hasMarker(ws: Workspace!, filename: String!): Boolean! {
-    let markerPath = ws.findUp(name: filename, from: rootPath)
-    markerPath != null
-  }
-
-  """
-  Generate this module.
-  If the generate skip marker is present, the changeset is empty.
-  """
-  generate(ws: Workspace!): Changeset! {
-    if (skipGenerate(ws)) {
-      changeset
-    } else {
-      generateModule(ws)
-    }
+  skipGenerate: Boolean! {
+    ws.findUp(name: skipGenerateFilename, from: workspaceRef(rootPath)) != null
   }
 
   """
@@ -209,24 +170,11 @@ type Mod {
   }
 
   """
-  Stage the vendored SDK + generated entrypoint for one module.
-
-  The returned changeset is relative to the client's cwd, the form the engine
-  applies a generator's result in: past v1.0.0-beta.10 every Workspace.changes
-  result is measured from the workspace cwd, so staging onto the workspace value
-  and diffing it against the baseline the caller already holds is all this needs.
+  The workspace with this module's vendored SDK and generated entrypoint merged
+  in. The generate skip marker is not applied here; the caller applies it.
   """
-  let generateModule(ws: Workspace!): Changeset! {
-    # A module that depends on another by local path cannot resolve its own
-    # schema until that dependency has been generated, so overlay the generated
-    # closure onto the workspace first. The engine skips remote dependencies —
-    # assumed committed, as it does itself — and returns an empty changeset when
-    # there is nothing to stage.
-    let wsWithDeps = ws.withChanges(
-      ws.moduleSource(workspaceRef(rootPath)).generateLocalDependencies(ws),
-    )
-
-    let modSource = wsWithDeps.moduleSource(workspaceRef(rootPath))
+  generated: Workspace! {
+    let modSource = ws.moduleSource(workspaceRef(rootPath))
     let name = modSource.moduleName
     let introspectionJSON = modSource.introspectionSchemaJSON
     let vendored = vendoredSdk(introspectionJSON, name)
@@ -234,17 +182,17 @@ type Mod {
     # the module as committed, with the whole committed sdk/ dropped (source and
     # any previously vendored jar) and the freshly vendored SDK sources overlaid,
     # plus any stale generated entrypoint dropped so the processor regenerates it
-    let baseDir = moduleDir(wsWithDeps, rootPath)
+    let baseDir = moduleDir(ws, rootPath)
       .withoutDirectory("sdk")
       .withDirectory("sdk", vendored)
       .withoutDirectory("src/generated")
     let entrypoint = generatedEntrypoint(baseDir, name)
 
-    let staged = wsWithDeps
+    let staged = ws
       .withNewDirectory(workspaceRef(joinPath(rootPath, "sdk")), vendored)
       .withNewDirectory(workspaceRef(joinPath(rootPath, "src/generated/java")), entrypoint)
 
-    let after = if (vendorSdkJar) {
+    if (vendorSdkJar) {
       staged.withNewDirectory(
         workspaceRef(joinPath(rootPath, "sdk/repo")),
         vendoredSdkJar(introspectionJSON, name),
@@ -252,10 +200,6 @@ type Mod {
     } else {
       staged
     }
-
-    # Baseline on the staged-dependency workspace, not the one handed in: the
-    # dependencies' generated code belongs to their own SDKs, not this changeset.
-    after.changes(wsWithDeps)
   }
 
   """
@@ -289,35 +233,5 @@ type Mod {
   """
   let joinPath(modPathArg: String!, sub: String!): String! {
     if (modPathArg == ".") { sub } else { modPathArg + "/" + sub }
-  }
-
-  """
-  Return the default new module path for `init`.
-  """
-  let defaultModulePath(ws: Workspace!, name: String!): String! {
-    let daggerDir = ws.findUp(".dagger", ".")
-    if (daggerDir == null) {
-      ".dagger/modules/" + name
-    } else {
-      daggerDir.trimPrefix("/") + "/modules/" + name
-    }
-  }
-
-  """
-  Return a valid module path relative to the workspace.
-  """
-  let cleanModulePath(path: String!): String! {
-    let rawPath = path.trimPrefix("./").trimPrefix("/")
-
-    if (rawPath == "" or rawPath == ".") {
-      "."
-    } else if (rawPath == ".."
-      or rawPath.trimPrefix("../") != rawPath
-      or rawPath.contains("/../")
-      or rawPath.trimSuffix("/..") != rawPath) {
-      raise "path escapes workspace: " + rawPath
-    } else {
-      rawPath.trimSuffix("/")
-    }
   }
 }
