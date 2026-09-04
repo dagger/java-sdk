@@ -1,0 +1,10 @@
+name = "engine-e2e"
+engineVersion = "v1.0.0-0"
+
+[runtime]
+  source = "dang"
+
+[[dependencies]]
+  name = "engine-dev"
+  source = "github.com/dagger/dagger/.dagger/modules/engine-dev@78c241b6ce5f950461c74811e768f92e946e2ca7"
+  pin = "78c241b6ce5f950461c74811e768f92e946e2ca7"

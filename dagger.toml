@@ -11,6 +11,9 @@ source = ".dagger/modules/e2e"
 # instead (engine-e-2-e:sdk-contract-check).
 check.skip = ["*"]
 
+[modules.engine-e2e]
+source = ".dagger/modules/engine-e2e"
+
 [modules.packager]
 source = ".dagger/modules/packager"
 
