@@ -6,7 +6,7 @@ The released engine has none of that change, so every call into the java-sdk
 module fails there. These checks build the engine and run the SDK inside it.
 """
 type EngineE2e {
-  let engineCommit: String! = "78c241b6ce5f950461c74811e768f92e946e2ca7"
+  let engineCommit: String! = "7e6fc93c86f0bf0eebae8c2c74a249c3b5cc451f"
   let modulePath: String! = ".dagger/modules/sdk-smoke"
 
   let assert(condition: Boolean!, message: String!): Void {
@@ -67,7 +67,7 @@ type EngineE2e {
   """
   pub sdkContractCheck(ws: Workspace!): Void @check {
     playground(ws)
-      .withExec(["dagger", "call", "e-2-e", "detect-scope-check"])
+      .withExec(["dagger", "call", "e-2-e", "find-client-root-check"])
       .withExec(["dagger", "call", "e-2-e", "skip-generate-filename-check"])
       .withExec(["dagger", "call", "e-2-e", "generate-scope-skip-check"])
       .withExec(["dagger", "call", "e-2-e", "generate-scope-clients-check"])

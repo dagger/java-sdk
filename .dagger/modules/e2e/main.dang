@@ -85,19 +85,19 @@ type E2e {
   }
 
   """
-  detectScope answers with the directory of the nearest pom.xml, as a path
+  findClientRoot answers with the directory of the nearest pom.xml, as a path
   relative to the workspace root: the module itself from inside it, the owning
   module from a subdirectory, the owning module from inside its vendored SDK,
-  and nothing where no pom.xml is in scope.
+  and null where no pom.xml is in scope.
   """
-  detectScopeCheck(ws: Workspace!): Void @check {
+  findClientRootCheck(ws: Workspace!): Void @check {
     assert(
-      javaSdk.detectScope(ws.withWorkdir(lookupModulePath)) == lookupModulePath,
-      "detectScope should answer with the module root itself",
+      javaSdk.findClientRoot(ws.withWorkdir(lookupModulePath)) == lookupModulePath,
+      "findClientRoot should answer with the module root itself",
     )
     assert(
-      javaSdk.detectScope(ws.withWorkdir(lookupNestedPath)) == lookupModulePath,
-      "detectScope should find the module owning a nested path",
+      javaSdk.findClientRoot(ws.withWorkdir(lookupNestedPath)) == lookupModulePath,
+      "findClientRoot should find the module owning a nested path",
     )
 
     # A module's vendored SDK has no pom.xml of its own, so the module answers
@@ -105,17 +105,17 @@ type E2e {
     let vendored = lookupModulePath + "/sdk/src/main/java"
     let withVendoredSdk = ws.withNewFile("/" + vendored + "/.keep", "")
     assert(
-      javaSdk.detectScope(withVendoredSdk.withWorkdir(vendored)) == lookupModulePath,
-      "detectScope should answer with the module owning a vendored sdk/",
+      javaSdk.findClientRoot(withVendoredSdk.withWorkdir(vendored)) == lookupModulePath,
+      "findClientRoot should answer with the module owning a vendored sdk/",
     )
 
     assert(
-      javaSdk.detectScope(ws.withWorkdir(nonJavaModulePath)) == "",
-      "a module of another SDK, with no pom.xml, is not a Java scope",
+      javaSdk.findClientRoot(ws.withWorkdir(nonJavaModulePath)) == null,
+      "a module of another SDK, with no pom.xml, is not a Java client root",
     )
     assert(
-      javaSdk.detectScope(ws.withWorkdir(".")) == "",
-      "the workspace root is not a Java scope",
+      javaSdk.findClientRoot(ws.withWorkdir(".")) == null,
+      "the workspace root is not a Java client root",
     )
 
     null

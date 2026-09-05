@@ -34,16 +34,16 @@ type JavaSdk {
   let targetRuntime: String! = "github.com/dagger/java-sdk/runtime"
 
   """
-  Detect the Java SDK scope containing the workspace cwd: the directory of the
+  The Java client root containing the workspace cwd: the directory of the
   nearest pom.xml, relative to the workspace root. Every Java module has one at
   its root, and the SDK vendored under a module carries none of its own, so the
-  nearest hit is always the owning module. Empty when there is none — a project
-  built with anything but Maven is not a scope this SDK can serve.
+  nearest hit is always the owning module. Null when there is none — a project
+  built with anything but Maven is not a root this SDK can serve.
   """
-  detectScope(ws: Workspace!): String! {
+  findClientRoot(ws: Workspace!): String {
     let found = ws.findUp("pom.xml")
     if (found == null) {
-      ""
+      null
     } else {
       normalizePath(found.trimSuffix("pom.xml"))
     }
@@ -153,13 +153,13 @@ type JavaSdk {
     } else {
       moduleManifest(loadJSON: ws.file(scopeRef(scope, "dagger.json")))
     }
-    # Cleared structurally rather than by name: withoutDependency matches an
-    # unnamed dependency on its source, not on the module name it resolves to,
-    # and resolving the recorded dependencies to read their names would fail
-    # generation on one stale entry instead of dropping it.
+    # Cleared structurally rather than by name: withoutLegacyRuntimeDependency
+    # matches an unnamed dependency on its source, not on the module name it
+    # resolves to, and resolving the recorded dependencies to read their names
+    # would fail generation on one stale entry instead of dropping it.
     let configured = clients.{{moduleName, kind, sourceRootSubpath, asString, pin}}
-      .reduce(loaded.withoutDependencies) { manifest, client =>
-        manifest.withDependency(
+      .reduce(loaded.withoutLegacyRuntimeDependencies) { manifest, client =>
+        manifest.withLegacyRuntimeDependency(
           source: dependencySource(scope, client.kind, client.sourceRootSubpath, client.asString),
           name: client.moduleName,
           pin: client.pin,

@@ -10,7 +10,7 @@ Every claim in this document was checked against these exact revisions.
 | What | Revision |
 | --- | --- |
 | This repository (`dagger/java-sdk`), base of the change | `be18cc2d64951628a79ae7da626ab2427b6a2436` |
-| The engine change, `dagger/dagger#13992`, branch `sdk-ux-module-max` | `78c241b6ce5f950461c74811e768f92e946e2ca7` |
+| The engine change, `dagger/dagger#13992`, branch `sdk-ux-module-max` | `7e6fc93c86f0bf0eebae8c2c74a249c3b5cc451f` |
 | The precedent, `dagger/python-sdk#25`, head | `c05426e0fbef5d758184667d62ddc406591b8192` (merged as `d8f8eca33c75c1113ba8412b3d3ad626a0c9b0ef`) |
 | The released engine and CLI this repository's CI runs | `v1.0.0-beta.11` |
 
@@ -36,8 +36,10 @@ Three removals break it:
 The replacement is two required functions and one optional one, declared in
 `core/sdkmodule/provider.go`:
 
-- `detectScope(ws: Workspace!): String!` returns the workspace-relative path of
-  the nearest scope that contains the workspace cwd, or `""` when there is none.
+- `findClientRoot(ws: Workspace!): String` returns the workspace-relative path
+  of the nearest client root that contains the workspace cwd, or null when there
+  is none. The result is nullable: an SDK reports "no root here" with null, not
+  with the empty string.
 - `generateScope(ws: Workspace!, isModule: Boolean!, name: String!, clients: [ModuleSource!]!): Workspace!`
   receives a workspace whose cwd is already the scope, and returns the complete
   scope: the starter template and a module manifest when the scope is new, and
@@ -58,7 +60,7 @@ Three sibling SDKs have already adopted the same interface the same way:
 
 ## Goals
 
-1. Implement `detectScope` and `generateScope`, and delete the beta interface
+1. Implement `findClientRoot` and `generateScope`, and delete the beta interface
    they replace.
 2. Write a module's `dagger-module.toml` through the engine's manifest builder,
    so dependency editing stays the engine's business.
@@ -104,7 +106,7 @@ Three sibling SDKs have already adopted the same interface the same way:
 
 ## Proposed approach
 
-### `detectScope`
+### `findClientRoot`
 
 A Java module always has a `pom.xml` at its root: the starter template writes
 one, and the module's build needs one. Nothing else in a generated module is a
@@ -113,8 +115,8 @@ build as extra source roots and carries no `pom.xml` of its own; the optional
 committed SDK jar under `<module>/sdk/repo` is accompanied by a `*.pom` file,
 which is not named `pom.xml` and so is not a marker either.
 
-So `detectScope` answers with the directory of the nearest `pom.xml` at or above
-the workspace cwd, as a path relative to the workspace root, and with `""` when
+So `findClientRoot` answers with the directory of the nearest `pom.xml` at or above
+the workspace cwd, as a path relative to the workspace root, and with null when
 there is none.
 
 This is the direct analogue of python-sdk's rule — the nearest `pyproject.toml` —
@@ -127,7 +129,7 @@ Consequences worth stating:
 
 - In a Maven multi-module project, the nearest `pom.xml` wins, so a Dagger
   module nested inside an aggregator resolves to itself, not to the aggregator.
-- A Gradle project has no `pom.xml`, so `detectScope` returns `""` and the
+- A Gradle project has no `pom.xml`, so `findClientRoot` returns null and the
   engine reports that client generation is unavailable there. This SDK builds
   modules with Maven; that is the correct answer, and the README says so.
 
@@ -166,7 +168,8 @@ holds for a scope that already had a config.
 
 **The manifest comes from the engine's builder.** `moduleManifest` builds and
 serializes both manifest formats (`tomlFile`, `legacyJSONFile`) and edits
-dependency entries (`withDependency`, `withoutDependency`). Dependency editing
+dependency entries (`withLegacyRuntimeDependency`,
+`withoutLegacyRuntimeDependency`). Dependency editing
 is the part this repository would otherwise have to implement itself, and the
 part it must not: rewriting an existing TOML manifest by hand means parsing and
 re-emitting a format the engine owns.
@@ -185,9 +188,11 @@ manifest is loaded from the file the module already has.
 
 **Clients become dependencies.** In a module scope, the complete client set
 replaces the module's dependency list: the manifest's dependencies are cleared
-structurally with the builder's `withoutDependencies`, then one entry is added
+structurally with the builder's `withoutLegacyRuntimeDependencies`, then one
+entry is added
 per client — a git client by its ref as is, a local client by its path relative
-to the module. Clearing by name would not do. `WithoutDependency` matches an
+to the module. Clearing by name would not do. `WithoutLegacyRuntimeDependency`
+matches an
 unnamed dependency on its *source*, and reading the recorded names means
 selecting `ModuleSource.dependencies`, which resolves every one of them, so a
 single stale or unreachable entry would fail generation instead of being
@@ -283,16 +288,20 @@ Two registrations go away:
   `as-sdk` marker, that `dagger module deps list` works. Every one of those
   statements is false after this change. `dagger/python-sdk#25` dropped the same
   dependency.
-- `[modules.dagger-dang-sdk.as-sdk]`, which registers this repository's own Dang
-  modules (the root module and `.dagger/modules/templates`) with the Dang SDK.
-  `as-sdk` is removed by #13992, and dang-sdk has not yet adopted the
-  replacement (`dagger/dang-sdk#13` is open), so there is no correct new form to
-  move this to. A stale `as-sdk` table would not fail — the engine's config
-  parser ignores unknown keys — but silently ignored configuration is worse than
-  no configuration. `[modules.dagger-dang-sdk]` itself stays installed. Nothing
-  is lost: Dang modules have no generated files to produce, and
-  `.dagger/modules/templates` keeps its own `@generate` hook, registered as an
-  ordinary module.
+One registration deliberately stays: `[modules.dagger-dang-sdk.as-sdk]`, which
+registers this repository's own Dang modules (the root module and
+`.dagger/modules/templates`) with the Dang SDK.
+
+An earlier revision of this design removed it, reasoning that `as-sdk` is
+removed by #13992, that dang-sdk has not adopted the replacement
+(`dagger/dang-sdk#13` is open), and that silently ignored configuration is worse
+than none. That was wrong, and CI said so. dang-sdk's generator fails outright
+when it finds no registration — `current module is not installed as an SDK in
+this workspace` — rather than reporting an empty module set, so removing the
+table turns `dagger-dang-sdk:generate` red. The module-max engine ignores the
+table, because its config parser ignores unknown keys, so keeping it costs
+nothing there. It comes out when dang-sdk adopts the new interface and can be
+registered under `[sdks.dang]` instead.
 
 ## Testing
 
@@ -331,7 +340,7 @@ in a development engine and are not covered by CI at all.
 | Where | Engine | What it covers |
 | --- | --- | --- |
 | `e-2-e:*` that do not call this module, `packager:*`, `templates:generate` | released, `v1.0.0-beta.11` | the SDK library build, its unit tests, the prebuilt assets, the templates |
-| `engine-e-2-e:*` | built from `sdk-ux-module-max` at `78c241b6ce5f950461c74811e768f92e946e2ca7` | the whole `detectScope` / `generateScope` contract |
+| `engine-e-2-e:*` | built from `sdk-ux-module-max` at `7e6fc93c86f0bf0eebae8c2c74a249c3b5cc451f` | the whole `findClientRoot` / `generateScope` contract |
 
 `[modules.e2e] check.skip = ["*"]` keeps a released-engine `dagger check` from
 attempting them. Every check the module has calls this SDK, so a wildcard says
@@ -374,7 +383,7 @@ slower; the figures bound the shape of the cost, not its exact value.
 Client handling stays inside Dang throughout: the checks call
 `javaSdk.generateScope(...)` and diff the result, and never go through
 `dagger module client add`. That CLI command is broken on `sdk-ux-module-max` at
-`78c241b6ce5f950461c74811e768f92e946e2ca7` — it loses the workspace overlay on
+`7e6fc93c86f0bf0eebae8c2c74a249c3b5cc451f` — it loses the workspace overlay on
 reload and silently writes nothing, on every SDK — and the fault is in the CLI
 (`internal/cmd/dagger/module_sdk.go`), not in any SDK's `generateScope`.
 python-sdk's checks avoid it the same way.
@@ -395,7 +404,7 @@ Two behaviours ship unchecked, deliberately:
 ### The engine pin
 
 Both the `engine-dev` dependency and the engine source are pinned to
-`78c241b6ce5f950461c74811e768f92e946e2ca7`, so CI does not float with a branch
+`7e6fc93c86f0bf0eebae8c2c74a249c3b5cc451f`, so CI does not float with a branch
 that force-pushes. Bumping the branch means bumping both, plus `dagger.lock`.
 
 ## Alternatives considered
@@ -417,9 +426,10 @@ for deterministic output. Rejected here: a Java module's manifest can carry
 dropping.
 
 **Migrate the Dang SDK registration to `[sdks.dang]` at the same time.** It
-would keep this repository's Dang modules registered with an SDK. Rejected: it
-names dang-sdk as the provider of an interface dang-sdk does not implement yet,
-so it would fail on the very engine it is meant to serve.
+would replace the `as-sdk` table this change keeps. Rejected: it names dang-sdk
+as the provider of an interface dang-sdk does not implement yet, so it would
+fail on the very engine it is meant to serve. Removing the table outright was
+tried and rejected too — see Registration.
 
 **Use `withLegacyJavaRuntime` and accept the engine's builtin `java` runtime.**
 Rejected: it would silently move every newly created module off this
@@ -435,9 +445,9 @@ is not ours to change, and the measurement above shows a skip list is enough.
 
 | Path | Change |
 | --- | --- |
-| `main.dang`, `main.dang.tmpl` | `detectScope`, `generateScope`; `initModule`, `targetRuntime`, `modules`, `generateAll` removed |
+| `main.dang`, `main.dang.tmpl` | `findClientRoot`, `generateScope`; `initModule`, `targetRuntime`, `modules`, `generateAll` removed |
 | `mod.dang` | `generated: Workspace!`; local-dependency staging removed; single workspace field; dead init helpers removed |
-| `dagger.toml` | `[modules.java-sdk]`, `[sdks.java]`, `[modules.engine-e2e]`, `[modules.e2e] check.skip`; `[modules.sdk-sdk]` and the `as-sdk` block removed |
+| `dagger.toml` | `[modules.java-sdk]`, `[sdks.java]`, `[modules.engine-e2e]`, `[modules.e2e] check.skip`; `[modules.sdk-sdk]` removed, the dang-sdk `as-sdk` table kept |
 | `dagger.lock` | the `engine-dev` dependency closure |
 | `.dagger/modules/e2e/fixtures/dagger.toml` | `[sdks.java]` with one scope per fixture |
 | `.dagger/modules/e2e/fixtures/**` | a `pom.xml` per fixture module; a client fixture |
@@ -497,8 +507,8 @@ placeholder, as they are today:
 - Add the `template: String! = "default"` constructor setting, so
   `dagger module init java --template legacy` reaches the template selection
   that `initModule`'s `template` argument used to carry.
-- Add `detectScope(ws)`: `ws.findUp("pom.xml")`, trimmed to its directory and
-  normalized, `""` when absent.
+- Add `findClientRoot(ws)`: `ws.findUp("pom.xml")`, trimmed to its directory and
+  normalized, null when absent.
 - Add `generateScope(ws, isModule, name, clients)` per the flow above.
 - Add private helpers: `moduleManifestFor` (seed or load),
   `withClientDependencies`, `dependencySource`, `relativePath`, `normalizePath`,
@@ -518,7 +528,7 @@ placeholder, as they are today:
 
 | Check | Replaces | Asserts |
 | --- | --- | --- |
-| `detect-scope-check` | `modules-check`, `modules-cwd-check` | the nearest `pom.xml` wins; a nested directory resolves to its module; a directory with no `pom.xml` above it gives `""` |
+| `find-client-root-check` | `modules-check`, `modules-cwd-check` | the nearest `pom.xml` wins; a nested directory resolves to its module; a directory with no `pom.xml` above it gives null |
 | `generate-scope-init-check` | `init-check`, `init-existing-check`, part of `generate-cwd-check` | a config-less scope gets the template, a `dagger-module.toml` naming this repository's runtime, and generated bindings; existing files survive; the cwd is unchanged; regenerating the module it just created changes nothing |
 | `generate-scope-clients-check` | new | a client is recorded as a dependency in the manifest the module has, `dagger-module.toml` or a pre-1.0 `dagger.json`, and removing it drops the entry again; a module with dependencies and no clients has them dropped; a new module generated with a client carries the client's type in its vendored bindings; a scope with no module is untouched; standalone clients raise |
 | `generate-scope-skip-check` | new | the skip marker holds an existing module and does not hold a new one |
@@ -529,7 +539,7 @@ Fixtures:
 
 - `.dagger/modules/e2e/fixtures/dagger.toml` moves to `[sdks.java]` + scopes.
 - Add `clients/dep`, a small Dang module used as a client.
-- Add a `pom.xml` to the fixture modules `detect-scope-check` reads, so they are
+- Add a `pom.xml` to the fixture modules `find-client-root-check` reads, so they are
   Java scopes rather than config-only stubs.
 - Keep `deps/app`, repurposed: it is the module with a recorded dependency and
   no clients, and it pins the dependency-dropping behaviour.
@@ -538,13 +548,14 @@ Fixtures:
   branch has a check.
 
 Root `dagger.toml`: add `[modules.java-sdk]`, `[sdks.java]`, and
-`[modules.e2e] check.skip`; remove `[modules.sdk-sdk]` and the `as-sdk` block.
+`[modules.e2e] check.skip`; remove `[modules.sdk-sdk]`. The dang-sdk `as-sdk`
+table stays: dang-sdk's generator fails without it.
 
 ### 2. `e2e: check the SDK against an engine built from sdk-ux-module-max`
 
 Add `.dagger/modules/engine-e2e`, its `[modules.engine-e2e]` registration, and
 the regenerated `dagger.lock`. The `engine-dev` dependency and the engine source
-both name `78c241b6ce5f950461c74811e768f92e946e2ca7`.
+both name `7e6fc93c86f0bf0eebae8c2c74a249c3b5cc451f`.
 
 ### 3. `README: document the module-scope model`
 

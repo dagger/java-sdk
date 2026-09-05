@@ -91,7 +91,7 @@ back to the engine.
 
 ## Module scopes
 
-A Java scope is a directory with a `pom.xml`. `detectScope` answers with the
+A Java scope is a directory with a `pom.xml`. `findClientRoot` answers with the
 nearest one at or above your current directory, which is how
 `dagger module client add` and friends find the module you are standing in. A
 project built with anything but Maven has no `pom.xml`, so this SDK reports no
