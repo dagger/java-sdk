@@ -1,19 +1,44 @@
 """
 End-to-end checks for the Java SDK helper module.
+
+Every check here calls the java-sdk module, which needs an engine with
+dagger/dagger#13992. They are listed in `[modules.e2e] check.skip` so a released
+engine does not attempt them, and `engine-e-2-e:sdk-contract-check` runs them as
+`dagger call` invocations inside an engine built from that change.
 """
 type E2e {
+  let fixtureRoot: String! = ".dagger/modules/e2e/fixtures"
+  # Scratch scopes, created in memory. Outside fixtureRoot, which carries a
+  # generate skip marker.
   let outputRoot: String! = ".dagger/modules/e2e/out"
 
-  let fixtureRoot: String! = ".dagger/modules/e2e/fixtures"
-  let generateModulePath: String! = fixtureRoot + "/generate/app"
+  # The Java identifiers in nullableReturnSource — package
+  # io.dagger.modules.newapp, class NewApp — are derived from this name by hand
+  # and have to be changed with it.
+  let newModuleName: String! = "new-app"
+  let newModulePath: String! = outputRoot + "/" + newModuleName
+  let clientAppPath: String! = outputRoot + "/client-app"
+
+  # managed-toml/app, deps/app, generate/app and skip/app are config-only stubs:
+  # no pom.xml and no sources. The fixture-wide skip marker is what keeps
+  # generateScope from trying to build them.
+
+  # A scope with no config of its own under the fixture-wide skip marker: the
+  # marker must not hold a module that does not exist yet.
+  let markedModulePath: String! = fixtureRoot + "/new/app"
   let lookupModulePath: String! = fixtureRoot + "/lookup/app"
   let lookupNestedPath: String! = lookupModulePath + "/nested"
-  let depsModulePath: String! = fixtureRoot + "/deps/app"
+  # A module using a different SDK, with no pom.xml: never a Java scope.
+  let nonJavaModulePath: String! = fixtureRoot + "/lookup/not-java"
   let skipModulePath: String! = fixtureRoot + "/skip/app"
   # A CLI 1.0 managed module: configured by dagger-module.toml, not dagger.json.
   let managedTomlModulePath: String! = fixtureRoot + "/managed-toml/app"
-  # A module using a different SDK; this SDK must never manage it.
-  let nonJavaModulePath: String! = fixtureRoot + "/lookup/not-java"
+  # A pre-1.0 module: configured by dagger.json, which is also where its
+  # dependencies are recorded.
+  let legacyJSONModulePath: String! = fixtureRoot + "/generate/app"
+  # A module that records a dependency and has no clients.
+  let depsModulePath: String! = fixtureRoot + "/deps/app"
+  let clientDepPath: String! = fixtureRoot + "/clients/dep"
 
   """
   Fail the current check when a condition is false.
@@ -45,14 +70,229 @@ type E2e {
   }
 
   """
-  New Java modules should target this repository's build/package-only runtime
-  rather than a builtin SDK name.
+  Assert that a string contains every substring.
   """
-  targetRuntimeCheck: Void @check {
+  let assertContainsAll(value: String!, wants: [String!]!): Void {
+    wants.each { want => assertContains(value, want, "expected to contain: " + want) }
+    null
+  }
+
+  """
+  Assert that a string does not contain a substring.
+  """
+  let assertNotContains(value: String!, want: String!, message: String!): Void {
+    assert(value.contains(want) == false, message)
+  }
+
+  """
+  findClientRoot answers with the directory of the nearest pom.xml, as a path
+  relative to the workspace root: the module itself from inside it, the owning
+  module from a subdirectory, the owning module from inside its vendored SDK,
+  and null where no pom.xml is in scope.
+  """
+  findClientRootCheck(ws: Workspace!): Void @check {
     assert(
-      javaSdk.targetRuntime == "github.com/dagger/java-sdk/runtime",
-      "targetRuntime should be the in-repo build/package-only runtime",
+      javaSdk.findClientRoot(ws.withWorkdir(lookupModulePath)) == lookupModulePath,
+      "findClientRoot should answer with the module root itself",
     )
+    assert(
+      javaSdk.findClientRoot(ws.withWorkdir(lookupNestedPath)) == lookupModulePath,
+      "findClientRoot should find the module owning a nested path",
+    )
+
+    # A module's vendored SDK has no pom.xml of its own, so the module answers
+    # for it; nothing has to lift a hit out of sdk/ the way python-sdk does.
+    let vendored = lookupModulePath + "/sdk/src/main/java"
+    let withVendoredSdk = ws.withNewFile("/" + vendored + "/.keep", "")
+    assert(
+      javaSdk.findClientRoot(withVendoredSdk.withWorkdir(vendored)) == lookupModulePath,
+      "findClientRoot should answer with the module owning a vendored sdk/",
+    )
+
+    assert(
+      javaSdk.findClientRoot(ws.withWorkdir(nonJavaModulePath)) == null,
+      "a module of another SDK, with no pom.xml, is not a Java client root",
+    )
+    assert(
+      javaSdk.findClientRoot(ws.withWorkdir(".")) == null,
+      "the workspace root is not a Java client root",
+    )
+
+    null
+  }
+
+  """
+  generateScope initializes a scope that has no config: the template, a
+  dagger-module.toml from the engine's manifest builder naming this repository's
+  runtime, and the generated bindings and entrypoint, all under the scope, with
+  the workspace cwd and the files already there untouched.
+
+  Generating the result again changes nothing: an existing module is generated
+  in place, its manifest is not rewritten, and generation is reproducible.
+  """
+  generateScopeInitCheck(ws: Workspace!): Void @check {
+    let scoped = ws
+      .withNewFile("/" + newModulePath + "/keep.txt", "keep\n")
+      .withWorkdir(newModulePath)
+    let generated = javaSdk.generateScope(scoped, isModule: true, name: newModuleName, clients: [])
+    let changes = generated.withWorkdir(".").changes(scoped.withWorkdir("."))
+
+    assert(generated.cwd == scoped.cwd, "generateScope must not change the workspace cwd")
+
+    assertAdded(changes, newModulePath + "/dagger-module.toml")
+    assert(
+      contains(changes.addedPaths, newModulePath + "/dagger.json") == false,
+      "initializing a scope must not write a dagger.json",
+    )
+    assertAdded(changes, newModulePath + "/pom.xml")
+    assertAdded(changes, newModulePath + "/src/main/java/io/dagger/modules/newapp/NewApp.java")
+    assertAdded(changes, newModulePath + "/sdk/src/main/java/io/dagger/client/Dagger.java")
+    assertAdded(changes, newModulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
+    assert(
+      changes.modifiedPaths.length == 0,
+      "initializing a scope modified existing files: " + changes.modifiedPaths.join(", "),
+    )
+    assert(
+      changes.removedPaths.length == 0,
+      "initializing a scope removed existing files: " + changes.removedPaths.join(", "),
+    )
+
+    assertContainsAll(changes.after.file(newModulePath + "/dagger-module.toml").contents, [
+      "name = \"" + newModuleName + "\"",
+      "engineVersion = \"",
+      "[runtime]",
+      "source = \"github.com/dagger/java-sdk/runtime\"",
+    ])
+    assertContainsAll(changes.after.file(newModulePath + "/pom.xml").contents, [
+      "<dagger.proc>none</dagger.proc>",
+      "<artifactId>" + newModuleName + "</artifactId>",
+    ])
+
+    let again = javaSdk
+      .generateScope(generated, isModule: true, name: newModuleName, clients: [])
+      .withWorkdir(".")
+      .changes(generated.withWorkdir("."))
+    assert(again.isEmpty, "regenerating an unchanged module should change nothing")
+
+    null
+  }
+
+  """
+  In a module scope the client set becomes the module's dependency set: a client
+  is recorded in the manifest the module actually has, dagger-module.toml or the
+  pre-1.0 dagger.json; a client that is no longer requested is dropped; and a
+  module that records a dependency and has no clients loses it. A scope without a
+  module is left alone, and standalone clients are refused rather than silently
+  skipped. Generating a new module with a client puts the client's types in that
+  module's bindings, which is what recording the dependency is for.
+  """
+  generateScopeClientsCheck(ws: Workspace!): Void @check {
+    let root = ws.withWorkdir(".")
+    let scoped = ws.withWorkdir(managedTomlModulePath)
+    let manifestPath = managedTomlModulePath + "/dagger-module.toml"
+    let client = ws.moduleSource("/" + clientDepPath)
+
+    let untouched = javaSdk
+      .generateScope(scoped, isModule: false, name: "managed-toml-app", clients: [])
+      .withWorkdir(".")
+      .changes(root)
+    assert(untouched.isEmpty, "a scope without a module should not be generated")
+
+    let refused = javaSdk
+      .generateScope(scoped, isModule: false, name: "managed-toml-app", clients: [client])
+      .cwd rescue "raised"
+    assert(refused == "raised", "generateScope should refuse standalone clients")
+
+    # Manifest contents are read from the returned workspace, not from the
+    # changeset: a changeset carries only the paths that changed, and a manifest
+    # that already records exactly the requested clients is deliberately left
+    # alone, so `after` would not have the file at all.
+    let withClient = javaSdk.generateScope(scoped, isModule: true, name: "managed-toml-app", clients: [client])
+    let added = withClient.withWorkdir(".").changes(root)
+    assert(contains(added.modifiedPaths, manifestPath), "adding a client should record it in the manifest")
+    assertContainsAll(withClient.file("/" + manifestPath).contents, [
+      "[[dependencies]]",
+      "name = \"client-dep\"",
+      "source = \"../../clients/dep\"",
+    ])
+    assert(
+      contains(added.addedPaths, managedTomlModulePath + "/dagger.json") == false,
+      "adding a client should not add a manifest the module did not have",
+    )
+
+    let withoutClient = javaSdk.generateScope(withClient, isModule: true, name: "managed-toml-app", clients: [])
+    assertNotContains(
+      withoutClient.file("/" + manifestPath).contents,
+      "client-dep",
+      "removing the last client should drop the dependency",
+    )
+
+    # The client set is the whole dependency set, so a module that records a
+    # dependency and has no clients loses it. Migrating a module therefore means
+    # re-registering each of its dependencies as a client.
+    let dropped = javaSdk.generateScope(ws.withWorkdir(depsModulePath), isModule: true, name: "deps-app", clients: [])
+    assertNotContains(
+      dropped.file("/" + depsModulePath + "/dagger-module.toml").contents,
+      "client-dep",
+      "a module with no clients should keep no dependencies",
+    )
+
+    # A pre-1.0 module records its dependencies in the dagger.json it already
+    # has, and is not given a dagger-module.toml alongside it.
+    let legacyScoped = ws.withWorkdir(legacyJSONModulePath)
+    let legacyManifestPath = legacyJSONModulePath + "/dagger.json"
+    let legacyWithClient = javaSdk.generateScope(legacyScoped, isModule: true, name: "generate-app", clients: [client])
+    assertContainsAll(legacyWithClient.file("/" + legacyManifestPath).contents, [
+      "\"name\": \"client-dep\"",
+      "\"source\": \"../../clients/dep\"",
+    ])
+    assert(
+      contains(legacyWithClient.withWorkdir(".").changes(root).addedPaths, legacyJSONModulePath + "/dagger-module.toml") == false,
+      "a pre-1.0 module should not be given a dagger-module.toml",
+    )
+
+    let legacyWithoutClient = javaSdk.generateScope(legacyScoped, isModule: true, name: "generate-app", clients: [])
+    assertNotContains(
+      legacyWithoutClient.file("/" + legacyManifestPath).contents,
+      "client-dep",
+      "a pre-1.0 module with no clients should keep no dependencies",
+    )
+
+    # The payoff: because the client is recorded as a dependency, the module's
+    # introspection schema carries its types and so do the generated bindings.
+    let clientApp = javaSdk
+      .generateScope(ws.withWorkdir(clientAppPath), isModule: true, name: "client-app", clients: [client])
+    let bindingsPath = clientAppPath + "/sdk/src/generated/java/io/dagger/client"
+    let bindings = clientApp.directory("/" + bindingsPath).entries
+    assert(
+      bindings.filter { entry => entry.contains("ClientDep") }.length > 0,
+      "no ClientDep binding under " + bindingsPath + ", only: " + bindings.join(", "),
+    )
+
+    null
+  }
+
+  """
+  A skip marker at or above a module root makes generateScope return an existing
+  module as it is, and does not hold a module that is being created.
+  """
+  generateScopeSkipCheck(ws: Workspace!): Void @check {
+    let root = ws.withWorkdir(".")
+
+    let existing = javaSdk
+      .generateScope(ws.withWorkdir(skipModulePath), isModule: true, name: "skip-app", clients: [])
+      .withWorkdir(".")
+      .changes(root)
+    assert(existing.isEmpty, "a skip-marked module should not be generated")
+
+    let created = javaSdk
+      .generateScope(ws.withWorkdir(markedModulePath), isModule: true, name: newModuleName, clients: [])
+      .withWorkdir(".")
+      .changes(root)
+    assertAdded(created, markedModulePath + "/dagger-module.toml")
+    assertAdded(created, markedModulePath + "/pom.xml")
+    assertAdded(created, markedModulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
+
     null
   }
 
@@ -68,234 +308,23 @@ type E2e {
   }
 
   """
-  initModule should seed only the SDK-owned template files: a two-pass pom
-  defaulting dagger.proc=none and the module sources, with the module name
-  substituted into paths and contents. Engine-owned files (dagger-module.toml,
-  the legacy dagger.json) are produced by the engine, not by initModule, and no
-  existing files are touched.
-  """
-  initCheck(ws: Workspace!): Void @check {
-    let p = outputRoot + "/init-default"
-    let changes = javaSdk.initModule(ws, name: "init-default", path: p)
-
-    assertAdded(changes, p + "/pom.xml")
-    assertAdded(changes, p + "/src/main/java/io/dagger/modules/initdefault/InitDefault.java")
-    assertAdded(changes, p + "/src/main/java/io/dagger/modules/initdefault/package-info.java")
-
-    assert(
-      contains(changes.addedPaths, p + "/dagger-module.toml") == false,
-      "initModule should not write the engine-owned dagger-module.toml",
-    )
-    assert(
-      contains(changes.addedPaths, p + "/dagger.json") == false,
-      "initModule should not write the engine-owned dagger.json",
-    )
-    assert(changes.modifiedPaths.length == 0, "init unexpectedly modified existing files")
-    assert(changes.removedPaths.length == 0, "init unexpectedly removed files")
-
-    let pom = changes.layer.file(p + "/pom.xml").contents
-    assertContains(pom, "<dagger.proc>none</dagger.proc>", "pom should default dagger.proc to none")
-    assertContains(pom, "<artifactId>init-default</artifactId>", "pom artifactId should be the kebab-case module name")
-
-    let module = changes.layer.file(p + "/src/main/java/io/dagger/modules/initdefault/InitDefault.java").contents
-    assertContains(module, "class InitDefault", "module class should be the camel-case module name")
-
-    null
-  }
-
-  """
-  initModule onto a directory that already holds files should lay the template
-  over them and leave them in place: a user running init inside an existing
-  project must not lose their work.
-  """
-  initExistingCheck(ws: Workspace!): Void @check {
-    let p = fixtureRoot + "/init-existing"
-    let changes = javaSdk.initModule(ws, name: "init-existing", path: p)
-
-    assertAdded(changes, p + "/pom.xml")
-    assert(changes.removedPaths.length == 0, "init removed a file already in the target directory")
-
-    null
-  }
-
-  let testWS(ws: Workspace!): Workspace! {
-    ws.directory("/").withoutFile("dagger.toml").asWorkspace(cwd: ".dagger/modules/e2e/fixtures")
-  }
-
-  """
-  From the workspace root the whole workspace is in scope, so modules() should
-  return every Java SDK module this workspace manages — whether it is configured
-  by the legacy dagger.json or the CLI 1.0 dagger-module.toml — and nothing that
-  isn't managed by this SDK (e.g. a sibling module using another SDK).
-  """
-  modulesCheck(ws: Workspace!): Void @check {
-    let pathRecords = javaSdk.modules(testWS(ws)).{{rootPath}}
-
-    assert(
-      pathRecords.filter { r => r.rootPath == lookupModulePath }.length > 0,
-      "lookup Java module should be listed",
-    )
-    assert(
-      pathRecords.filter { r => r.rootPath == skipModulePath }.length > 0,
-      "skip-marked Java module should still be listed (skip only affects generate)",
-    )
-    assert(
-      pathRecords.filter { r => r.rootPath == generateModulePath }.length > 0,
-      "generate Java module should be listed",
-    )
-    assert(
-      pathRecords.filter { r => r.rootPath == depsModulePath }.length > 0,
-      "deps Java module should be listed",
-    )
-    assert(
-      pathRecords.filter { r => r.rootPath == managedTomlModulePath }.length > 0,
-      "a dagger-module.toml (CLI 1.0) managed module should be listed",
-    )
-    assert(
-      pathRecords.filter { r => r.rootPath == nonJavaModulePath }.length == 0,
-      "a module not managed by this SDK should be excluded from modules listing",
-    )
-
-    null
-  }
-
-  """
-  Discovery is anchored at the client's cwd, not the workspace root. Re-anchoring
-  the workspace to a subdirectory scopes modules() to the managed modules in that
-  cone (walk-down) plus the nearest enclosing one (find-up), and excludes managed
-  modules that live outside it.
-  """
-  modulesCwdCheck(ws: Workspace!): Void @check {
-    # A stable snapshot of the workspace, re-anchorable at any cwd. It has to
-    # carry the fixture dagger.toml, which is where currentModule.asSDK reads the
-    # managed-module list from, and lookup/app/nested, the config-less
-    # subdirectory the find-up case is anchored in.
-    let root = testWS(ws).directory("/")
-
-    # Walk-down: from fixtures/generate only generate/app is in the cone; the
-    # sibling managed modules live outside it and must be excluded. Its
-    # cwd-relative path is "app" — a directory beneath the cwd.
-    let fromGenerate = javaSdk.modules(
-      root.asWorkspace(cwd: fixtureRoot + "/generate"),
-    )
-    let fromGenerateRoots = fromGenerate.{{rootPath}}
-    assert(
-      fromGenerateRoots.filter { r => r.rootPath == generateModulePath }.length > 0,
-      "cwd=generate: the managed module in the cone should be discovered",
-    )
-    assert(
-      fromGenerateRoots.filter { r => r.rootPath == lookupModulePath }.length == 0,
-      "cwd=generate: lookup/app is outside the cone and must be excluded",
-    )
-    assert(
-      fromGenerateRoots.filter { r => r.rootPath == depsModulePath }.length == 0,
-      "cwd=generate: deps/app is outside the cone and must be excluded",
-    )
-    assert(
-      fromGenerateRoots.filter { r => r.rootPath == skipModulePath }.length == 0,
-      "cwd=generate: skip/app is outside the cone and must be excluded",
-    )
-    assert(fromGenerateRoots.length == 1, "cwd=generate: exactly one managed module is in the cone")
-    assert(fromGenerate.{{path}}.filter { r => r.path == "app" }.length > 0, "cwd=generate: the discovered module's path should be cwd-relative (app)")
-
-    # Find-up: from inside lookup/app (a nested subdir with no config of its own)
-    # the enclosing managed module is discovered; siblings are not. Its
-    # cwd-relative path is ".." — an ancestor of the cwd.
-    let fromNested = javaSdk.modules(root.asWorkspace(cwd: lookupNestedPath))
-    let fromNestedRoots = fromNested.{{rootPath}}
-    assert(
-      fromNestedRoots.filter { r => r.rootPath == lookupModulePath }.length > 0,
-      "cwd=lookup/app/nested: find-up should discover the enclosing lookup/app",
-    )
-    assert(
-      fromNestedRoots.filter { r => r.rootPath == generateModulePath }.length == 0,
-      "cwd=lookup/app/nested: generate/app is outside the cone",
-    )
-    assert(fromNestedRoots.length == 1, "cwd=lookup/app/nested: only the enclosing module should be discovered")
-    assert(fromNested.{{path}}.filter { r => r.path == ".." }.length > 0, "cwd=lookup/app/nested: the enclosing module's path should be cwd-relative (..)")
-
-    # Root cwd: the whole workspace is in scope, so every managed module — and
-    # only the managed ones — is discovered, whether marked by dagger.json or
-    # dagger-module.toml.
-    # Using the fixture root where the test specific workspace is defined
-    let fromRoot = javaSdk.modules(root.asWorkspace(cwd: fixtureRoot)).{{rootPath}}
-    assert(
-      fromRoot.filter { r => r.rootPath == generateModulePath }.length > 0,
-      "cwd=/: generate/app should be listed",
-    )
-    assert(fromRoot.filter { r => r.rootPath == lookupModulePath }.length > 0, "cwd=/: lookup/app should be listed")
-    assert(fromRoot.filter { r => r.rootPath == depsModulePath }.length > 0, "cwd=/: deps/app should be listed")
-    assert(fromRoot.filter { r => r.rootPath == skipModulePath }.length > 0, "cwd=/: skip/app should be listed")
-    assert(
-      fromRoot.filter { r => r.rootPath == managedTomlModulePath }.length > 0,
-      "cwd=/: the dagger-module.toml managed module should be listed",
-    )
-    assert(fromRoot.length == 5, "cwd=/: exactly the five managed modules should be listed")
-
-    null
-  }
-
-  """
-  Generation from a subdirectory must resolve managed module root paths from
-  the workspace root, not relative to the caller's cwd, and must return a
-  changeset whose paths are relative to that cwd — the form the engine applies
-  a generator's result in.
-  """
-  generateCwdCheck(ws: Workspace!): Void @check {
-    # Prepare a valid module in memory and remove the fixture-wide skip marker
-    # so this check can exercise generation without changing committed fixtures.
-    let initialized = javaSdk.initModule(ws, name: "generate-app", path: generateModulePath)
-    let root = testWS(ws)
-      .directory("/", exclude: [fixtureRoot + "/.dagger-java-sdk-skip-generate"])
-      .withDirectory(".", initialized.layer)
-
-    # Module-relative paths of the two artifacts generation stages.
-    let vendoredClient = "sdk/src/main/java/io/dagger/client/Dagger.java"
-    let entrypoint = "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"
-
-    # From the module's parent the module is one level down, so its changes are
-    # rooted at "app" — the same cwd-relative path modulesCwdCheck expects.
-    let fromParent = javaSdk.generateAll(
-      root.asWorkspace(cwd: fixtureRoot + "/generate"),
-    )
-    assertAdded(fromParent, "app/" + vendoredClient)
-    assertAdded(fromParent, "app/" + entrypoint)
-
-    # From the module itself the cwd is the module root, so its changes carry no
-    # prefix at all.
-    let fromModule = javaSdk.generateAll(
-      root.asWorkspace(cwd: generateModulePath),
-    )
-    assertAdded(fromModule, vendoredClient)
-    assertAdded(fromModule, entrypoint)
-
-    null
-  }
-
-  """
   A module function returning Optional<Directory> should register an optional
   return type — and, since generation compiles the entrypoint it produces,
   generating at all proves the entrypoint the annotation processor writes for an
   Optional return is valid Java.
-
-  Reuses the generate fixture rather than adding a managed module, so the module
-  inventory the discovery checks assert stays as it is.
   """
   nullableReturnCheck(ws: Workspace!): Void @check {
-    let modPath = generateModulePath
-    let initialized = javaSdk.initModule(ws, name: "generate-app", path: modPath)
-    let root = testWS(ws)
-      .directory("/", exclude: [fixtureRoot + "/.dagger-java-sdk-skip-generate"])
-      .withDirectory(".", initialized.layer)
-      .withNewFile(
-        modPath + "/src/main/java/io/dagger/modules/generateapp/GenerateApp.java",
-        nullableReturnSource,
-      )
-
-    let changes = javaSdk.generateAll(root.asWorkspace(cwd: modPath))
-    let entrypoint = changes
-      .layer
-      .file("src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
+    # Same scope and module name as generateScopeInitCheck, so both checks share
+    # the vendored SDK build instead of each paying for one of their own.
+    let scoped = ws.withWorkdir(newModulePath)
+    let scaffolded = javaSdk.generateScope(scoped, isModule: true, name: newModuleName, clients: [])
+    let withSource = scaffolded.withNewFile(
+      "/" + newModulePath + "/src/main/java/io/dagger/modules/newapp/NewApp.java",
+      nullableReturnSource,
+    )
+    let entrypoint = javaSdk
+      .generateScope(withSource, isModule: true, name: newModuleName, clients: [])
+      .file("/" + newModulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
       .contents
 
     assertContains(
@@ -314,7 +343,7 @@ type E2e {
 
   """A module whose only function returns a nullable object."""
   let nullableReturnSource: String! {
-    "package io.dagger.modules.generateapp;\n"
+    "package io.dagger.modules.newapp;\n"
       + "\n"
       + "import static io.dagger.client.Dagger.dag;\n"
       + "\n"
@@ -324,7 +353,7 @@ type E2e {
       + "import java.util.Optional;\n"
       + "\n"
       + "@Object\n"
-      + "public class GenerateApp {\n"
+      + "public class NewApp {\n"
       + "  @Function\n"
       + "  public Optional<Directory> maybeDirectory(boolean found) {\n"
       + "    if (!found) {\n"

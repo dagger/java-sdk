@@ -1,0 +1,80 @@
+"""
+Checks the Java SDK against an engine built from dagger/dagger#13992 (branch
+sdk-ux-module-max), at the commit engine-dev is pinned to in dagger-module.toml.
+
+The released engine has none of that change, so every call into the java-sdk
+module fails there. These checks build the engine and run the SDK inside it.
+"""
+type EngineE2e {
+  let engineCommit: String! = "7e6fc93c86f0bf0eebae8c2c74a249c3b5cc451f"
+  let modulePath: String! = ".dagger/modules/sdk-smoke"
+
+  let assert(condition: Boolean!, message: String!): Void {
+    if (condition == false) {
+      raise message
+    }
+    null
+  }
+
+  """
+  This checkout, mounted in an engine built from the pinned commit, as a
+  workspace the CLI inside can act on.
+  """
+  let playground(ws: Workspace!): Container! {
+    let sdkSource = ws.directory("/", exclude: [".git", "**/target/**"])
+    let engineSource = git("https://github.com/dagger/dagger")
+      .ref(engineCommit)
+      .asWorkspace
+    engineDev(ws: engineSource)
+      .playground
+      .withMountedDirectory("./java-sdk", sdkSource)
+      .withWorkdir("./java-sdk")
+      # .git is left out of the mount; workspace detection walks up to a .git to
+      # find the workspace root, and without one there is no workspace at all.
+      .withExec(["git", "init", "--quiet"])
+  }
+
+  """
+  The module-max engine should list this checkout as the java SDK, initialize a
+  Java module from it, and run the module.
+  """
+  pub devSdkCheck(ws: Workspace!): Void @check {
+    let listed = playground(ws).withExec(["dagger", "sdk", "list"])
+    assert(listed.stdout.contains("java"), "the development Java SDK was not listed")
+
+    let initialized = listed
+      .withExec(["dagger", "--auto-apply", "module", "init", "java", "--name", "sdk-smoke", "--path", modulePath])
+      .withExec(["test", "-f", modulePath + "/dagger-module.toml"])
+      .withExec(["test", "!", "-e", modulePath + "/dagger.json"])
+      .withExec(["test", "-f", modulePath + "/pom.xml"])
+      .withExec(["test", "-f", modulePath + "/src/main/java/io/dagger/modules/sdksmoke/SdkSmoke.java"])
+      .withExec(["test", "-f", modulePath + "/sdk/src/main/java/io/dagger/client/Dagger.java"])
+      .withExec(["test", "-f", modulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"])
+      .withExec(["grep", "-q", "github.com/dagger/java-sdk/runtime", modulePath + "/dagger-module.toml"])
+
+    let release = initialized
+      .withExec(["dagger", "-m", modulePath, "call", "container", "file", "--path", "/etc/alpine-release", "contents"])
+      .stdout
+    assert(release.trimSpace != "", "the generated module did not run")
+
+    null
+  }
+
+  """
+  Run the e2e checks that call the java-sdk module. They are listed in
+  [modules.e2e] check.skip so a released-engine `dagger check` does not attempt
+  them; `dagger call` is not filtered by that list, so it reaches them here.
+  """
+  pub sdkContractCheck(ws: Workspace!): Void @check {
+    playground(ws)
+      .withExec(["dagger", "call", "e-2-e", "find-client-root-check"])
+      .withExec(["dagger", "call", "e-2-e", "skip-generate-filename-check"])
+      .withExec(["dagger", "call", "e-2-e", "generate-scope-skip-check"])
+      .withExec(["dagger", "call", "e-2-e", "generate-scope-clients-check"])
+      .withExec(["dagger", "call", "e-2-e", "generate-scope-init-check"])
+      .withExec(["dagger", "call", "e-2-e", "nullable-return-check"])
+      .sync
+
+    null
+  }
+}

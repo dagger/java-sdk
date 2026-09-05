@@ -1,0 +1,9 @@
+name = "deps-app"
+engineVersion = "v1.0.0-0"
+
+[runtime]
+  source = "java"
+
+[[dependencies]]
+  name = "client-dep"
+  source = "../../clients/dep"

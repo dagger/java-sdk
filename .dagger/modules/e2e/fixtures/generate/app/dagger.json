@@ -3,5 +3,11 @@
   "engineVersion": "latest",
   "sdk": {
     "source": "java"
-  }
+  },
+  "dependencies": [
+    {
+      "name": "client-dep",
+      "source": "../../clients/dep"
+    }
+  ]
 }
