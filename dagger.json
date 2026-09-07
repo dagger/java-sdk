@@ -8,7 +8,7 @@
     {
       "name": "sdk-helpers",
       "source": "github.com/dagger/sdk-helpers",
-      "pin": "fec4ded81c0565ede1d3bc319d60c985ef95ee84"
+      "pin": "64645f1967d3dba6fce951dd61ae4acd8d9b0861"
     }
   ]
 }
