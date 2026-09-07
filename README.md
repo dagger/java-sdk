@@ -19,6 +19,10 @@ time** — the runtime just builds and packages the module.
 > [dagger/dagger#13992](https://github.com/dagger/dagger/pull/13992) and needs an
 > engine that has it. On the released engine (`v1.0.0-beta.11`) the module loads
 > but every call into it fails.
+>
+> It writes module manifests through
+> [`github.com/dagger/sdk-helpers`](https://github.com/dagger/sdk-helpers), the
+> manifest builder that #13992 moved out of the engine.
 
 ## Install
 
@@ -128,20 +132,11 @@ Adding one is refused and the workspace is left unchanged.
 
 ## Pre-1.0 modules
 
-A module configured by `dagger.json` rather than `dagger-module.toml` keeps the
-runtime it already names and keeps being generated and run by it, exactly as
-before. This SDK writes `dagger-module.toml` only for modules it creates.
-
-## Skipping generation
-
-A `.dagger-java-sdk-skip-generate` file at or above an existing module root makes
-generation leave that module as it is. Useful for fixtures, vendored modules, or
-anything you don't want regenerated. A module that is being created is always
-generated, marker or not.
-
-```sh
-touch some/fixture/.dagger-java-sdk-skip-generate
-```
+A module configured by `dagger.json` is migrated the first time it is generated:
+its contents move into a `dagger-module.toml` and the `dagger.json` is removed,
+so the two cannot disagree. The runtime it already names is preserved — a module
+on the engine's builtin `java` runtime stays there, and does not silently move
+onto this repository's.
 
 ## Test
 
@@ -161,5 +156,7 @@ Checks run against two engines:
   it. `engine-e-2-e:sdk-contract-check` runs the `e-2-e:*` checks inside the same
   engine. Bump both pins to follow the branch.
 
-The `e-2-e:*` checks are listed in `[modules.e2e] check.skip` because they call
-this module: on the released engine they fail with `"moduleManifest" not found`.
+The `e2e` module is deliberately not installed in `dagger.toml`. Every check in
+it calls this module, which a released engine cannot run, so
+`engine-e-2-e:sdk-contract-check` loads it by path — `dagger -m
+.dagger/modules/e2e check` — inside an engine that can.

@@ -10,11 +10,6 @@ committed sources.
 """
 type JavaSdk {
   """
-  Marker filename that skips generate when found at or above a Java SDK module root.
-  """
-  skipGenerateFilename: String! = ".dagger-java-sdk-skip-generate"
-
-  """
   Starter under templates/<template> for a module generated without source: default*, empty, legacy
   """
   template: String! = "default"
@@ -51,10 +46,10 @@ type JavaSdk {
 
   """
   Generate one SDK scope: the module at the workspace cwd, when the scope has
-  one. A module without a config file is initialized from the configured
-  template and a dagger-module.toml from the engine's manifest builder first,
-  then generated; an existing module, dagger-module.toml or pre-1.0 dagger.json,
-  is generated in place. The scope's module clients become the module's
+  one. A scope with no config is scaffolded from the configured template first.
+  Every module then gets a dagger-module.toml from the manifest builder and is
+  generated; a pre-1.0 dagger.json is migrated into it and removed, so two
+  manifest files cannot disagree. The scope's module clients become the module's
   dependencies, so the generated bindings include their types. Standalone
   clients, in a scope without a module, are not generated yet.
   """
@@ -72,7 +67,6 @@ type JavaSdk {
       }
     } else {
       let scope = normalizePath(ws.cwd)
-      let hadConfig = hasModuleConfig(ws, scope)
       # The rest works with the cwd at the workspace root: the engine resolves a
       # module's local dependencies to workspace-root-relative paths and then
       # reads them relative to Workspace.cwd (dagger/dagger ResolveDepToSource),
@@ -80,43 +74,70 @@ type JavaSdk {
       # The scope cwd is restored on the way out because the engine rejects a
       # generateScope result whose cwd is not the scope.
       let rooted = ws.withWorkdir(".")
-      let initialized = if (hadConfig) {
+      let initialized = if (hasModuleConfig(ws, scope)) {
         rooted
       } else {
-        rooted
-          .withDirectory(scopeRef(scope), moduleTemplate(name))
-          .withFile(scopeRef(scope, "dagger-module.toml"), seedManifestFile(name))
+        rooted.withDirectory(scopeRef(scope), moduleTemplate(name))
       }
-      let configured = withClientDependencies(initialized, scope, clients)
-      let target = Mod(
+      let configured = scopeManifest(initialized, scope, name, clients)
+      Mod(
         rootPath: scope,
         ws: configured,
-        skipGenerateFilename: skipGenerateFilename,
         vendorSdkJar: vendorSdkJar,
-      )
+      ).generated.withWorkdir(scope)
+    }
+  }
 
-      # A new module always gets its generated files; the skip marker only holds
-      # an existing module still.
-      let generated = if (hadConfig and target.skipGenerate) {
-        configured
-      } else {
-        target.generated
+  """
+  Write the module's dagger-module.toml from the manifest it already has and the
+  complete client set, and drop a pre-1.0 dagger.json once its contents have
+  moved across. Fields this SDK does not own are carried over by loading the
+  existing manifest rather than building one from nothing.
+  """
+  let scopeManifest(
+    ws: Workspace!,
+    scope: String!,
+    name: String!,
+    clients: [ModuleSource!]!,
+  ): Workspace! {
+    let hasToml = scopeHasFile(ws, scope, "dagger-module.toml")
+    let hasJson = scopeHasFile(ws, scope, "dagger.json")
+    let base = if (hasToml) {
+      sdkHelpers.moduleManifest(loadToml: ws.file(scopeRef(scope, "dagger-module.toml")))
+    } else if (hasJson) {
+      sdkHelpers.moduleManifest(loadJson: ws.file(scopeRef(scope, "dagger.json")))
+    } else {
+      sdkHelpers.moduleManifest(loadToml: seedManifestFile(name))
+    }
+    # Cleared structurally rather than by name: withoutLegacyRuntimeDependency
+    # matches an unnamed dependency on its source, not on the module name it
+    # resolves to, and resolving the recorded dependencies to read their names
+    # would fail generation on one stale entry instead of dropping it.
+    let configured = clients.{{moduleName, kind, sourceRootSubpath, asString, pin}}
+      .reduce(base.withName(name: name).withoutLegacyRuntimeDependencies) { manifest, client =>
+        manifest.withLegacyRuntimeDependency(
+          source: dependencySource(scope, client.kind, client.sourceRootSubpath, client.asString),
+          name: client.moduleName,
+          pin: client.pin,
+        )
       }
-      generated.withWorkdir(scope)
+    let written = ws.withFile(scopeRef(scope, "dagger-module.toml"), configured.tomlFile)
+
+    if (hasJson) {
+      written.withoutFile(scopeRef(scope, "dagger.json"))
+    } else {
+      written
     }
   }
 
   """
   The dagger-module.toml a new module starts from.
 
-  The engine's builder has one runtime setter per builtin runtime, and this SDK
-  targets its own repository's runtime, so the runtime is named by loading a
-  seed file: ModuleManifest.Validate accepts a non-builtin runtime on a manifest
-  loaded from a config file, and rejects it on one built from nothing.
-
-  The hand-rendered TOML is round-tripped through the builder rather than
-  written as is, so a new module starts from the engine's canonical rendering
-  and a later edit of the same manifest produces no formatting churn.
+  The builder has one runtime setter per builtin runtime, and this SDK targets
+  its own repository's runtime, so the runtime is named by loading a seed file:
+  the builder accepts a non-builtin runtime on a manifest loaded from a config
+  file and rejects it on one built from nothing. The caller loads this, so what
+  finally lands is the builder's own rendering, not these bytes.
   """
   let seedManifestFile(name: String!): File! {
     let seed = "name = \"" + name + "\"\n"
@@ -124,9 +145,7 @@ type JavaSdk {
       + "\n"
       + "[runtime]\n"
       + "  source = \"" + targetRuntime + "\"\n"
-    moduleManifest(
-      loadTOML: directory.withNewFile("dagger-module.toml", seed).file("dagger-module.toml"),
-    ).tomlFile
+    directory.withNewFile("dagger-module.toml", seed).file("dagger-module.toml")
   }
 
   """
@@ -134,50 +153,6 @@ type JavaSdk {
   engine build.
   """
   let engineVersion: String! { version.split("+")[0] ?? version }
-
-  """
-  Replace the module's dependencies with the complete client set, in the
-  manifest file the module has: dagger-module.toml, or the pre-1.0 dagger.json
-  of a module that has nothing else. A manifest that already records exactly the
-  requested clients is not rewritten, so a hand-written one is not reformatted
-  for nothing.
-  """
-  let withClientDependencies(
-    ws: Workspace!,
-    scope: String!,
-    clients: [ModuleSource!]!,
-  ): Workspace! {
-    let hasToml = scopeHasFile(ws, scope, "dagger-module.toml")
-    let loaded = if (hasToml) {
-      moduleManifest(loadTOML: ws.file(scopeRef(scope, "dagger-module.toml")))
-    } else {
-      moduleManifest(loadJSON: ws.file(scopeRef(scope, "dagger.json")))
-    }
-    # Cleared structurally rather than by name: withoutLegacyRuntimeDependency
-    # matches an unnamed dependency on its source, not on the module name it
-    # resolves to, and resolving the recorded dependencies to read their names
-    # would fail generation on one stale entry instead of dropping it.
-    let configured = clients.{{moduleName, kind, sourceRootSubpath, asString, pin}}
-      .reduce(loaded.withoutLegacyRuntimeDependencies) { manifest, client =>
-        manifest.withLegacyRuntimeDependency(
-          source: dependencySource(scope, client.kind, client.sourceRootSubpath, client.asString),
-          name: client.moduleName,
-          pin: client.pin,
-        )
-      }
-
-    # Both sides are rendered by the same serializer, so an equal rendering means
-    # there was nothing to drop or add — and an unequal one is a real change, not
-    # a reformatting of the file on disk.
-    let before = if (hasToml) { loaded.tomlFile } else { loaded.legacyJSONFile }
-    let after = if (hasToml) { configured.tomlFile } else { configured.legacyJSONFile }
-    if (before.contents == after.contents) {
-      ws
-    } else {
-      let manifestName = if (hasToml) { "dagger-module.toml" } else { "dagger.json" }
-      ws.withFile(scopeRef(scope, manifestName), after)
-    }
-  }
 
   """
   The dependency source a client is recorded as: a git ref as is, a local module
@@ -192,7 +167,12 @@ type JavaSdk {
     if (kind == ModuleSourceKind.GIT_SOURCE) {
       ref
     } else {
-      relativePath(pathParts(scope), pathParts(normalizePath(sourceRootSubpath)))
+      let relative = Path(normalizePath(sourceRootSubpath)).relativeTo(Path(scope))
+      if (relative == null) {
+        raise "cannot resolve client module path " + sourceRootSubpath + " from scope " + scope
+      } else {
+        relative.string
+      }
     }
   }
 
@@ -266,18 +246,5 @@ type JavaSdk {
   let normalizePath(path: String!): String! {
     let normalized = path.trimPrefix("./").trimPrefix("/").trimSuffix("/")
     if (normalized == "") { "." } else { normalized }
-  }
-
-  let pathParts(path: String!): [String!]! {
-    if (path == ".") { [] } else { path.split("/") }
-  }
-
-  let relativePath(from: [String!]!, to: [String!]!): String! {
-    if (!from.isEmpty and !to.isEmpty and from.takeFirst.join("") == to.takeFirst.join("")) {
-      relativePath(from.dropFirst, to.dropFirst)
-    } else {
-      let relative = (from.map { segment => ".." } + to).join("/")
-      if (relative == "") { "." } else { relative }
-    }
   }
 }

@@ -3,14 +3,6 @@
 # Example:
 #   dagger module install github.com/dagger/dagger/modules/wolfi
 
-[modules.e2e]
-source = ".dagger/modules/e2e"
-# Every check below calls the java-sdk module, which needs an engine with
-# dagger/dagger#13992. On the released engine each of them fails with
-# `"moduleManifest" not found`, so they run in the engine-e2e playground
-# instead (engine-e-2-e:sdk-contract-check).
-check.skip = ["*"]
-
 [modules.engine-e2e]
 source = ".dagger/modules/engine-e2e"
 
@@ -43,26 +35,3 @@ check.skip = ["*"]
 [sdks.java]
 module = "java-sdk"
 
-# Inert for `dagger generate`: the released engine parses no [sdks.*] table at
-# all, and on an engine with #13992 every scope below sits under the fixture-wide
-# .dagger-java-sdk-skip-generate marker and already has a config, so generateScope
-# reconciles the manifest and returns without generating.
-[sdks.java.scopes.".dagger/modules/e2e/fixtures/generate/app"]
-is-module = true
-name = "generate-app"
-
-[sdks.java.scopes.".dagger/modules/e2e/fixtures/lookup/app"]
-is-module = true
-name = "lookup-app"
-
-[sdks.java.scopes.".dagger/modules/e2e/fixtures/deps/app"]
-is-module = true
-name = "deps-app"
-
-[sdks.java.scopes.".dagger/modules/e2e/fixtures/skip/app"]
-is-module = true
-name = "skip-app"
-
-[sdks.java.scopes.".dagger/modules/e2e/fixtures/managed-toml/app"]
-is-module = true
-name = "managed-toml-app"

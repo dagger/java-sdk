@@ -2,43 +2,36 @@
 End-to-end checks for the Java SDK helper module.
 
 Every check here calls the java-sdk module, which needs an engine with
-dagger/dagger#13992. They are listed in `[modules.e2e] check.skip` so a released
-engine does not attempt them, and `engine-e-2-e:sdk-contract-check` runs them as
-`dagger call` invocations inside an engine built from that change.
+dagger/dagger#13992. The module is deliberately not installed in dagger.toml, so
+a released-engine `dagger check` never reaches it; `engine-e-2-e:dev-sdk-check`
+runs `dagger -m .dagger/modules/e2e check` inside an engine built from that
+change.
 """
 type E2e {
   let fixtureRoot: String! = ".dagger/modules/e2e/fixtures"
-  # Scratch scopes, created in memory. Outside fixtureRoot, which carries a
-  # generate skip marker.
+  # Scratch scopes, created in memory. generateScope always generates now, so
+  # every scope a check drives has to be a module Maven can build, not a
+  # config-only stub.
   let outputRoot: String! = ".dagger/modules/e2e/out"
 
   # The Java identifiers in nullableReturnSource — package
   # io.dagger.modules.newapp, class NewApp — are derived from this name by hand
-  # and have to be changed with it.
+  # and have to be changed with it. Checks that just need *a* module reuse the
+  # name so they share one vendored SDK build: the SDK jars are installed under
+  # a per-module Maven version, so a second name costs a second build.
   let newModuleName: String! = "new-app"
   let newModulePath: String! = outputRoot + "/" + newModuleName
-  let clientAppPath: String! = outputRoot + "/client-app"
+  let clientAppName: String! = "client-app"
+  let clientAppPath: String! = outputRoot + "/" + clientAppName
 
-  # managed-toml/app, deps/app, generate/app and skip/app are config-only stubs:
-  # no pom.xml and no sources. The fixture-wide skip marker is what keeps
-  # generateScope from trying to build them.
-
-  # A scope with no config of its own under the fixture-wide skip marker: the
-  # marker must not hold a module that does not exist yet.
-  let markedModulePath: String! = fixtureRoot + "/new/app"
   let lookupModulePath: String! = fixtureRoot + "/lookup/app"
   let lookupNestedPath: String! = lookupModulePath + "/nested"
-  # A module using a different SDK, with no pom.xml: never a Java scope.
+  # A module using a different SDK, with no pom.xml: never a Java client root.
   let nonJavaModulePath: String! = fixtureRoot + "/lookup/not-java"
-  let skipModulePath: String! = fixtureRoot + "/skip/app"
-  # A CLI 1.0 managed module: configured by dagger-module.toml, not dagger.json.
-  let managedTomlModulePath: String! = fixtureRoot + "/managed-toml/app"
-  # A pre-1.0 module: configured by dagger.json, which is also where its
-  # dependencies are recorded.
-  let legacyJSONModulePath: String! = fixtureRoot + "/generate/app"
-  # A module that records a dependency and has no clients.
-  let depsModulePath: String! = fixtureRoot + "/deps/app"
   let clientDepPath: String! = fixtureRoot + "/clients/dep"
+
+  let vendoredBindings: String! = "sdk/src/main/java/io/dagger/client/Dagger.java"
+  let entrypointPath: String! = "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"
 
   """
   Fail the current check when a condition is false.
@@ -123,12 +116,12 @@ type E2e {
 
   """
   generateScope initializes a scope that has no config: the template, a
-  dagger-module.toml from the engine's manifest builder naming this repository's
-  runtime, and the generated bindings and entrypoint, all under the scope, with
-  the workspace cwd and the files already there untouched.
+  dagger-module.toml from the manifest builder naming this repository's runtime,
+  and the generated bindings and entrypoint, all under the scope, with the
+  workspace cwd and the files already there untouched.
 
-  Generating the result again changes nothing: an existing module is generated
-  in place, its manifest is not rewritten, and generation is reproducible.
+  Generating the result again changes nothing, so generation is reproducible and
+  a manifest that already says the right thing is not rewritten.
   """
   generateScopeInitCheck(ws: Workspace!): Void @check {
     let scoped = ws
@@ -146,8 +139,8 @@ type E2e {
     )
     assertAdded(changes, newModulePath + "/pom.xml")
     assertAdded(changes, newModulePath + "/src/main/java/io/dagger/modules/newapp/NewApp.java")
-    assertAdded(changes, newModulePath + "/sdk/src/main/java/io/dagger/client/Dagger.java")
-    assertAdded(changes, newModulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
+    assertAdded(changes, newModulePath + "/" + vendoredBindings)
+    assertAdded(changes, newModulePath + "/" + entrypointPath)
     assert(
       changes.modifiedPaths.length == 0,
       "initializing a scope modified existing files: " + changes.modifiedPaths.join(", "),
@@ -178,132 +171,102 @@ type E2e {
   }
 
   """
-  In a module scope the client set becomes the module's dependency set: a client
-  is recorded in the manifest the module actually has, dagger-module.toml or the
-  pre-1.0 dagger.json; a client that is no longer requested is dropped; and a
-  module that records a dependency and has no clients loses it. A scope without a
-  module is left alone, and standalone clients are refused rather than silently
-  skipped. Generating a new module with a client puts the client's types in that
-  module's bindings, which is what recording the dependency is for.
+  A pre-1.0 module is migrated: the contents of its dagger.json move into a
+  dagger-module.toml, the runtime it already named is preserved rather than
+  replaced by this SDK's own, and the dagger.json is removed so two manifest
+  files cannot disagree.
+  """
+  generateScopeMigrateCheck(ws: Workspace!): Void @check {
+    # Built from a generated module rather than a committed stub, because
+    # generateScope always generates and so needs a module Maven can build. Same
+    # module name as generateScopeInitCheck, so the vendored SDK build is shared.
+    let scaffolded = javaSdk.generateScope(
+      ws.withWorkdir(newModulePath),
+      isModule: true,
+      name: newModuleName,
+      clients: [],
+    )
+    let legacy = scaffolded
+      .withoutFile("/" + newModulePath + "/dagger-module.toml")
+      .withNewFile(
+        "/" + newModulePath + "/dagger.json",
+        "{\n  \"name\": \"" + newModuleName + "\",\n"
+          + "  \"engineVersion\": \"v1.0.0-0\",\n"
+          + "  \"sdk\": {\n    \"source\": \"java\"\n  }\n}\n",
+      )
+    let migrated = javaSdk.generateScope(
+      legacy.withWorkdir(newModulePath),
+      isModule: true,
+      name: newModuleName,
+      clients: [],
+    )
+    let changes = migrated.withWorkdir(".").changes(legacy.withWorkdir("."))
+
+    assertAdded(changes, newModulePath + "/dagger-module.toml")
+    assert(
+      contains(changes.removedPaths, newModulePath + "/dagger.json"),
+      "migration should remove the pre-1.0 dagger.json",
+    )
+    assertContainsAll(migrated.file("/" + newModulePath + "/dagger-module.toml").contents, [
+      "name = \"" + newModuleName + "\"",
+      "source = \"java\"",
+    ])
+
+    null
+  }
+
+  """
+  In a module scope the client set becomes the module's dependency set: the
+  client is recorded in the manifest and its types reach the generated bindings,
+  and a client that is no longer requested is dropped from both. A scope without
+  a module is left alone, and standalone clients are refused rather than
+  silently skipped.
   """
   generateScopeClientsCheck(ws: Workspace!): Void @check {
     let root = ws.withWorkdir(".")
-    let scoped = ws.withWorkdir(managedTomlModulePath)
-    let manifestPath = managedTomlModulePath + "/dagger-module.toml"
+    let scoped = ws.withWorkdir(clientAppPath)
+    let manifestPath = clientAppPath + "/dagger-module.toml"
+    let bindingsDir = clientAppPath + "/sdk/src/generated/java/io/dagger/client"
     let client = ws.moduleSource("/" + clientDepPath)
 
     let untouched = javaSdk
-      .generateScope(scoped, isModule: false, name: "managed-toml-app", clients: [])
+      .generateScope(scoped, isModule: false, name: clientAppName, clients: [])
       .withWorkdir(".")
       .changes(root)
     assert(untouched.isEmpty, "a scope without a module should not be generated")
 
     let refused = javaSdk
-      .generateScope(scoped, isModule: false, name: "managed-toml-app", clients: [client])
+      .generateScope(scoped, isModule: false, name: clientAppName, clients: [client])
       .cwd rescue "raised"
     assert(refused == "raised", "generateScope should refuse standalone clients")
 
-    # Manifest contents are read from the returned workspace, not from the
-    # changeset: a changeset carries only the paths that changed, and a manifest
-    # that already records exactly the requested clients is deliberately left
-    # alone, so `after` would not have the file at all.
-    let withClient = javaSdk.generateScope(scoped, isModule: true, name: "managed-toml-app", clients: [client])
-    let added = withClient.withWorkdir(".").changes(root)
-    assert(contains(added.modifiedPaths, manifestPath), "adding a client should record it in the manifest")
+    let withClient = javaSdk.generateScope(scoped, isModule: true, name: clientAppName, clients: [client])
     assertContainsAll(withClient.file("/" + manifestPath).contents, [
       "[[dependencies]]",
       "name = \"client-dep\"",
-      "source = \"../../clients/dep\"",
+      "client-dep",
     ])
+
+    # The payoff: because the client is recorded as a dependency, the module's
+    # introspection schema carries its types and so do the generated bindings.
+    let bindings = withClient.directory("/" + bindingsDir).entries
     assert(
-      contains(added.addedPaths, managedTomlModulePath + "/dagger.json") == false,
-      "adding a client should not add a manifest the module did not have",
+      bindings.filter { entry => entry.contains("ClientDep") }.length > 0,
+      "no ClientDep binding under " + bindingsDir + ", only: " + bindings.join(", "),
     )
 
-    let withoutClient = javaSdk.generateScope(withClient, isModule: true, name: "managed-toml-app", clients: [])
+    let withoutClient = javaSdk.generateScope(withClient, isModule: true, name: clientAppName, clients: [])
     assertNotContains(
       withoutClient.file("/" + manifestPath).contents,
       "client-dep",
       "removing the last client should drop the dependency",
     )
-
-    # The client set is the whole dependency set, so a module that records a
-    # dependency and has no clients loses it. Migrating a module therefore means
-    # re-registering each of its dependencies as a client.
-    let dropped = javaSdk.generateScope(ws.withWorkdir(depsModulePath), isModule: true, name: "deps-app", clients: [])
-    assertNotContains(
-      dropped.file("/" + depsModulePath + "/dagger-module.toml").contents,
-      "client-dep",
-      "a module with no clients should keep no dependencies",
-    )
-
-    # A pre-1.0 module records its dependencies in the dagger.json it already
-    # has, and is not given a dagger-module.toml alongside it.
-    let legacyScoped = ws.withWorkdir(legacyJSONModulePath)
-    let legacyManifestPath = legacyJSONModulePath + "/dagger.json"
-    let legacyWithClient = javaSdk.generateScope(legacyScoped, isModule: true, name: "generate-app", clients: [client])
-    assertContainsAll(legacyWithClient.file("/" + legacyManifestPath).contents, [
-      "\"name\": \"client-dep\"",
-      "\"source\": \"../../clients/dep\"",
-    ])
     assert(
-      contains(legacyWithClient.withWorkdir(".").changes(root).addedPaths, legacyJSONModulePath + "/dagger-module.toml") == false,
-      "a pre-1.0 module should not be given a dagger-module.toml",
+      withoutClient.directory("/" + bindingsDir).entries
+        .filter { entry => entry.contains("ClientDep") }.length == 0,
+      "removing the client should drop its types from the bindings",
     )
 
-    let legacyWithoutClient = javaSdk.generateScope(legacyScoped, isModule: true, name: "generate-app", clients: [])
-    assertNotContains(
-      legacyWithoutClient.file("/" + legacyManifestPath).contents,
-      "client-dep",
-      "a pre-1.0 module with no clients should keep no dependencies",
-    )
-
-    # The payoff: because the client is recorded as a dependency, the module's
-    # introspection schema carries its types and so do the generated bindings.
-    let clientApp = javaSdk
-      .generateScope(ws.withWorkdir(clientAppPath), isModule: true, name: "client-app", clients: [client])
-    let bindingsPath = clientAppPath + "/sdk/src/generated/java/io/dagger/client"
-    let bindings = clientApp.directory("/" + bindingsPath).entries
-    assert(
-      bindings.filter { entry => entry.contains("ClientDep") }.length > 0,
-      "no ClientDep binding under " + bindingsPath + ", only: " + bindings.join(", "),
-    )
-
-    null
-  }
-
-  """
-  A skip marker at or above a module root makes generateScope return an existing
-  module as it is, and does not hold a module that is being created.
-  """
-  generateScopeSkipCheck(ws: Workspace!): Void @check {
-    let root = ws.withWorkdir(".")
-
-    let existing = javaSdk
-      .generateScope(ws.withWorkdir(skipModulePath), isModule: true, name: "skip-app", clients: [])
-      .withWorkdir(".")
-      .changes(root)
-    assert(existing.isEmpty, "a skip-marked module should not be generated")
-
-    let created = javaSdk
-      .generateScope(ws.withWorkdir(markedModulePath), isModule: true, name: newModuleName, clients: [])
-      .withWorkdir(".")
-      .changes(root)
-    assertAdded(created, markedModulePath + "/dagger-module.toml")
-    assertAdded(created, markedModulePath + "/pom.xml")
-    assertAdded(created, markedModulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
-
-    null
-  }
-
-  """
-  The generate skip marker filename should be stable.
-  """
-  skipGenerateFilenameCheck: Void @check {
-    assert(
-      javaSdk.skipGenerateFilename == ".dagger-java-sdk-skip-generate",
-      "skip marker filename changed",
-    )
     null
   }
 
@@ -322,18 +285,18 @@ type E2e {
       "/" + newModulePath + "/src/main/java/io/dagger/modules/newapp/NewApp.java",
       nullableReturnSource,
     )
-    let entrypoint = javaSdk
+    let generated = javaSdk
       .generateScope(withSource, isModule: true, name: newModuleName, clients: [])
-      .file("/" + newModulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java")
+      .file("/" + newModulePath + "/" + entrypointPath)
       .contents
 
     assertContains(
-      entrypoint,
+      generated,
       "withObject(\"Directory\").withOptional(true)",
       "an Optional<Directory> return should register an optional Directory return type",
     )
     assertContains(
-      entrypoint,
+      generated,
       "res.orElse(null)",
       "the Optional return should be unwrapped before serialization",
     )

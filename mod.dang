@@ -14,23 +14,19 @@ type Mod {
   let ws: Workspace!
 
   """
-  Marker filename that skips generate when found at or above this module root.
-  """
-  let skipGenerateFilename: String!
-
-  """
   Whether to commit the compiled SDK jar into the module (see JavaSdk.vendorSdkJar).
   """
   let vendorSdkJar: Boolean!
 
   """
-  Whether this module root or an ancestor holds the configured generate skip
-  marker. Looked up from the workspace root: rootPath is workspace-relative, and
-  a relative findUp would resolve from the client's cwd instead.
+  The shared local Maven repository.
+
+  Mounted LOCKED, not shared: seeding it from the committed prebuilt repository
+  is a plain recursive copy, and two generations running at once race on it —
+  `cp: cannot create directory ...: File exists`. Generating two Java modules
+  concurrently is ordinary, so the mount serializes rather than the callers.
   """
-  skipGenerate: Boolean! {
-    ws.findUp(name: skipGenerateFilename, from: workspaceRef(rootPath)) != null
-  }
+  let mavenRepo: CacheVolume! { cacheVolume("sdk-java-maven-m2") }
 
   """
   Maven container used for codegen (pinned digest, matches the builtin runtime).
@@ -67,7 +63,7 @@ type Mod {
   let codegenBase(introspectionJSON: File!): Container! {
     let base = mvn
       .withoutEntrypoint
-      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
+      .withMountedCache("/root/.m2", mavenRepo, sharing: CacheSharingMode.LOCKED)
       .withMountedFile("/schema.json", introspectionJSON)
       .withDirectory("/dagger-io", sdkSourceDir)
       .withWorkdir("/dagger-io")
@@ -161,7 +157,7 @@ type Mod {
   let generatedEntrypoint(moduleDir: Directory!, name: String!): Directory! {
     mvn
       .withoutEntrypoint
-      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
+      .withMountedCache("/root/.m2", mavenRepo, sharing: CacheSharingMode.LOCKED)
       .withDirectory("/module", moduleDir)
       .withWorkdir("/module")
       .withEnvVariable("_DAGGER_JAVA_SDK_MODULE_NAME", name)
@@ -171,7 +167,7 @@ type Mod {
 
   """
   The workspace with this module's vendored SDK and generated entrypoint merged
-  in. The generate skip marker is not applied here; the caller applies it.
+  in.
   """
   generated: Workspace! {
     let modSource = ws.moduleSource(workspaceRef(rootPath))

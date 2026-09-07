@@ -6,7 +6,7 @@ The released engine has none of that change, so every call into the java-sdk
 module fails there. These checks build the engine and run the SDK inside it.
 """
 type EngineE2e {
-  let engineCommit: String! = "7e6fc93c86f0bf0eebae8c2c74a249c3b5cc451f"
+  let engineCommit: String! = "8fd9b22b5416f8dc7cb420ba37769adef6e874d2"
   let modulePath: String! = ".dagger/modules/sdk-smoke"
 
   let assert(condition: Boolean!, message: String!): Void {
@@ -61,18 +61,13 @@ type EngineE2e {
   }
 
   """
-  Run the e2e checks that call the java-sdk module. They are listed in
-  [modules.e2e] check.skip so a released-engine `dagger check` does not attempt
-  them; `dagger call` is not filtered by that list, so it reaches them here.
+  Run the e2e checks that call the java-sdk module. The module is not installed
+  in dagger.toml, because on a released engine every one of those calls fails,
+  so `-m` loads it by path here instead.
   """
   pub sdkContractCheck(ws: Workspace!): Void @check {
     playground(ws)
-      .withExec(["dagger", "call", "e-2-e", "find-client-root-check"])
-      .withExec(["dagger", "call", "e-2-e", "skip-generate-filename-check"])
-      .withExec(["dagger", "call", "e-2-e", "generate-scope-skip-check"])
-      .withExec(["dagger", "call", "e-2-e", "generate-scope-clients-check"])
-      .withExec(["dagger", "call", "e-2-e", "generate-scope-init-check"])
-      .withExec(["dagger", "call", "e-2-e", "nullable-return-check"])
+      .withExec(["dagger", "-m", ".dagger/modules/e2e", "check"])
       .sync
 
     null
