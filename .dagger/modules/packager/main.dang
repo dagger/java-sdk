@@ -10,6 +10,17 @@ into ~/.m2 instead of recompiling the plugin. Run this explicitly
 produce them change.
 """
 type Packager {
+  """
+  The local Maven repository, shared with the SDK's own codegen containers.
+
+  Mounted LOCKED because both mutate it: this module installs the codegen plugin
+  into it, and a module generation installs the SDK jars. Two writers at once
+  produce assets that differ from the committed ones, which surfaces as
+  `packager:generate` reporting drift after a build that succeeded. The SDK side
+  is mounted the same way; one volume takes one sharing mode.
+  """
+  let mavenRepo: CacheVolume! { cacheVolume("sdk-java-maven-m2") }
+
   """Maven container used to build the assets (pinned digest, matches the SDK)."""
   let mvn: Container! {
     container.from("maven:3.9.9-eclipse-temurin-21-alpine@sha256:4cbb8bf76c46b97e028998f2486ed014759a8e932480431039bdb93dffe6813e")
@@ -30,16 +41,23 @@ type Packager {
   let codegenPluginRepo(ws: Workspace!): Directory! {
     mvn
       .withoutEntrypoint
-      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
+      .withMountedCache("/root/.m2", mavenRepo, sharing: CacheSharingMode.LOCKED)
       .withDirectory("/dagger-io", sdkSource(ws))
       .withWorkdir("/dagger-io")
       .withExec(["mvn", "--projects", "dagger-codegen-maven-plugin", "--also-make", "install", "-T1C", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "-Dproject.build.outputTimestamp=2024-01-01T00:00:00Z", "--no-transfer-progress"])
-      # Strip Maven's install-time timestamps so the committed repo is
+      # Export the two artifacts this module publishes, named one by one rather
+      # than copying io/dagger wholesale. The local repository is shared with
+      # module generation, which installs io/dagger/dagger-java-sdk/<module> and
+      # io/dagger/dagger-java-annotation-processor/<module> into it under a
+      # per-module version; a wholesale copy sweeps those in too, so what landed
+      # under prebuilt/ depended on whether a generation had run first.
+      #
+      # Then strip Maven's install-time timestamps so the committed repo is
       # byte-reproducible: drop the comment lines from _remote.repositories
       # (keeping the ">=" local-install markers resolution needs) and pin
       # <lastUpdated>. Otherwise every generate re-timestamps these files and
       # the check reports perpetual drift.
-      .withExec(["sh", "-c", "rm -rf /out && mkdir -p /out/io && cp -r /root/.m2/repository/io/dagger /out/io/dagger && find /out -name _remote.repositories -exec sed -i '/>=/!d' {} ';' && find /out -name maven-metadata-local.xml -exec sed -i 's|<lastUpdated>[0-9]*</lastUpdated>|<lastUpdated>20240101000000</lastUpdated>|' {} ';'"])
+      .withExec(["sh", "-c", "set -e; rm -rf /out; mkdir -p /out/io/dagger; cd /root/.m2/repository/io/dagger; cp -r dagger-codegen-maven-plugin dagger-sdk-parent maven-metadata-local.xml /out/io/dagger/; find /out -name _remote.repositories -exec sed -i '/>=/!d' {} ';'; find /out -name maven-metadata-local.xml -exec sed -i 's|<lastUpdated>[0-9]*</lastUpdated>|<lastUpdated>20240101000000</lastUpdated>|' {} ';'"])
       .directory("/out")
   }
 
@@ -67,7 +85,7 @@ type Packager {
       .introspectionSchemaJSON
     mvn
       .withoutEntrypoint
-      .withMountedCache("/root/.m2", cacheVolume("sdk-java-maven-m2"))
+      .withMountedCache("/root/.m2", mavenRepo, sharing: CacheSharingMode.LOCKED)
       .withMountedFile("/schema.json", introspectionJSON)
       .withDirectory("/dagger-io", sdkSource(ws))
       .withWorkdir("/dagger-io")
