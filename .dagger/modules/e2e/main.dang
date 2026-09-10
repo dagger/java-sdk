@@ -30,6 +30,18 @@ type E2e {
   let nonJavaModulePath: String! = fixtureRoot + "/lookup/not-java"
   let clientDepPath: String! = fixtureRoot + "/clients/dep"
 
+  # A git client, because a local module source carries no commit and so can
+  # never show a pin, at an immutable tag so the commit asserted on cannot move.
+  # It gets a module name of its own rather than sharing one: the dependency
+  # gives the module a schema of its own, and the SDK jars are installed under a
+  # per-module-name version, so a shared name would put two different SDK builds
+  # on one Maven coordinate.
+  let gitAppName: String! = "git-app"
+  let gitAppPath: String! = outputRoot + "/" + gitAppName
+  let gitClientRef: String! = "github.com/dagger/sdk-helpers@v1.0.2"
+  let gitClientName: String! = "sdk-helpers"
+  let gitClientPin: String! = "e5e38a5f0778c5a804931d95e5d0d9953668049a"
+
   let vendoredBindings: String! = "sdk/src/main/java/io/dagger/client/Dagger.java"
   let entrypointPath: String! = "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"
 
@@ -244,8 +256,15 @@ type E2e {
     assertContainsAll(withClient.file("/" + manifestPath).contents, [
       "[[dependencies]]",
       "name = \"client-dep\"",
-      "client-dep",
+      # A local client is recorded relative to the manifest, not to the
+      # workspace root the SDK does its work from.
+      "source = \"../../fixtures/clients/dep\"",
     ])
+    assertNotContains(
+      withClient.file("/" + manifestPath).contents,
+      "pin =",
+      "a client should not be pinned unless the SDK is locked",
+    )
 
     # The payoff: because the client is recorded as a dependency, the module's
     # introspection schema carries its types and so do the generated bindings.
@@ -265,6 +284,46 @@ type E2e {
       withoutClient.directory("/" + bindingsDir).entries
         .filter { entry => entry.contains("ClientDep") }.length == 0,
       "removing the client should drop its types from the bindings",
+    )
+
+    null
+  }
+
+  """
+  A git client is recorded at the ref it was requested with, and the commit it
+  resolved to is written as a pin only while the SDK is locked: generating
+  unlocked leaves the dependency unpinned, and doing so again after a locked
+  generation drops the pin that one recorded.
+  """
+  generateScopeLockCheck(ws: Workspace!): Void @check {
+    let client = moduleSource(gitClientRef, refPin: gitClientPin)
+    let scoped = ws.withWorkdir(gitAppPath)
+    let manifestPath = "/" + gitAppPath + "/dagger-module.toml"
+
+    let unlocked = javaSdk.generateScope(scoped, isModule: true, name: gitAppName, clients: [client])
+    assertContainsAll(unlocked.file(manifestPath).contents, [
+      "name = \"" + gitClientName + "\"",
+      "source = \"" + gitClientRef + "\"",
+    ])
+    assertNotContains(
+      unlocked.file(manifestPath).contents,
+      "pin =",
+      "an unlocked generation should not pin a client",
+    )
+
+    let locked = javaSdk(lock: true)
+      .generateScope(unlocked, isModule: true, name: gitAppName, clients: [client])
+    assertContains(
+      locked.file(manifestPath).contents,
+      "pin = \"" + gitClientPin + "\"",
+      "a locked generation should record the commit the client resolved to",
+    )
+
+    let unlockedAgain = javaSdk.generateScope(locked, isModule: true, name: gitAppName, clients: [client])
+    assertNotContains(
+      unlockedAgain.file(manifestPath).contents,
+      "pin =",
+      "generating unlocked again should drop the recorded pin",
     )
 
     null
