@@ -24,6 +24,14 @@ type JavaSdk {
   vendorSdkJar: Boolean! = false
 
   """
+  Record the commit each git client resolved to as a pin in the module's
+  manifest, so a generated module resolves the same dependencies later. Off by
+  default because a pinned client stops following the branch or tag it was added
+  at until the pin is refreshed.
+  """
+  lock: Boolean! = false
+
+  """
   Runtime source written into the dagger-module.toml of new Java modules.
   """
   let targetRuntime: String! = "github.com/dagger/java-sdk/runtime"
@@ -100,11 +108,9 @@ type JavaSdk {
     name: String!,
     clients: [ModuleSource!]!,
   ): Workspace! {
-    let hasToml = scopeHasFile(ws, scope, "dagger-module.toml")
-    let hasJson = scopeHasFile(ws, scope, "dagger.json")
-    let base = if (hasToml) {
+    let base = if (scopeHasFile(ws, scope, "dagger-module.toml")) {
       sdkHelpers.moduleManifest(loadToml: ws.file(scopeRef(scope, "dagger-module.toml")))
-    } else if (hasJson) {
+    } else if (scopeHasFile(ws, scope, "dagger.json")) {
       sdkHelpers.moduleManifest(loadJson: ws.file(scopeRef(scope, "dagger.json")))
     } else {
       sdkHelpers.moduleManifest(loadToml: seedManifestFile(name))
@@ -113,21 +119,15 @@ type JavaSdk {
     # matches an unnamed dependency on its source, not on the module name it
     # resolves to, and resolving the recorded dependencies to read their names
     # would fail generation on one stale entry instead of dropping it.
-    let configured = clients.{{moduleName, kind, sourceRootSubpath, asString, pin}}
+    let configured = clients
       .reduce(base.withName(name: name).withoutLegacyRuntimeDependencies) { manifest, client =>
-        manifest.withLegacyRuntimeDependency(
-          source: dependencySource(scope, client.kind, client.sourceRootSubpath, client.asString),
-          name: client.moduleName,
-          pin: client.pin,
-        )
+        manifest.withLegacyRuntimeDependency(module: client)
       }
-    let written = ws.withFile(scopeRef(scope, "dagger-module.toml"), configured.tomlFile)
-
-    if (hasJson) {
-      written.withoutFile(scopeRef(scope, "dagger.json"))
-    } else {
-      written
-    }
+    # The builder records a local client relative to ws.cwd, so it runs from the
+    # scope while the caller keeps working from the workspace root. legacyJson is
+    # off because a module of this SDK is configured by its dagger-module.toml
+    # alone — the builder deletes the dagger.json one was migrated from.
+    configured.generate(ws.withWorkdir(scope), lock: lock, legacyJson: false).withWorkdir(".")
   }
 
   """
@@ -153,28 +153,6 @@ type JavaSdk {
   engine build.
   """
   let engineVersion: String! { version.split("+")[0] ?? version }
-
-  """
-  The dependency source a client is recorded as: a git ref as is, a local module
-  by its path relative to the module.
-  """
-  let dependencySource(
-    scope: String!,
-    kind: ModuleSourceKind!,
-    sourceRootSubpath: String!,
-    ref: String!,
-  ): String! {
-    if (kind == ModuleSourceKind.GIT_SOURCE) {
-      ref
-    } else {
-      let relative = Path(normalizePath(sourceRootSubpath)).relativeTo(Path(scope))
-      if (relative == null) {
-        raise "cannot resolve client module path " + sourceRootSubpath + " from scope " + scope
-      } else {
-        relative.string
-      }
-    }
-  }
 
   """
   The files of a new module: the configured template rendered for the module
