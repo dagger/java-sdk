@@ -22,7 +22,10 @@ time** — the runtime just builds and packages the module.
 >
 > It writes module manifests through
 > [`github.com/dagger/sdk-helpers`](https://github.com/dagger/sdk-helpers), the
-> manifest builder that #13992 moved out of the engine.
+> manifest builder that #13992 moved out of the engine, at the `v1.0.2` tag
+> rather than the `dagger.io/sdk/helpers@v1` vanity address the other SDKs moved
+> to: the released engine resolves that address as a local path and then fails to
+> load the workspace at all.
 
 ## Install
 
