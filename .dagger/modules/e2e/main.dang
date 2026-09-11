@@ -42,6 +42,13 @@ type E2e {
   let gitClientName: String! = "sdk-helpers"
   let gitClientPin: String! = "e5e38a5f0778c5a804931d95e5d0d9953668049a"
 
+  # A client whose constructor arguments may all be omitted. Its own module name
+  # for the same reason as gitAppName. The Java identifiers in
+  # clientOptionalArgsSource are derived from this name by hand.
+  let clientDefaultsPath: String! = fixtureRoot + "/clients/defaults"
+  let defaultsAppName: String! = "defaults-app"
+  let defaultsAppPath: String! = outputRoot + "/" + defaultsAppName
+
   let vendoredBindings: String! = "sdk/src/main/java/io/dagger/client/Dagger.java"
   let entrypointPath: String! = "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"
 
@@ -290,6 +297,43 @@ type E2e {
   }
 
   """
+  A client constructor argument a caller may omit — non-null with a default the
+  engine fills in, or nullable — is bound as an optional argument, not as a
+  parameter. The module source constructs the client with none of them and with
+  all of them, and generation compiles it, so generating at all proves both
+  calls are valid Java.
+  """
+  clientOptionalArgsCheck(ws: Workspace!): Void @check {
+    let client = ws.moduleSource("/" + clientDefaultsPath)
+    let scaffolded = javaSdk.generateScope(
+      ws.withWorkdir(defaultsAppPath),
+      isModule: true,
+      name: defaultsAppName,
+      clients: [client],
+    )
+    let withSource = scaffolded.withNewFile(
+      "/" + defaultsAppPath + "/src/main/java/io/dagger/modules/defaultsapp/DefaultsApp.java",
+      clientOptionalArgsSource,
+    )
+    let bindings = javaSdk
+      .generateScope(withSource, isModule: true, name: defaultsAppName, clients: [client])
+      .file("/" + defaultsAppPath + "/sdk/src/generated/java/io/dagger/client/Client.java")
+      .contents
+
+    assertContainsAll(bindings, [
+      "public ClientDefaults clientDefaults() {",
+      "public ClientDefaults clientDefaults(ClientDefaultsArguments optArgs) {",
+    ])
+    assertNotContains(
+      bindings,
+      "clientDefaults(String name",
+      "an argument with a default should not be a required parameter",
+    )
+
+    null
+  }
+
+  """
   A git client is recorded at the ref it was requested with, and the commit it
   resolved to is written as a pin only while the SDK is locked: generating
   unlocked leaves the dependency unpinned, and doing so again after a locked
@@ -382,6 +426,40 @@ type E2e {
       + "      return Optional.empty();\n"
       + "    }\n"
       + "    return Optional.of(dag().directory().withNewFile(\"found\", \"\"));\n"
+      + "  }\n"
+      + "}\n"
+  }
+
+  """
+  A module that constructs its client without the optional arguments and with
+  all of them.
+  """
+  let clientOptionalArgsSource: String! {
+    "package io.dagger.modules.defaultsapp;\n"
+      + "\n"
+      + "import static io.dagger.client.Dagger.dag;\n"
+      + "\n"
+      + "import io.dagger.client.Client;\n"
+      + "import io.dagger.client.exception.DaggerQueryException;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "import java.util.concurrent.ExecutionException;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class DefaultsApp {\n"
+      + "  @Function\n"
+      + "  public String defaults()\n"
+      + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
+      + "    return dag().clientDefaults().greeting();\n"
+      + "  }\n"
+      + "\n"
+      + "  @Function\n"
+      + "  public String overridden()\n"
+      + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
+      + "    return dag()\n"
+      + "        .clientDefaults(\n"
+      + "            new Client.ClientDefaultsArguments().withName(\"java\").withTimes(2).withSuffix(\"!\"))\n"
+      + "        .greeting();\n"
       + "  }\n"
       + "}\n"
   }
