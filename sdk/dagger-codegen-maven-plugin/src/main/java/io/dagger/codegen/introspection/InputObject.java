@@ -55,6 +55,14 @@ public class InputObject {
     return Directive.getExpectedType(directives);
   }
 
+  /**
+   * Whether a caller may omit this argument: it is nullable, or the engine fills in its default
+   * value. Module SDKs that hand a default to the engine get the argument declared non-null.
+   */
+  boolean isOptional() {
+    return defaultValue != null || type.isOptional();
+  }
+
   @Override
   public String toString() {
     return "InputValue{"
