@@ -19,7 +19,11 @@ class InterfaceVisitorTest {
   private static String generateInterface(Type type, String version) throws Exception {
     byte[] introspection = "{\"__schema\":{\"types\":[]}}".getBytes(StandardCharsets.UTF_8);
     Schema schema = Schema.initialize(new ByteArrayInputStream(introspection), version);
-    return new InterfaceVisitor(schema, Path.of("."), StandardCharsets.UTF_8)
+    return new InterfaceVisitor(
+            schema,
+            TypeRegistry.singlePackage("io.dagger.client"),
+            Path.of("."),
+            StandardCharsets.UTF_8)
         .generateType(type)
         .toString();
   }
