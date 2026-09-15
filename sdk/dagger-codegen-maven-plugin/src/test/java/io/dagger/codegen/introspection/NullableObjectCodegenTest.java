@@ -22,6 +22,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 class NullableObjectCodegenTest {
 
+  private static final TypeRegistry REGISTRY = TypeRegistry.singlePackage("io.dagger.client");
+
   @TempDir Path compilationOutputDirectory;
 
   @Test
@@ -132,8 +134,8 @@ class NullableObjectCodegenTest {
   }
 
   /**
-   * Interfaces that merely share an ancestor do not impose an override obligation on one another.
-   * A nullable field on one sibling must not make a same-named non-null field on another sibling
+   * Interfaces that merely share an ancestor do not impose an override obligation on one another. A
+   * nullable field on one sibling must not make a same-named non-null field on another sibling
    * Optional when their common ancestor does not declare that field.
    */
   @Test
@@ -154,24 +156,21 @@ class NullableObjectCodegenTest {
     Type nullableImplementation = type("NullableImplementation", TypeKind.OBJECT);
     nullableImplementation.setInterfaces(
         List.of(
-            typeRef(TypeKind.INTERFACE, "NullableSibling"),
-            typeRef(TypeKind.INTERFACE, "Root")));
+            typeRef(TypeKind.INTERFACE, "NullableSibling"), typeRef(TypeKind.INTERFACE, "Root")));
     nullableImplementation.setFields(
         List.of(field("child", typeRef(TypeKind.OBJECT, "Foo"), nullableImplementation)));
 
     Type implementation = type("NonNullImplementation", TypeKind.OBJECT);
     implementation.setInterfaces(
         List.of(
-            typeRef(TypeKind.INTERFACE, "NonNullSibling"),
-            typeRef(TypeKind.INTERFACE, "Root")));
+            typeRef(TypeKind.INTERFACE, "NonNullSibling"), typeRef(TypeKind.INTERFACE, "Root")));
     implementation.setFields(
         List.of(field("child", nonNull(typeRef(TypeKind.OBJECT, "Foo")), implementation)));
 
     Map<String, String> generated =
         sources(root, nullableSibling, nonNullSibling, nullableImplementation, implementation);
 
-    assertThat(generated.get("io.dagger.client.NullableSibling"))
-        .contains("Optional<Foo> child()");
+    assertThat(generated.get("io.dagger.client.NullableSibling")).contains("Optional<Foo> child()");
     assertThat(generated.get("io.dagger.client.NonNullSibling"))
         .contains("Foo child();")
         .doesNotContain("Optional<Foo> child()");
@@ -193,14 +192,15 @@ class NullableObjectCodegenTest {
       String qualifiedName = "io.dagger.client." + type.getName();
       if (type.getKind() == TypeKind.INTERFACE) {
         InterfaceVisitor visitor =
-            new InterfaceVisitor(schema, Path.of("."), StandardCharsets.UTF_8);
+            new InterfaceVisitor(schema, REGISTRY, Path.of("."), StandardCharsets.UTF_8);
         sources.put(qualifiedName, javaFile(visitor.generateType(type)));
         sources.put(qualifiedName + "Client", javaFile(visitor.generateClientType(type)));
       } else {
         sources.put(
             qualifiedName,
             javaFile(
-                new ObjectVisitor(schema, Path.of("."), StandardCharsets.UTF_8)
+                new ObjectVisitor(
+                        schema, REGISTRY, null, null, Path.of("."), StandardCharsets.UTF_8)
                     .generateType(type)));
       }
     }
@@ -244,9 +244,10 @@ class NullableObjectCodegenTest {
   }
 
   private static String generateInterface(Type type, String version) throws Exception {
-    return new InterfaceVisitor(schemaAtVersion(version), Path.of("."), StandardCharsets.UTF_8)
-        .generateType(type)
-        .toString();
+    return javaFile(
+        new InterfaceVisitor(
+                schemaAtVersion(version), REGISTRY, Path.of("."), StandardCharsets.UTF_8)
+            .generateType(type));
   }
 
   private static Schema schemaAtVersion(String version) throws Exception {

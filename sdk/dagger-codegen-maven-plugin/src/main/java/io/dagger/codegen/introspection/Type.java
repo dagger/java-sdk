@@ -2,6 +2,7 @@ package io.dagger.codegen.introspection;
 
 import static java.util.Comparator.comparing;
 
+import jakarta.json.bind.annotation.JsonbTransient;
 import java.util.List;
 
 public class Type {
@@ -83,12 +84,39 @@ public class Type {
     this.possibleTypes = possibleTypes;
   }
 
+  /** The module that contributes this type, or null when the engine core owns it. */
+  @JsonbTransient
+  public String getOwningModule() {
+    return Directive.getSourceMapModule(directives);
+  }
+
   public List<Directive> getDirectives() {
     return directives;
   }
 
   public void setDirectives(List<Directive> directives) {
     this.directives = directives;
+  }
+
+  /**
+   * The same type carrying only the given fields.
+   *
+   * <p>A copy rather than a mutation: the schema this narrows stays whole, so the fields left out
+   * here are still reachable from it. The fields are shared with it too, and re-parenting them
+   * would rewrite it; the visitors only ever read the parent's name, which the copy keeps.
+   */
+  Type withFields(List<Field> narrowed) {
+    Type copy = new Type();
+    copy.kind = kind;
+    copy.name = name;
+    copy.description = description;
+    copy.inputFields = inputFields;
+    copy.enumValues = enumValues;
+    copy.interfaces = interfaces;
+    copy.possibleTypes = possibleTypes;
+    copy.directives = directives;
+    copy.fields = narrowed;
+    return copy;
   }
 
   /**
