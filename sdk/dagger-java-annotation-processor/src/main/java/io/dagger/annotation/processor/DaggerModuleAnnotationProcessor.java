@@ -240,6 +240,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                           TypeKind tk = tm.getKind();
                           boolean isCheck = elt.getAnnotation(Check.class) != null;
                           boolean isGenerate = elt.getAnnotation(Generate.class) != null;
+                          @SuppressWarnings("deprecation")
                           boolean isUp =
                               elt.getAnnotation(Start.class) != null
                                   || elt.getAnnotation(Up.class) != null;
