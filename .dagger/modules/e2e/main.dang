@@ -407,6 +407,38 @@ type E2e {
     null
   }
 
+  """
+  A function marked @Start is a service, and so is one still marked with the
+  deprecated @Up. Both register through withUp, so this holds on an engine that
+  predates `dagger start`. A function that returns a Service with neither marker
+  is not a service.
+  """
+  serviceMarkerCheck(ws: Workspace!): Void @check {
+    # Same scope and module name as generateScopeInitCheck, so both checks share
+    # the vendored SDK build instead of each paying for one of their own.
+    let scoped = ws.withWorkdir(newModulePath)
+    let scaffolded = javaSdk.generateScope(scoped, isModule: true, name: newModuleName, clients: [])
+    let withSource = scaffolded.withNewFile(
+      "/" + newModulePath + "/src/main/java/io/dagger/modules/newapp/NewApp.java",
+      serviceMarkerSource,
+    )
+    let services = javaSdk
+      .generateScope(withSource, isModule: true, name: newModuleName, clients: [])
+      .moduleSource("/" + newModulePath)
+      .asModule
+      .services
+      .list
+      .{{name}}
+      .map { service => service.name }
+    let listed = "services: " + services.join(", ")
+
+    assert(contains(services, "start-marked"), "a @Start function should be a service; " + listed)
+    assert(contains(services, "up-marked"), "an @Up function should still be a service; " + listed)
+    assert(contains(services, "unmarked") == false, "an unmarked function should not be a service; " + listed)
+
+    null
+  }
+
   """A module whose only function returns a nullable object."""
   let nullableReturnSource: String! {
     "package io.dagger.modules.newapp;\n"
@@ -426,6 +458,41 @@ type E2e {
       + "      return Optional.empty();\n"
       + "    }\n"
       + "    return Optional.of(dag().directory().withNewFile(\"found\", \"\"));\n"
+      + "  }\n"
+      + "}\n"
+  }
+
+  """
+  A module with a service function under each marker and one under none.
+  """
+  let serviceMarkerSource: String! {
+    "package io.dagger.modules.newapp;\n"
+      + "\n"
+      + "import static io.dagger.client.Dagger.dag;\n"
+      + "\n"
+      + "import io.dagger.client.Service;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "import io.dagger.module.annotation.Start;\n"
+      + "import io.dagger.module.annotation.Up;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class NewApp {\n"
+      + "  @Function\n"
+      + "  @Start\n"
+      + "  public Service startMarked() {\n"
+      + "    return dag().container().asService();\n"
+      + "  }\n"
+      + "\n"
+      + "  @Function\n"
+      + "  @Up\n"
+      + "  public Service upMarked() {\n"
+      + "    return dag().container().asService();\n"
+      + "  }\n"
+      + "\n"
+      + "  @Function\n"
+      + "  public Service unmarked() {\n"
+      + "    return dag().container().asService();\n"
       + "  }\n"
       + "}\n"
   }
