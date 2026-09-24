@@ -6,11 +6,11 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Annotation to mark a function as a service for {@code dagger up}.
+ * Annotation to mark a function as a service for {@code dagger start}.
  *
- * <p>Functions annotated with {@code @Up} will be discovered by {@code dagger up} and their
- * returned Service will be started and tunneled to the host.
+ * @deprecated Use {@link Start} instead.
  */
+@Deprecated
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Up {}
