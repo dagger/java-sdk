@@ -4,7 +4,8 @@ End-to-end checks for the Java SDK helper module.
 Every check here calls the java-sdk module, which needs an engine at its floor,
 v1.0.0-beta.18, or later. dagger.toml does not install this module, so
 `dagger check` runs these checks only through `engine-e2e:floor-check`, on an
-engine built from the floor's commit.
+engine built from the floor's commit. AGENTS.md has the commands that run them
+on the local engine.
 """
 type E2e {
   let fixtureRoot: String! = ".dagger/modules/e2e/fixtures"

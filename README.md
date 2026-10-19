@@ -158,4 +158,5 @@ pinned in `.dagger/modules/engine-e2e`:
   generation and `dagger module init` refuse it.
 
 `dagger.toml` does not install the `e2e` module, so `dagger check` runs the e2e
-checks only on the floor engine.
+checks only on the floor engine. AGENTS.md has the commands that run them on the
+local engine.
