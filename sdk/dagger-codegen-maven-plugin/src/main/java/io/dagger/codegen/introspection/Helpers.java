@@ -17,6 +17,9 @@ public class Helpers {
       List.of(
           "getClass", "hashCode", "toString", "clone", "finalize", "notify", "notifyAll", "wait");
 
+  // Every generated object also carries this accessor, for client packages to chain from.
+  private static final String QUERY_BUILDER_ACCESSOR = "queryBuilder";
+
   private static final List<String> JAVA_KEYWORDS =
       List.of(
           "abstract",
@@ -71,18 +74,15 @@ public class Helpers {
           "super",
           "while");
 
-  static ClassName convertScalarToObject(String typeName, String expectedType) {
+  static ClassName convertScalarToObject(
+      TypeRegistry registry, String typeName, String expectedType) {
     if (expectedType != null && !expectedType.isEmpty()) {
-      return ClassName.bestGuess(expectedType);
+      return registry.forType(expectedType);
     }
     if (typeName.endsWith("ID") && typeName.length() > 2) {
-      return ClassName.bestGuess(typeName.substring(0, typeName.length() - 2));
+      return registry.forType(typeName.substring(0, typeName.length() - 2));
     }
-    return ClassName.bestGuess(typeName);
-  }
-
-  static ClassName convertScalarToObject(String typeName) {
-    return convertScalarToObject(typeName, null);
+    return registry.forType(typeName);
   }
 
   /**
@@ -143,10 +143,14 @@ public class Helpers {
   }
 
   static String formatName(Type type) {
-    if ("Query".equals(type.getName())) {
+    return formatName(type.getName());
+  }
+
+  static String formatName(String graphqlName) {
+    if ("Query".equals(graphqlName)) {
       return "Client";
     } else {
-      return capitalize(type.getName());
+      return capitalize(graphqlName);
     }
   }
 
@@ -154,7 +158,9 @@ public class Helpers {
     if ("Container".equals(field.getParentObject().getName()) && "import".equals(field.getName())) {
       return "importTarball";
     } else if (JAVA_KEYWORDS.contains(field.getName())
-        || (JAVA_OBJECT_METHODS.contains(field.getName()) && field.getRequiredArgs().isEmpty())) {
+        || ((JAVA_OBJECT_METHODS.contains(field.getName())
+                || QUERY_BUILDER_ACCESSOR.equals(field.getName()))
+            && field.getRequiredArgs().isEmpty())) {
       return field.getName() + "_";
     } else {
       return field.getName();

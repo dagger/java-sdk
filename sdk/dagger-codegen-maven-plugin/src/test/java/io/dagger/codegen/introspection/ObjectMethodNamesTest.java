@@ -11,6 +11,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class ObjectMethodNamesTest {
+  private static final TypeRegistry REGISTRY = TypeRegistry.singlePackage("io.dagger.client");
+
   @TempDir Path output;
 
   @Test
@@ -22,7 +24,9 @@ class ObjectMethodNamesTest {
     agent.setFields(names.stream().map(name -> field(agent, name, List.of())).toList());
 
     String generated =
-        new ObjectVisitor(schema(), output, StandardCharsets.UTF_8).generateType(agent).toString();
+        new ObjectVisitor(schema(), REGISTRY, output, StandardCharsets.UTF_8)
+            .generateType(agent)
+            .toString();
 
     for (String name : names) {
       assertThat(generated)
@@ -30,6 +34,23 @@ class ObjectMethodNamesTest {
           .doesNotContain("Agent " + name + "()")
           .contains("this.queryBuilder.chain(\"" + name + "\")");
     }
+  }
+
+  /** Every generated object carries a {@code queryBuilder()} accessor for client packages. */
+  @Test
+  void escapesAFieldNamedLikeTheQueryBuilderAccessor() throws Exception {
+    Type agent = agent();
+    agent.setFields(List.of(field(agent, "queryBuilder", List.of())));
+
+    String generated =
+        new ObjectVisitor(schema(), REGISTRY, output, StandardCharsets.UTF_8)
+            .generateType(agent)
+            .toString();
+
+    assertThat(generated)
+        .contains("Agent queryBuilder_()")
+        .contains("io.dagger.client.QueryBuilder queryBuilder()")
+        .contains("this.queryBuilder.chain(\"queryBuilder\")");
   }
 
   @Test
@@ -41,7 +62,9 @@ class ObjectMethodNamesTest {
             field(agent, "notify", List.of(argument("subscriber", true)))));
 
     String generated =
-        new ObjectVisitor(schema(), output, StandardCharsets.UTF_8).generateType(agent).toString();
+        new ObjectVisitor(schema(), REGISTRY, output, StandardCharsets.UTF_8)
+            .generateType(agent)
+            .toString();
 
     assertThat(generated)
         .contains("Agent wait_()")
@@ -58,7 +81,7 @@ class ObjectMethodNamesTest {
     agent.setKind(TypeKind.INTERFACE);
     agent.setFields(List.of(field(agent, "wait", List.of())));
 
-    new InterfaceVisitor(schema(), output, StandardCharsets.UTF_8).visit(agent);
+    new InterfaceVisitor(schema(), REGISTRY, output, StandardCharsets.UTF_8).visit(agent);
 
     assertThat(Files.readString(output.resolve("io/dagger/client/Agent.java")))
         .contains("Agent wait_()");
