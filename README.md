@@ -67,6 +67,7 @@ generates the SDK bindings in one step:
   sdk/src/main/java/...                                         # vendored SDK library
   sdk/src/processor/java/...                                    # vendored annotation processor
   clients/core/src/main/java/...                                # the engine's core API (from the engine schema)
+  clients/<name>/src/main/java/...                              # one package per module client
 ```
 
 The SDK settings become typed flags on `dagger module init java` and are
@@ -77,9 +78,11 @@ dagger module init java --name my-module --template empty
 ```
 
 `--template` picks a starter under `templates/`: `default` (a small working
-module), `empty` (a bare object class), or `legacy`. `--lock` records the commit
-each git client resolved to as a pin; without it a client added at a branch or
-tag keeps following it.
+module), `empty` (a bare object class), or `legacy`. `--lock` records, for a
+module on the runtime, the commit each git client resolved to as a pin in its
+manifest; without it a client added at a branch or tag keeps following it. A
+client of a module on the entrypoint always loads the commit it was generated
+against.
 
 Because everything is committed and the pom defaults `dagger.proc=none`, the
 module builds with a plain `mvn package` (no annotation processor at build time)
@@ -157,9 +160,10 @@ Set it on one module's scope in `dagger.toml`, or under
 dangEntrypoint = true
 ```
 
-A module on the entrypoint cannot use module clients yet. Its
-`dagger-module.toml` holds its name and the entrypoint only, so generation
-refuses a manifest setting it would drop, such as `include`.
+A module on the entrypoint calls other modules through its
+[clients](#module-clients). Its `dagger-module.toml` holds its name and the
+entrypoint only, so generation refuses a manifest setting it would drop, such
+as `include`.
 
 `@Function(cache = ...)` sets a function's cache policy on either path:
 `"never"`, `"session"`, or a duration such as `"10m"` after which the result is
@@ -197,20 +201,48 @@ Module dependencies are replaced by generated module clients:
 dagger module client add <module-ref>
 ```
 
-In a module scope the client set becomes the module's dependency set. Each
-client is recorded in the manifest the module has — `dagger-module.toml`, or the
-`dagger.json` of a pre-1.0 module — and its types are generated into the core
-package, so module code reaches it through `core()`, as `core().clientDep()`.
-A client that is removed is dropped from both.
+On the Dang entrypoint, each client is a package of its own,
+`io.dagger.client.modules.<pkg>`, generated under `clients/<name>`. `<pkg>` is
+the module name in lowercase, with only its letters and digits. Module code
+enters a client by static import, as it enters core:
+
+```java
+import static io.dagger.client.modules.clientdep.ClientDep.clientDep;
+
+String greeting = clientDep().greeting();
+```
+
+A client loads its target with `serveModule` when the module first calls it. A
+local target is named by its path from the workspace root, and the engine
+resolves that path in the calling module's own tree. A git target is loaded at
+the commit its ref resolved to when the client was generated, even after a newer
+tag matches the ref; `dagger generate` moves the client to the newer commit.
+
+The module's `dagger-module.toml` lists no dependencies. Generation adds a
+`dagger-clients` profile to `pom.xml`, which compiles each client's package. It
+rewrites the profile on every generation and removes it with the last client, so
+do not edit it.
+
+A module that moves to the entrypoint keeps its `[[dependencies]]` as clients:
+generation drops each dependency that a client of the scope covers, and refuses
+a dependency that no client covers, by name. Add a client for it, or remove it
+from the manifest.
+
+On the runtime (`dangEntrypoint = false`), the client set becomes the module's
+dependency set instead. Each client is recorded in the manifest the module has —
+`dagger-module.toml`, or the `dagger.json` of a pre-1.0 module — and its types
+are generated into the core package, so module code reaches it through
+`core()`, as `core().clientDep()`. A client that is removed is dropped from
+both.
 
 Standalone clients — in a scope that has no Java module — are not generated yet.
-Adding one is refused and the workspace is left unchanged. A module on the Dang
-entrypoint refuses clients too; set `dangEntrypoint = false` to use them.
+Adding one is refused and the workspace is left unchanged.
 
 > [!WARNING]
-> The client set is the *whole* dependency set. A module that recorded
-> dependencies before this interface existed has no clients recorded for them,
-> so the first `dagger generate` drops them. Re-register each one first:
+> On the runtime, the client set is the *whole* dependency set. A module that
+> recorded dependencies before this interface existed has no clients recorded
+> for them, so the first `dagger generate` drops them. Re-register each one
+> first:
 >
 > ```sh
 > dagger module client add <module-ref>
