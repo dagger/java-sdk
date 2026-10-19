@@ -18,6 +18,7 @@ import io.dagger.client.FunctionCallArgValue;
 import io.dagger.client.ID;
 import io.dagger.client.JSON;
 import io.dagger.client.JsonConverter;
+import io.dagger.client.ModuleDispatcher;
 import io.dagger.client.TypeDef;
 import io.dagger.client.exception.DaggerExecException;
 import io.dagger.client.exception.DaggerQueryException;
@@ -41,6 +42,7 @@ import io.dagger.module.info.ObjectInfo;
 import io.dagger.module.info.ParameterInfo;
 import io.dagger.module.info.TypeInfo;
 import java.io.IOException;
+import java.io.Writer;
 import java.lang.reflect.InvocationTargetException;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -69,6 +71,8 @@ import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
+import javax.tools.FileObject;
+import javax.tools.StandardLocation;
 
 @SupportedAnnotationTypes({
   "io.dagger.module.annotation.Module",
@@ -451,7 +455,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
 
       var im =
           MethodSpec.methodBuilder("invoke")
-              .addModifiers(Modifier.PRIVATE)
+              .addModifiers(Modifier.PRIVATE, Modifier.STATIC)
               .returns(JSON.class)
               .addException(Exception.class)
               .addParameter(JSON.class, "parentJson")
@@ -472,6 +476,11 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
         // But if there's a constructor we want to inline it under the function branch.
         if (objectInfo.constructor().isEmpty()) {
           ClassName objName = ClassName.bestGuess(objectInfo.qualifiedName());
+          // The Dang entrypoint declares a constructor for the entry object, which the legacy
+          // runtime constructs itself from its empty state.
+          im.beginControlFlow("if (fnName.equals(\"\"))")
+              .addStatement("return $T.from($S)", JSON.class, "{}")
+              .endControlFlow();
           im.addStatement("$T clazz = Class.forName($S)", Class.class, objectInfo.qualifiedName())
               .addStatement(
                   "$T obj = ($T) $T.fromJSON(parentJson, clazz)",
@@ -522,6 +531,13 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                               .addException(Exception.class)
                               .returns(void.class)
                               .addParameter(String[].class, "args")
+                              .beginControlFlow(
+                                  "if (args.length > 0 && args[0].equals($S))", "engine-call")
+                              .addStatement(
+                                  "$T.exit($T.engineCall(args, Entrypoint::invoke))",
+                                  System.class,
+                                  ModuleDispatcher.class)
+                              .endControlFlow()
                               .beginControlFlow(
                                   "try ($T telemetry = new $T())", Telemetry.class, Telemetry.class)
                               .addStatement(
@@ -800,11 +816,27 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
       JavaFile f = generate(moduleInfo);
 
       f.writeTo(processingEnv.getFiler());
+      writeDangEntrypoint(moduleInfo);
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
 
     return true;
+  }
+
+  /**
+   * Written beside the compiled classes rather than with the generated sources, which generation
+   * vendors as the module's Java sources.
+   */
+  private void writeDangEntrypoint(ModuleInfo moduleInfo) throws IOException {
+    FileObject file =
+        processingEnv
+            .getFiler()
+            .createResource(StandardLocation.CLASS_OUTPUT, "", "dagger/entrypoint/main.dang");
+    try (Writer writer = file.openWriter()) {
+      writer.write(
+          DangEntrypointRenderer.render(moduleInfo, System.getenv("_DAGGER_JAVA_SDK_MODULE_NAME")));
+    }
   }
 
   private static Boolean isNotBlank(String str) {
@@ -873,7 +905,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
         .build();
   }
 
-  private static boolean areSimilar(String str1, String str2) {
+  static boolean areSimilar(String str1, String str2) {
     return normalize(str1).equals(normalize(str2));
   }
 

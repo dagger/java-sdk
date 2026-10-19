@@ -15,6 +15,29 @@ import org.junit.jupiter.api.Test;
 
 class EntrypointGenerationTest {
 
+  /** The Dang entrypoint runs the jar with engine-call, which reaches this switch directly. */
+  @Test
+  void engineCallModeRunsTheStaticDispatchSwitch() {
+    String java = generated();
+
+    assertThat(java)
+        .contains("private static JSON invoke(JSON parentJson, String parentName, String fnName,")
+        .contains("if (args.length > 0 && args[0].equals(\"engine-call\")) {")
+        .contains("System.exit(ModuleDispatcher.engineCall(args, Entrypoint::invoke));");
+  }
+
+  @Test
+  void anObjectWithoutConstructorAnswersItsConstructorWithItsEmptyState() {
+    assertThat(generated())
+        .contains(
+            String.join(
+                "\n",
+                "    if (parentName.equals(\"Hello\")) {",
+                "      if (fnName.equals(\"\")) {",
+                "        return JSON.from(\"{}\");",
+                "      }"));
+  }
+
   @Test
   void registerDeclaresTheCachePolicy() {
     String java = generated();
