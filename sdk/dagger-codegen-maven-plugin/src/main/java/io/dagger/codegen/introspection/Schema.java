@@ -73,6 +73,12 @@ public class Schema {
     return version;
   }
 
+  /** Returns true if the named type is a GraphQL INTERFACE. */
+  public boolean isInterface(String typeName) {
+    return types != null
+        && types.stream().anyMatch(t -> typeName.equals(t.getName()) && t.isInterface());
+  }
+
   /**
    * Whether the engine resolves nullable object and interface fields, which lets generated methods
    * return {@code Optional}. Before v1.0.0-beta.10 the old lazy shape is generated instead.
