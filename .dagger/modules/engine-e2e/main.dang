@@ -117,6 +117,8 @@ type EngineE2e {
       .withExec(["test", "-f", modulePath + "/pom.xml"])
       .withExec(["test", "-f", modulePath + "/src/main/java/io/dagger/modules/sdksmoke/SdkSmoke.java"])
       .withExec(["test", "-f", modulePath + "/sdk/src/main/java/io/dagger/client/Dagger.java"])
+      .withExec(["test", "-f", modulePath + "/clients/core/src/main/java/io/dagger/client/modules/core/Core.java"])
+      .withExec(["test", "!", "-e", modulePath + "/sdk/src/generated"])
       .withExec(["test", "-f", modulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"])
       .withExec(["test", "-f", modulePath + "/src/generated/dang/entrypoint/main.dang"])
       .withExec(["grep", "-q", "^\\[entrypoint\\]$", modulePath + "/dagger-module.toml"])

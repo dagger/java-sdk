@@ -50,6 +50,7 @@ type E2e {
   let defaultsAppPath: String! = outputRoot + "/" + defaultsAppName
 
   let vendoredBindings: String! = "sdk/src/main/java/io/dagger/client/Dagger.java"
+  let corePackagePath: String! = "clients/core/src/main/java/io/dagger/client/modules/core"
   let entrypointPath: String! = "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"
   let dangEntrypointPath: String! = "src/generated/dang/entrypoint"
 
@@ -178,6 +179,7 @@ type E2e {
     assertAdded(changes, newModulePath + "/pom.xml")
     assertAdded(changes, newModulePath + "/src/main/java/io/dagger/modules/newapp/NewApp.java")
     assertAdded(changes, newModulePath + "/" + vendoredBindings)
+    assertAdded(changes, newModulePath + "/" + corePackagePath + "/Core.java")
     assertAdded(changes, newModulePath + "/" + entrypointPath)
     assertAdded(changes, newModulePath + "/" + dangEntrypointPath + "/main.dang")
     assertAdded(changes, newModulePath + "/" + dangEntrypointPath + "/build.dang")
@@ -344,7 +346,7 @@ type E2e {
     let root = ws.withWorkdir(".")
     let scoped = ws.withWorkdir(clientAppPath)
     let manifestPath = clientAppPath + "/dagger-module.toml"
-    let bindingsDir = clientAppPath + "/sdk/src/generated/java/io/dagger/client/modules/core"
+    let bindingsDir = clientAppPath + "/" + corePackagePath
     let client = ws.moduleSource("/" + clientDepPath)
 
     let untouched = javaSdk
@@ -416,7 +418,7 @@ type E2e {
     )
     let bindings = javaSdk(dangEntrypoint: false)
       .generateScope(withSource, isModule: true, name: defaultsAppName, clients: [client])
-      .file("/" + defaultsAppPath + "/sdk/src/generated/java/io/dagger/client/modules/core/Core.java")
+      .file("/" + defaultsAppPath + "/" + corePackagePath + "/Core.java")
       .contents
 
     assertContainsAll(bindings, [

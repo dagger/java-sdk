@@ -28,10 +28,10 @@
     </properties>
 
     <!--
-    The Dagger Java SDK is vendored as source under sdk/ by `dagger develop`.
-    The whole sdk/ directory is generated (see .gitattributes / .gitignore) and
-    rebuilt by Dagger; do not edit it by hand. You can add your own dependencies
-    below.
+    The Dagger Java SDK is vendored as source under sdk/ by `dagger develop`,
+    and the engine's core API is generated under clients/core. Both directories
+    are generated (see .gitattributes / .gitignore) and rebuilt by Dagger; do
+    not edit them by hand. You can add your own dependencies below.
     -->
     <dependencyManagement>
         <dependencies>
@@ -164,13 +164,13 @@
         <plugins>
             <plugin>
                 <!--
-                Register the vendored Dagger Java SDK sources and the generated
-                entrypoint as compilation roots:
-                  - sdk/src/main/java       the hand-written SDK library
-                  - sdk/src/processor/java  the annotation processor (generates the entrypoint)
-                  - sdk/src/generated/java  the client bindings generated from the engine schema
-                  - src/generated/java      io.dagger.gen.entrypoint.Entrypoint, generated
-                                            from the module code (see maven-compiler-plugin)
+                Register the vendored Dagger Java SDK sources, the core client and
+                the generated entrypoint as compilation roots:
+                  - sdk/src/main/java           the hand-written SDK library
+                  - sdk/src/processor/java      the annotation processor (generates the entrypoint)
+                  - clients/core/src/main/java  the engine's core API, io.dagger.client.modules.core
+                  - src/generated/java          io.dagger.gen.entrypoint.Entrypoint, generated
+                                                from the module code (see maven-compiler-plugin)
                 -->
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>build-helper-maven-plugin</artifactId>
@@ -185,7 +185,7 @@
                             <sources>
                                 <source>sdk/src/main/java</source>
                                 <source>sdk/src/processor/java</source>
-                                <source>sdk/src/generated/java</source>
+                                <source>clients/core/src/main/java</source>
                             </sources>
                         </configuration>
                     </execution>
@@ -206,7 +206,7 @@
                 <!--
                 The module is built in two compilation passes from a single `mvn package`:
                   1. default-compile compiles the vendored SDK and annotation processor
-                     plus the client bindings (everything but the user module and the
+                     plus the core client (everything but the user module and the
                      generated entrypoint), without annotation processing.
                   2. compile-module compiles the user module (io.dagger.modules.*) and the
                      entrypoint (io.dagger.gen.*) together.

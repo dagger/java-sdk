@@ -50,7 +50,6 @@ type Mod {
   Vendor the Java SDK as buildable source for a module:
     src/main/java        the hand-written SDK library
     src/processor/java   the annotation processor that generates the entrypoint
-    src/generated/java   the client bindings generated from the engine schema
     src/processor/resources/META-INF/services/...Processor
   The returned directory is dropped at <module>/sdk.
   """
@@ -127,14 +126,38 @@ type Mod {
         "src/processor/java",
         built.directory("/dagger-io/dagger-java-annotation-processor/src/main/java"),
       )
-      .withDirectory(
-        "src/generated/java",
-        built.directory("/dagger-io/dagger-java-sdk/target/generated-sources/dagger"),
-      )
       .withNewFile(
         "src/processor/resources/META-INF/services/javax.annotation.processing.Processor",
         "io.dagger.annotation.processor.DaggerModuleAnnotationProcessor\n",
       )
+  }
+
+  """
+  Where the engine's core API is generated, relative to the module: the source
+  root of the client package io.dagger.client.modules.core.
+  """
+  let coreClientPath: String! = "clients/core/src/main/java"
+
+  """
+  The engine's core API, generated from the module's schema with the SDK.
+  """
+  let coreClient(introspectionJSON: File!, name: String!): Directory! {
+    sdkBuilt(introspectionJSON, name)
+      .directory("/dagger-io/dagger-java-sdk/target/generated-sources/dagger")
+  }
+
+  """
+  Refuse a pom.xml that does not compile the core client. Generation compiles
+  against the prebuilt SDK jar, so a missing source root would otherwise surface
+  only when the engine builds the module to call it.
+  """
+  let requireCoreClientSource(moduleSource: Directory!): Void {
+    if (moduleSource.file("pom.xml").contents.contains("<source>" + coreClientPath + "</source>") == false) {
+      raise "pom.xml does not compile the core client: in the add-dagger-sdk-sources execution of " +
+        "build-helper-maven-plugin, replace <source>sdk/src/generated/java</source> with " +
+        "<source>" + coreClientPath + "</source>"
+    }
+    null
   }
 
   """
@@ -196,10 +219,12 @@ type Mod {
   }
 
   """
-  The workspace with this module's vendored SDK and generated entrypoint merged
-  in.
+  The workspace with this module's vendored SDK, core client and generated
+  entrypoint merged in.
   """
   generated: Workspace! {
+    let committed = moduleDir(ws, rootPath)
+    requireCoreClientSource(committed)
     let modSource = ws.moduleSource(workspaceRef(rootPath))
     let name = modSource.moduleName
     let introspectionJSON = modSource.introspectionSchemaJSON
@@ -208,7 +233,7 @@ type Mod {
     # the module as committed, with the whole committed sdk/ dropped (source and
     # any previously vendored jar) and the freshly vendored SDK sources overlaid,
     # plus any stale generated entrypoint dropped so the processor regenerates it
-    let baseDir = moduleDir(ws, rootPath)
+    let baseDir = committed
       .withoutDirectory("sdk")
       .withDirectory("sdk", vendored)
       .withoutDirectory("src/generated")
@@ -216,6 +241,10 @@ type Mod {
 
     let withJava = ws
       .withNewDirectory(workspaceRef(joinPath(rootPath, "sdk")), vendored)
+      .withNewDirectory(
+        workspaceRef(joinPath(rootPath, coreClientPath)),
+        coreClient(introspectionJSON, name),
+      )
       .withNewDirectory(
         workspaceRef(joinPath(rootPath, "src/generated/java")),
         processedModule.directory("/module/target/generated-sources/annotations"),
