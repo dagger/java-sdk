@@ -21,6 +21,8 @@ public final class Generator {
 
   public static final String CORE_PACKAGE = "io.dagger.client";
 
+  public static final String RUNTIME_PACKAGE = "io.dagger.client";
+
   private final Path outputDirectory;
   private final Charset encoding;
   private final String engineVersion;
@@ -54,7 +56,8 @@ public final class Generator {
     requireEveryOwnedModulePlanned(coreSchema, packages.keySet());
     requireNoTargetShadowsCore(coreSchema, targetByTypeName);
 
-    TypeRegistry registry = TypeRegistry.acrossPackages(CORE_PACKAGE, packageByTypeName);
+    TypeRegistry registry =
+        TypeRegistry.acrossPackages(CORE_PACKAGE, RUNTIME_PACKAGE, packageByTypeName);
     emit(SchemaPartition.core(coreSchema), registry, null, null);
     for (GenerationPlan.Target target : plan.targets()) {
       SchemaPartition client = clients.get(target.module());
