@@ -66,7 +66,7 @@ generates the SDK bindings in one step:
   src/generated/dang/entrypoint/build.dang                      # the jar's Maven build
   sdk/src/main/java/...                                         # vendored SDK library
   sdk/src/processor/java/...                                    # vendored annotation processor
-  sdk/src/generated/java/...                                    # client bindings (from the engine schema)
+  clients/core/src/main/java/...                                # the engine's core API (from the engine schema)
 ```
 
 The SDK settings become typed flags on `dagger module init java` and are
@@ -84,6 +84,52 @@ tag keeps following it.
 Because everything is committed and the pom defaults `dagger.proc=none`, the
 module builds with a plain `mvn package` (no annotation processor at build time)
 — in an IDE or CI, without Dagger.
+
+## The core API
+
+The engine's own API is a client package, `io.dagger.client.modules.core`,
+generated under `clients/core`. Module code enters it through `core()`, a
+static method of its root class `Core`:
+
+```java
+import static io.dagger.client.modules.core.Core.core;
+
+import io.dagger.client.modules.core.Container;
+
+Container base = core().container().from("alpine:3.22"); // the session Dagger.dag() holds
+Container same = core(session).container().from("alpine:3.22"); // an io.dagger.client.Session
+```
+
+`Dagger.dag()` returns that `io.dagger.client.Session`, which has no API of
+its own. The hand-written runtime stays in `io.dagger.client`: `Dagger`,
+`Session` and the exceptions under `io.dagger.client.exception`.
+
+### Upgrade a module written against `dag()`
+
+This SDK keeps no compatibility layer. Module code that calls
+`dag().container()` or imports a core type from `io.dagger.client` no longer
+compiles. `dagger generate` refuses a `pom.xml` that still compiles
+`sdk/src/generated/java`, where core was generated before, and then fails with
+the compiler's error:
+
+```
+cannot find symbol
+  symbol:   method container()
+  location: class io.dagger.client.Session
+```
+
+To upgrade the module:
+
+1. In `pom.xml`, replace `<source>sdk/src/generated/java</source>` with
+   `<source>clients/core/src/main/java</source>`.
+2. Replace `import static io.dagger.client.Dagger.dag;` with
+   `import static io.dagger.client.modules.core.Core.core;`.
+3. Replace each `dag().` call with `core().`.
+4. Replace each import of a core type, such as `io.dagger.client.Container`,
+   with the same class in `io.dagger.client.modules.core`.
+5. Replace each use of the class `Client` with `Core`, such as
+   `Client.ClientDepArguments` with `Core.ClientDepArguments`.
+6. Run `dagger generate`.
 
 ## The Dang entrypoint
 
@@ -130,7 +176,7 @@ narrows the set to the scopes containing your current directory, so running it
 inside a module regenerates that module.
 
 Generation runs Maven in containers this SDK controls: it builds the vendored
-codegen plugin, generates the client bindings from the engine's introspection
+codegen plugin, generates the core client from the engine's introspection
 schema, vendors the SDK library and annotation processor as source, and runs the
 processor once to produce the entrypoint. It does not delegate code generation
 back to the engine.
@@ -153,8 +199,9 @@ dagger module client add <module-ref>
 
 In a module scope the client set becomes the module's dependency set. Each
 client is recorded in the manifest the module has — `dagger-module.toml`, or the
-`dagger.json` of a pre-1.0 module — and its types are part of the generated
-bindings; a client that is removed is dropped from both.
+`dagger.json` of a pre-1.0 module — and its types are generated into the core
+package, so module code reaches it through `core()`, as `core().clientDep()`.
+A client that is removed is dropped from both.
 
 Standalone clients — in a scope that has no Java module — are not generated yet.
 Adding one is refused and the workspace is left unchanged. A module on the Dang
