@@ -164,8 +164,8 @@ type JavaSdk {
     name: String!,
     clients: [ModuleSource!]!,
   ): Workspace! {
-    refuseEntrypointSettings(ws, scope, "dagger-module.toml", "runtime")
-    refuseEntrypointSettings(ws, scope, "dagger.json", "sdk")
+    refuseEntrypointSettings(ws, scope, "dagger-module.toml", "runtime", clients)
+    refuseEntrypointSettings(ws, scope, "dagger.json", "sdk", clients)
     let staged = sdkHelpers.moduleManifest
       .withName(name: name)
       .withLegacyDangRuntime
@@ -188,10 +188,17 @@ type JavaSdk {
   Refuse a setting of a manifest that the entrypoint manifest has no place for,
   before anything is written: the manifest builder writes the name and the
   entrypoint only. A runtime is what the entrypoint replaces, so this SDK's own
-  and the engine's builtin java runtime are accepted, and dependencies are
-  rewritten from the module's clients on either path.
+  and the engine's builtin java runtime are accepted. A dependency is dropped
+  when a client of the scope covers it, and refused otherwise: the module
+  reaches other modules only through its clients, so dropping it would lose it.
   """
-  let refuseEntrypointSettings(ws: Workspace!, scope: String!, fileName: String!, runtimeKey: String!): Void {
+  let refuseEntrypointSettings(
+    ws: Workspace!,
+    scope: String!,
+    fileName: String!,
+    runtimeKey: String!,
+    clients: [ModuleSource!]!,
+  ): Void {
     if (scopeHasFile(ws, scope, fileName) == false) {
       return null
     }
@@ -219,7 +226,46 @@ type JavaSdk {
       raise fileName + " has settings a Dang entrypoint cannot carry (" + refused.join(", ") +
         "): remove them, or set dangEntrypoint = false"
     }
+    let uncovered = uncoveredDependencies(manifest, clients)
+    if (uncovered.length > 0) {
+      raise fileName + " depends on " + uncovered.join(", ") + ", which the scope has no client for: " +
+        "a module on the Dang entrypoint reaches other modules through its clients. " +
+        "Add a client for each with dagger module client add, remove it from " + fileName +
+        ", or set dangEntrypoint = false"
+    }
     null
+  }
+
+  """
+  The dependencies a manifest records that no client of the scope covers, each
+  by its name, or by its source when it has none. A client covers the
+  dependency named after its module, and a nameless one on its git ref.
+  """
+  let uncoveredDependencies(manifest: JSONValue!, clients: [ModuleSource!]!): [String!]! {
+    if (manifest.fields.contains("dependencies") == false) {
+      return [] :: [String!]!
+    }
+    let names = clients.map { client => client.moduleName } + clients.map { client => client.moduleOriginalName }
+    let refs = clients.map { client => client.asString }
+    let entries = manifest.field(["dependencies"]).contents :: String!
+    # dagger.json also accepts a dependency as a bare source string.
+    let bare = ((JSON.decode(entries) :: [String!]!).length >= 0) rescue { err: Error => false }
+    if (bare) {
+      return (JSON.decode(entries) :: [String!]!).filter { source => refs.contains(source) == false }
+    }
+    (JSON.decode(entries) :: [{{name: String, source: String}}!]!)
+      .map { dependency =>
+        let name = dependency.name ?? ""
+        let source = dependency.source ?? ""
+        if (name != "") {
+          if (names.contains(name)) { "" } else { name }
+        } else if (refs.contains(source)) {
+          ""
+        } else {
+          source
+        }
+      }
+      .filter { label => label != "" }
   }
 
   """
