@@ -14,13 +14,15 @@ type E2e {
   # config-only stub.
   let outputRoot: String! = ".dagger/modules/e2e/out"
 
-  # The Java identifiers in nullableReturnSource — package
-  # io.dagger.modules.newapp, class NewApp — are derived from this name by hand
-  # and have to be changed with it. Checks that just need *a* module reuse the
+  # The Java identifiers in nullableReturnSource, coreClientSource and
+  # dagSource — package io.dagger.modules.newapp, class NewApp — and
+  # newModuleSourcePath are derived from this name by hand and have to be
+  # changed with it. Checks that just need *a* module reuse the
   # name so they share one vendored SDK build: the SDK jars are installed under
   # a per-module Maven version, so a second name costs a second build.
   let newModuleName: String! = "new-app"
   let newModulePath: String! = outputRoot + "/" + newModuleName
+  let newModuleSourcePath: String! = "src/main/java/io/dagger/modules/newapp/NewApp.java"
   let clientAppName: String! = "client-app"
   let clientAppPath: String! = outputRoot + "/" + clientAppName
 
@@ -509,6 +511,96 @@ type E2e {
   }
 
   """
+  A module compiles against the core client package: core() over the session
+  Dagger.dag() holds, core(session) over a session it names, and core types
+  imported from io.dagger.client.modules.core. Generation writes core under
+  clients/core and nothing under sdk/src/generated, the entrypoint the
+  annotation processor writes enters core by name, and a plain Maven build of
+  the module compiles. A pom.xml that still compiles sdk/src/generated/java is
+  refused by name.
+  """
+  coreClientCheck(ws: Workspace!): Void @check {
+    let scaffolded = javaSdk.generateScope(ws.withWorkdir(newModulePath), isModule: true, name: newModuleName, clients: [])
+    let generated = javaSdk.generateScope(
+      scaffolded.withNewFile("/" + newModulePath + "/" + newModuleSourcePath, coreClientSource),
+      isModule: true,
+      name: newModuleName,
+      clients: [],
+    )
+    let module = generated.directory("/" + newModulePath)
+    assert(module.exists(corePackagePath + "/Core.java"), "core was not generated under " + corePackagePath)
+    assert(module.exists("sdk/src/generated") == false, "core was generated under sdk/src/generated too")
+    assertContainsAll(module.file(entrypointPath).contents, [
+      "import static io.dagger.client.modules.core.Core.core;",
+      "core().module()",
+    ])
+    let built = mavenCompile(module)
+    assert(built.exitCode == 0, "the module did not compile against the core client:\n" + built.stdout)
+
+    let pomPath = "/" + newModulePath + "/pom.xml"
+    let oldPom = generated.withNewFile(
+      pomPath,
+      generated.file(pomPath).contents.replace(
+        "<source>clients/core/src/main/java</source>",
+        "<source>sdk/src/generated/java</source>",
+      ),
+    )
+    let refused = javaSdk
+      .generateScope(oldPom, isModule: true, name: newModuleName, clients: [])
+      .cwd rescue { err: Error => err.message }
+    assertContains(
+      refused,
+      "pom.xml does not compile the core client",
+      "a pom.xml without the core client source root was not refused: " + refused,
+    )
+    null
+  }
+
+  """
+  Module code written against dag() as the core API does not compile, so the
+  break shows when the module is built, not when a function runs:
+  Dagger.dag() returns the Session, which has no container(), and the core
+  types left io.dagger.client. Generation refuses the module, and a plain
+  Maven build fails in the compiler with errors that name the missing method
+  on the Session and the missing class.
+  """
+  dagRemovedCheck(ws: Workspace!): Void @check {
+    let generated = javaSdk.generateScope(ws.withWorkdir(newModulePath), isModule: true, name: newModuleName, clients: [])
+    let withDag = generated.withNewFile("/" + newModulePath + "/" + newModuleSourcePath, dagSource)
+    let refused = javaSdk
+      .generateScope(withDag, isModule: true, name: newModuleName, clients: [])
+      .cwd rescue { err: Error => "refused: " + err.message }
+    assert(refused.hasPrefix("refused: "), "generation accepted module code written against dag()")
+
+    let built = mavenCompile(withDag.directory("/" + newModulePath))
+    assert(built.exitCode != 0, "module code written against dag() compiled")
+    assertContainsAll(built.stdout, [
+      "COMPILATION ERROR",
+      "cannot find symbol",
+      "symbol:   method container()",
+      "location: class io.dagger.client.Session",
+      "symbol:   class Container",
+      "location: package io.dagger.client",
+    ])
+    null
+  }
+
+  """
+  A plain Maven compile of a generated module, as an IDE and the engine's
+  build run it: the vendored SDK, the core client and the module's own code
+  from source.
+  """
+  let mavenCompile(module: Directory!): Container! {
+    container
+      .from("maven:3.9.9-eclipse-temurin-21-alpine@sha256:4cbb8bf76c46b97e028998f2486ed014759a8e932480431039bdb93dffe6813e")
+      .withoutEntrypoint
+      .withMountedCache("/root/.m2", cacheVolume("e2e-maven-m2"))
+      .withDirectory("/module", module, exclude: ["**/target/**"])
+      .withWorkdir("/module")
+      .withExec(["mvn", "compile", "--no-transfer-progress"], expect: ReturnType.ANY)
+  }
+
+  """
   floorCheck's precondition, not a check of its own: the engine running these
   checks is the floor release, by the version it reports itself. A release
   reports its build after a "+", which is not part of the version; a dev or
@@ -561,6 +653,61 @@ type E2e {
       assert(said.contains(refusal), "generation on engine " + version + ", which the SDK refuses, said: " + said)
     }
     null
+  }
+
+  """
+  A module that reaches core over the session Dagger.dag() holds and over a
+  session it names, with a core type in its signature.
+  """
+  let coreClientSource: String! {
+    "package io.dagger.modules.newapp;\n"
+      + "\n"
+      + "import static io.dagger.client.modules.core.Core.core;\n"
+      + "\n"
+      + "import io.dagger.client.Dagger;\n"
+      + "import io.dagger.client.exception.DaggerQueryException;\n"
+      + "import io.dagger.client.modules.core.Container;\n"
+      + "import io.dagger.client.modules.core.Core;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "import java.util.concurrent.ExecutionException;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class NewApp {\n"
+      + "  @Function\n"
+      + "  public Container base() {\n"
+      + "    return core().container().from(\"alpine:3.22\");\n"
+      + "  }\n"
+      + "\n"
+      + "  @Function\n"
+      + "  public String release()\n"
+      + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
+      + "    Core api = Core.core(Dagger.dag());\n"
+      + "    return api.container().from(\"alpine:3.22\").file(\"/etc/alpine-release\").contents();\n"
+      + "  }\n"
+      + "}\n"
+  }
+
+  """
+  A module written against dag() as the core API, with a core type imported
+  from the package it left.
+  """
+  let dagSource: String! {
+    "package io.dagger.modules.newapp;\n"
+      + "\n"
+      + "import static io.dagger.client.Dagger.dag;\n"
+      + "\n"
+      + "import io.dagger.client.Container;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class NewApp {\n"
+      + "  @Function\n"
+      + "  public Container base() {\n"
+      + "    return dag().container().from(\"alpine:3.22\");\n"
+      + "  }\n"
+      + "}\n"
   }
 
   """A module whose only function returns a nullable object."""
