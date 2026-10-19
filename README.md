@@ -15,7 +15,9 @@ time** — the runtime just builds and packages the module.
 > `github.com/dagger/java-sdk/runtime`.
 
 > [!IMPORTANT]
-> This SDK needs an engine `v1.0.0-beta.18` or later.
+> This SDK needs an engine `v1.0.0-beta.18` or later. On an older engine,
+> `dagger module init` and `dagger generate` stop before they write anything,
+> with a message that names the floor and the engine's version.
 >
 > It writes module manifests through
 > [`github.com/dagger/sdk-helpers`](https://github.com/dagger/sdk-helpers), the

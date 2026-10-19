@@ -52,6 +52,8 @@ type E2e {
   let vendoredBindings: String! = "sdk/src/main/java/io/dagger/client/Dagger.java"
   let entrypointPath: String! = "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"
 
+  let floorVersion: String! = "v1.0.0-beta.18"
+
   """
   Fail the current check when a condition is false.
   """
@@ -404,6 +406,45 @@ type E2e {
       "the Optional return should be unwrapped before serialization",
     )
 
+    null
+  }
+
+  """
+  The SDK refuses an engine release older than its floor before it generates
+  anything, and names the floor and the version it found. Every other version
+  passes, a development build and one it cannot read among them, so an
+  unexpected format never blocks a user. On an engine the SDK refuses,
+  generation itself refuses.
+  """
+  engineFloorRefusalCheck(ws: Workspace!): Void @check {
+    let refused = [
+      "v1.0.0-beta.17", "v1.0.0-beta.17+0da36c8d", "v1.0.0-beta.11", "v1.0.0-beta.9",
+      "v1.0.0-alpha.20", "v0.21.9",
+    ]
+    let accepted = [
+      "v1.0.0-beta.18", "v1.0.0-beta.18+249edbd6", "v1.0.0-beta.19", "v1.0.0-rc.1", "v1.0.0",
+      "v1.0.1", "v2.0.0-beta.1", "v0.21.1-20260529020034-dev-b2f595b50044", "v1.0.0-dev.3", "devel", "",
+    ]
+    refused.each { engine =>
+      let refusal = javaSdk.engineRefusal(engine)
+      let wants = ["needs Dagger engine " + floorVersion + " or later", "this engine is " + engine + ".", "Upgrade the engine"]
+      wants.each { want =>
+        assertContains(refusal, want, "engine \"" + engine + "\": the refusal does not say \"" + want + "\": " + refusal)
+      }
+    }
+    accepted.each { engine =>
+      let refusal = javaSdk.engineRefusal(engine)
+      assert(refusal == "", "the SDK refused engine \"" + engine + "\": " + refusal)
+    }
+    let refusal = javaSdk.engineRefusal(version)
+    if (refusal != "") {
+      let said = javaSdk
+        .generateScope(ws.withWorkdir(newModulePath), isModule: true, name: newModuleName, clients: [])
+        .cwd rescue {
+          err: Error => err.message
+        }
+      assert(said.contains(refusal), "generation on engine " + version + ", which the SDK refuses, said: " + said)
+    }
     null
   }
 
