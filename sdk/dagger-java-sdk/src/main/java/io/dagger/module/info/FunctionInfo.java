@@ -4,6 +4,7 @@ public record FunctionInfo(
     String name,
     String qName,
     String description,
+    String cache,
     TypeInfo returnType,
     ParameterInfo[] parameters,
     boolean isCheck,

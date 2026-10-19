@@ -12,6 +12,7 @@ import com.palantir.javapoet.MethodSpec;
 import com.palantir.javapoet.ParameterizedTypeName;
 import com.palantir.javapoet.TypeSpec;
 import io.dagger.client.Dagger;
+import io.dagger.client.FunctionCachePolicy;
 import io.dagger.client.FunctionCall;
 import io.dagger.client.FunctionCallArgValue;
 import io.dagger.client.ID;
@@ -176,6 +177,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                             "<init>",
                             "",
                             parseFunctionDescription(elt),
+                            "",
                             new TypeInfo(
                                 ((ExecutableElement) elt).getReturnType().toString(),
                                 ((ExecutableElement) elt).getReturnType().getKind().name()),
@@ -245,6 +247,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                                   fName,
                                   fqName,
                                   parseFunctionDescription(elt),
+                                  moduleFunction.cache(),
                                   new TypeInfo(tm.toString(), tk.name()),
                                   parameterInfos.toArray(new ParameterInfo[parameterInfos.size()]),
                                   isCheck,
@@ -719,6 +722,20 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
             .add(")");
     if (isNotBlank(fnInfo.description())) {
       code.add("\n                    .withDescription($S)", fnInfo.description());
+    }
+    switch (fnInfo.cache()) {
+      case "" -> {}
+      case "never" ->
+          code.add("\n                    .withCachePolicy($T.Never)", FunctionCachePolicy.class);
+      case "session" ->
+          code.add(
+              "\n                    .withCachePolicy($T.PerSession)", FunctionCachePolicy.class);
+      default ->
+          code.add(
+              "\n                    .withCachePolicy($T.Default, new $T.WithCachePolicyArguments().withTimeToLive($S))",
+              FunctionCachePolicy.class,
+              io.dagger.client.Function.class,
+              fnInfo.cache());
     }
     if (fnInfo.isCheck()) {
       code.add("\n                    .withCheck()");
