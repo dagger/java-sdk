@@ -8,6 +8,6 @@ public final class TestConnections {
   private TestConnections() {}
 
   public static Connection over(GraphQLClient client) {
-    return new Connection(client);
+    return new Connection(client, null);
   }
 }
