@@ -89,7 +89,7 @@ type Packager {
       .withMountedFile("/schema.json", introspectionJSON)
       .withDirectory("/dagger-io", sdkSource(ws))
       .withWorkdir("/dagger-io")
-      .withExec(["mvn", "--projects", "dagger-codegen-maven-plugin", "--also-make", "install", "-T1C", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+      .withExec(["mvn", "--projects", "dagger-codegen-maven-plugin", "--also-make", "install", "-T1C", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "-Dproject.build.outputTimestamp=2024-01-01T00:00:00Z", "--no-transfer-progress"])
       .withExec(["mvn", "-Ptests", "test", "-Ddaggerengine.schema=/schema.json", "-Ddaggerengine.version=" + engineVersion, "-Dfmt.skip=true", "--no-transfer-progress"])
       # Compile the client the gate produces from the *real* schema, pinned to the
       # version the gate opens at. The engine has since reached it, so the run
