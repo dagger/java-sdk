@@ -1,0 +1,215 @@
+"""
+Checks of a module generated with the Dang entrypoint, driven through the CLI
+of the engine that runs them. The CLI is a nested client of that engine, so a
+pass proves the floor only on the floor's engine.
+"""
+type EntrypointChecks {
+  let fixturePath: String! = ".dagger/modules/e2e/fixtures/entrypoint"
+  let appName: String! = "entry-app"
+  let appPath: String! = ".dagger/modules/e2e/out/entry-app"
+  let playgroundRoot: String! = "/work"
+
+  let assert(condition: Boolean!, message: String!): Void {
+    if (condition == false) { raise message }
+    null
+  }
+
+  """
+  The fixture module with its entrypoint: generated once to scaffold it, and
+  again with the fixture's source in place of the template's.
+  """
+  let app(ws: Workspace!): Directory! {
+    let scaffolded = javaSdk.generateScope(ws.withWorkdir(appPath), isModule: true, name: appName, clients: [])
+    let withSource = scaffolded.withDirectory("/" + appPath, ws.directory("/" + fixturePath))
+    javaSdk
+      .generateScope(withSource.withWorkdir(appPath), isModule: true, name: appName, clients: [])
+      .directory("/" + appPath)
+  }
+
+  """
+  A container with the CLI of the engine's release, and a git workspace that
+  holds the module at app/.
+  """
+  let playground(app: Directory!): Container! {
+    container
+      .from("registry.dagger.io/engine:" + (version.split("+")[0] ?? version))
+      .withoutEntrypoint
+      .withDirectory(playgroundRoot + "/app", app)
+      .withWorkdir(playgroundRoot)
+      .withExec(["git", "init", "--quiet"])
+  }
+
+  let cli(ctr: Container!, args: [String!]!): Container! {
+    ctr.withExec(["dagger"] + args, experimentalPrivilegedNesting: true, expect: ReturnType.ANY)
+  }
+
+  """
+  Call a function of the module and compare what it prints.
+  """
+  let assertCall(pg: Container!, args: [String!]!, want: String!): Void {
+    let called = cli(pg, ["-m", "app", "call"] + args)
+    let got = called.stdout.trimSpace
+    assert(
+      called.exitCode == 0 and got == want,
+      "dagger call " + args.join(" ") + ": want " + JSON.encode(want) + ", got " + JSON.encode(got) +
+        " (exit code " + JSON.encode(called.exitCode) + ")\n" + called.stderr,
+    )
+  }
+
+  """
+  The engine reads the module's types from the generated entrypoint without
+  building it: the functions of a module whose pom.xml Maven cannot read are
+  listed, and only a call fails, in the build.
+  """
+  pub functionsCheck(ws: Workspace!): Void @check {
+    let broken = playground(app(ws).withNewFile("pom.xml", "not a pom\n"))
+    let listed = cli(broken, ["-m", "app", "functions"])
+    assert(
+      listed.exitCode == 0 and listed.stdout.contains("greet") and listed.stdout.contains("generate-greeting"),
+      "dagger functions did not list the module's functions:\n" + listed.stdout + listed.stderr,
+    )
+    let called = cli(broken, ["-m", "app", "call", "greet", "--name", "World"])
+    assert(
+      called.exitCode != 0 and called.stderr.contains("mvn package"),
+      "a call to a module that does not build did not fail in its build:\n" + called.stdout + called.stderr,
+    )
+    null
+  }
+
+  """
+  Calls through the entrypoint carry constructor state, strings, lists,
+  optional values, mixed-case enum values (dagger/dagger#14562), void, nested
+  Dagger calls and core objects both ways, and continue the engine's trace.
+  """
+  pub callsCheck(ws: Workspace!): Void @check {
+    let pg = playground(app(ws))
+    assertCall(pg, ["greet", "--name", "World"], "Hello, World!")
+    assertCall(pg, ["--greeting", "Hi", "greet", "--name", "World"], "Hi, World!")
+    assertCall(pg, ["shout", "--words", "a,b"], "A\nB")
+    assertCall(pg, ["maybe"], "absent")
+    assertCall(pg, ["maybe", "--value", "x"], "got x")
+    assertCall(pg, ["level", "--level", "MixedCase"], "MixedCase")
+    assertCall(pg, ["level", "--level", "lowerCamel"], "lowerCamel")
+    assertCall(pg, ["nothing"], "")
+    assertCall(pg, ["nested"], "nested Hello")
+    assertCall(pg, ["--greeting", "Hi", "with-greeting", "--dir", "app/src", "file", "--path", "greeting.txt", "contents"], "Hi")
+
+    let traces = cli(pg, ["-m", "app", "call", "traces"]).stdout.trimSpace.split(" ")
+    let engineTrace = traces[0] ?? ""
+    assert(
+      engineTrace != "none" and engineTrace == (traces[1] ?? "") and engineTrace.containsMatch("^0+$") == false,
+      "the function did not run in the engine's trace: " + traces.join(" "),
+    )
+    null
+  }
+
+  """
+  A failing function's error reaches the caller with its text, not as the exit
+  code of the process that ran it.
+  """
+  pub errorCheck(ws: Workspace!): Void @check {
+    let failed = cli(playground(app(ws)), ["-m", "app", "call", "fail"])
+    let said = failed.stdout + failed.stderr
+    assert(
+      failed.exitCode != 0 and said.contains("call module entrypoint: entry-app failed: boom"),
+      "the function's error lost its text:\n" + said,
+    )
+    null
+  }
+
+  """
+  Each cache policy holds in a session: a default or per-session result is
+  reused, a never result is not, and a result with an explicit TTL is reused
+  until it expires and computed again after (dagger/dagger#14694). Every CLI
+  call here shares the session that runs the check; engine-e2e's
+  cache-policy-sessions-check calls across sessions.
+  """
+  pub cachePolicyCheck(ws: Workspace!): Void @check {
+    let script = "set -e\n" +
+      "c() { dagger -m app call \"$1\"; }\n" +
+      "echo $(c cached) $(c cached) $(c fresh) $(c fresh) $(c per-session) $(c per-session)\n" +
+      "a=$(c short-lived); b=$(c short-lived); sleep 12; echo $a $b $(c short-lived)\n"
+    let ran = playground(app(ws)).withExec(["sh", "-c", script], experimentalPrivilegedNesting: true, expect: ReturnType.ANY)
+    let said = ran.stdout + ran.stderr
+    assert(ran.exitCode == 0, "the calls failed:\n" + said)
+    let lines = ran.stdout.trimSpace.split("\n").map { line => line.split(" ") }
+    let calls = lines[0] ?? ([] :: [String!]!)
+    let ttl = lines[1] ?? ([] :: [String!]!)
+    assert(calls[0] == calls[1], "a default result was not reused:\n" + said)
+    assert(calls[2] != calls[3], "a never-cached result was reused:\n" + said)
+    assert(calls[4] == calls[5], "a per-session result was not reused in its session:\n" + said)
+    assert(ttl[0] == ttl[1], "a result was not reused before its TTL:\n" + said)
+    assert(ttl[1] != ttl[2], "a result was reused after its TTL:\n" + said)
+    null
+  }
+
+  """
+  `dagger check` runs the module's checks through the entrypoint: one passes,
+  and one fails with its error.
+  """
+  pub checksCheck(ws: Workspace!): Void @check {
+    let pg = playground(app(ws))
+    let passed = cli(pg, ["-m", "app", "check", "passing-check"])
+    assert(
+      passed.exitCode == 0 and passed.stderr.contains("1 passed"),
+      "the passing check did not pass:\n" + passed.stdout + passed.stderr,
+    )
+    let failed = cli(pg, ["-m", "app", "check", "failing-check"])
+    let said = failed.stdout + failed.stderr
+    assert(
+      failed.exitCode != 0 and said.contains("1 failed") and said.contains("failing-check failed: on purpose"),
+      "the failing check did not fail with its error:\n" + said,
+    )
+    null
+  }
+
+  """
+  `dagger generate` runs the module's generator through the entrypoint and
+  applies its changes.
+  """
+  pub generateCheck(ws: Workspace!): Void @check {
+    let generated = cli(
+      playground(app(ws)),
+      ["-m", "app", "generate", "--generator", "generate-greeting", "--auto-apply"],
+    )
+    let said = generated.stdout + generated.stderr
+    assert(generated.exitCode == 0, "dagger generate failed:\n" + said)
+    let written = generated.file(playgroundRoot + "/generated/greeting.txt").contents rescue ""
+    assert(written == "Hello\n", "the generator's changes were not applied: " + JSON.encode(written) + "\n" + said)
+    null
+  }
+
+  """
+  A module loaded by git reference builds from its commit, with no checkout of
+  the caller's.
+  """
+  pub gitCheck(ws: Workspace!): Void @check {
+    let server = container
+      .from("alpine:3.22")
+      .withoutEntrypoint
+      .withExec(["apk", "add", "--no-cache", "git", "git-daemon"])
+      .withDirectory("/srv/repo/app", app(ws))
+      .withWorkdir("/srv/repo")
+      .withExec(["git", "init", "-q", "-b", "main"])
+      .withExec(["git", "add", "-A"])
+      .withExec(["git", "-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "commit", "-q", "-m", "entry-app"])
+      .withExec(["git", "clone", "-q", "--bare", ".", "/srv/repo.git"])
+      .withExposedPort(9418)
+      .withDefaultArgs(["git", "daemon", "--export-all", "--base-path=/srv", "/srv"])
+      .asService
+    let called = container
+      .from("registry.dagger.io/engine:" + (version.split("+")[0] ?? version))
+      .withoutEntrypoint
+      .withServiceBinding(server.hostname, server)
+      .withExec(
+        ["dagger", "-m", "git://" + server.hostname + "/repo.git#main:app", "call", "greet", "--name", "Git"],
+        experimentalPrivilegedNesting: true,
+        expect: ReturnType.ANY,
+      )
+    assert(
+      called.exitCode == 0 and called.stdout.trimSpace == "Hello, Git!",
+      "the module did not run from git:\n" + called.stdout + called.stderr,
+    )
+    null
+  }
+}

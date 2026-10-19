@@ -64,6 +64,13 @@ type E2e {
   let floorVersion: String! = "v1.0.0-beta.18"
 
   """
+  Checks of a module generated with the Dang entrypoint, through the CLI.
+  """
+  entrypoint: EntrypointChecks! {
+    EntrypointChecks()
+  }
+
+  """
   Fail the current check when a condition is false.
   """
   let assert(condition: Boolean!, message: String!): Void {

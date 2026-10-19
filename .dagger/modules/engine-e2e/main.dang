@@ -128,4 +128,29 @@ type EngineE2e {
 
     null
   }
+
+  """
+  Results of a module on the Dang entrypoint follow their cache policy across
+  sessions of the floor engine: a default result is reused, a per-session or a
+  never result is not. Each CLI call here is a session of its own, which the
+  e2e checks cannot show: their CLI calls share the session that runs them.
+  """
+  pub cachePolicySessionsCheck(ws: Workspace!): Void @check {
+    let appPath = ".dagger/modules/entry-app"
+    let generated = floorClient(ws)
+      .withExec(withoutOuterSession(["--auto-apply", "module", "init", "java", "--name", "entry-app", "--path", appPath]))
+      .withExec(["cp", "-R", ".dagger/modules/e2e/fixtures/entrypoint/src", appPath + "/"])
+      .withWorkdir(appPath)
+      .withExec(withoutOuterSession(["--auto-apply", "generate"]))
+    let script = "set -e\n" +
+      "c() { env -u DAGGER_SESSION_PORT -u DAGGER_SESSION_TOKEN dagger -m . call \"$1\"; }\n" +
+      "echo $(c cached) $(c cached) $(c per-session) $(c per-session) $(c fresh) $(c fresh)\n"
+    let results = generated.withExec(["sh", "-c", script]).stdout.trimSpace
+    let calls = results.split(" ")
+    assert(calls.length == 6 and calls[0] == calls[1], "a default result was not reused in another session: " + results)
+    assert(calls[2] != calls[3], "a per-session result was reused in another session: " + results)
+    assert(calls[4] != calls[5], "a never-cached result was reused: " + results)
+
+    null
+  }
 }
