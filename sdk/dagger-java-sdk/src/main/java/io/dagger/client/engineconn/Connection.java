@@ -1,7 +1,7 @@
 package io.dagger.client.engineconn;
 
 import io.dagger.client.graphql.GraphQLClient;
-import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.Context;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -88,10 +88,10 @@ public final class Connection {
   }
 
   static Connection getConnection(int port, String token, CLISession session) {
-    // Inject OpenTelemetry context into headers
+    // Not GlobalOpenTelemetry's propagators: reading the global locks it, and a later
+    // GlobalOpenTelemetry.set, from Telemetry or from the host application, then fails.
     Map<String, String> headers = new HashMap<>();
-    GlobalOpenTelemetry.getPropagators()
-        .getTextMapPropagator()
+    W3CTraceContextPropagator.getInstance()
         .inject(Context.current(), headers, (carrier, key, value) -> carrier.put(key, value));
 
     return new Connection(
