@@ -1,6 +1,7 @@
 package io.dagger.client.engineconn;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -16,10 +17,26 @@ class ConnectionTest {
 
   @Test
   void aSessionInTheEnvironmentIsAttachedToAndNothingIsStarted() throws Exception {
-    Connection connection = Connection.get(dir.toString(), false, "54321", "tok");
+    Connection connection = Connection.get(dir.toString(), false, "54321", "tok", false);
 
     assertThat(connection.session()).isNull();
     assertThat(connection.getGraphQLClient()).isNotNull();
+    connection.close();
+  }
+
+  @Test
+  void aModuleWithoutASessionInTheEnvironmentIsRefusedOne() {
+    assertThatThrownBy(() -> Connection.get(dir.toString(), false, null, null, true))
+        .isInstanceOf(IOException.class)
+        .hasMessageContaining("DAGGER_SESSION_PORT")
+        .hasMessageContaining("never starts one");
+  }
+
+  @Test
+  void aModuleStillAttachesToTheSessionInItsEnvironment() throws Exception {
+    Connection connection = Connection.get(dir.toString(), false, "54321", "tok", true);
+
+    assertThat(connection.session()).isNull();
     connection.close();
   }
 

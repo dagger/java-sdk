@@ -10,4 +10,8 @@ public final class TestConnections {
   public static Connection over(GraphQLClient client) {
     return new Connection(client, null);
   }
+
+  public static boolean markedModule() {
+    return Connection.module;
+  }
 }

@@ -3,6 +3,7 @@ package io.dagger.client;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.dagger.client.engineconn.TestConnections;
 import jakarta.json.Json;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -125,6 +126,18 @@ class ModuleDispatcherTest {
 
     assertThat(code).isZero();
     assertThat(Files.readString(output)).isEqualTo("[\"a\",\"b\"]");
+  }
+
+  @Test
+  void anEngineCallMarksTheProcessAsAModule(@TempDir Path dir) throws Exception {
+    withStdin(
+        request("{}"),
+        () ->
+            ModuleDispatcher.engineCall(
+                new String[] {"engine-call", "--output", dir.resolve("result.json").toString()},
+                (parentJson, parentName, fnName, inputArgs) -> null));
+
+    assertThat(TestConnections.markedModule()).isTrue();
   }
 
   @Test

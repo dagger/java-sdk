@@ -14,6 +14,8 @@ public final class Connection {
 
   static final Logger LOG = LoggerFactory.getLogger(Connection.class);
 
+  static volatile boolean module;
+
   private final GraphQLClient graphQLClient;
   private final CLISession session;
 
@@ -36,6 +38,14 @@ public final class Connection {
     }
   }
 
+  /**
+   * Marks this process as a module's. The engine that runs a module gives it its session, so from
+   * then on a missing session is an error and no session is started.
+   */
+  public static void markModule() {
+    module = true;
+  }
+
   public static Connection get(String workingDir) throws IOException {
     return get(workingDir, false);
   }
@@ -45,13 +55,23 @@ public final class Connection {
         workingDir,
         loadWorkspaceModules,
         System.getenv("DAGGER_SESSION_PORT"),
-        System.getenv("DAGGER_SESSION_TOKEN"));
+        System.getenv("DAGGER_SESSION_TOKEN"),
+        module);
   }
 
   static Connection get(
-      String workingDir, boolean loadWorkspaceModules, String portStr, String sessionToken)
+      String workingDir,
+      boolean loadWorkspaceModules,
+      String portStr,
+      String sessionToken,
+      boolean module)
       throws IOException {
     if (portStr == null || sessionToken == null) {
+      if (module) {
+        throw new IOException(
+            "no Dagger session in the environment (DAGGER_SESSION_PORT and DAGGER_SESSION_TOKEN):"
+                + " a module gets its session from the engine that runs it and never starts one");
+      }
       CLISession session = CLISession.start(Path.of(workingDir), loadWorkspaceModules);
       return getConnection(session.port(), session.sessionToken(), session);
     }

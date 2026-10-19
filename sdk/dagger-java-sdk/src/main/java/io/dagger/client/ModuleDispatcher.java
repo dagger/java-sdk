@@ -1,5 +1,6 @@
 package io.dagger.client;
 
+import io.dagger.client.engineconn.Connection;
 import io.dagger.client.telemetry.Telemetry;
 import jakarta.json.Json;
 import jakarta.json.JsonException;
@@ -50,6 +51,7 @@ public final class ModuleDispatcher {
    * code.
    */
   public static int engineCall(String[] args, Dispatch dispatch) {
+    Connection.markModule();
     try (Telemetry telemetry = new Telemetry()) {
       Path output = outputPath(args);
       String result = dispatch(System.in, dispatch);
