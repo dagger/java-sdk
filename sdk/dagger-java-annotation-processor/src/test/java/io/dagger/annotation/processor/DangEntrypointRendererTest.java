@@ -232,7 +232,7 @@ class DangEntrypointRendererTest {
               new ParameterInfo(
                   "src",
                   "",
-                  new TypeInfo("io.dagger.client.Directory", TypeKind.DECLARED.name()),
+                  new TypeInfo("io.dagger.client.modules.core.Directory", TypeKind.DECLARED.name()),
                   false,
                   Optional.empty(),
                   Optional.of("."),
@@ -284,7 +284,7 @@ class DangEntrypointRendererTest {
               new FieldInfo(
                   "source",
                   "the source tree",
-                  new TypeInfo("io.dagger.client.Directory", TypeKind.DECLARED.name()))
+                  new TypeInfo("io.dagger.client.modules.core.Directory", TypeKind.DECLARED.name()))
             },
             new FunctionInfo[] {greet, lint},
             Optional.of(constructor));

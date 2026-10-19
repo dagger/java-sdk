@@ -1,6 +1,7 @@
 package io.dagger.client;
 
 import io.dagger.client.engineconn.Connection;
+import io.dagger.client.modules.core.JSON;
 import io.dagger.client.telemetry.Telemetry;
 import jakarta.json.Json;
 import jakarta.json.JsonException;

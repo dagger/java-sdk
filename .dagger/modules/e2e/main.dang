@@ -344,7 +344,7 @@ type E2e {
     let root = ws.withWorkdir(".")
     let scoped = ws.withWorkdir(clientAppPath)
     let manifestPath = clientAppPath + "/dagger-module.toml"
-    let bindingsDir = clientAppPath + "/sdk/src/generated/java/io/dagger/client"
+    let bindingsDir = clientAppPath + "/sdk/src/generated/java/io/dagger/client/modules/core"
     let client = ws.moduleSource("/" + clientDepPath)
 
     let untouched = javaSdk
@@ -416,7 +416,7 @@ type E2e {
     )
     let bindings = javaSdk(dangEntrypoint: false)
       .generateScope(withSource, isModule: true, name: defaultsAppName, clients: [client])
-      .file("/" + defaultsAppPath + "/sdk/src/generated/java/io/dagger/client/Client.java")
+      .file("/" + defaultsAppPath + "/sdk/src/generated/java/io/dagger/client/modules/core/Core.java")
       .contents
 
     assertContainsAll(bindings, [
@@ -565,9 +565,9 @@ type E2e {
   let nullableReturnSource: String! {
     "package io.dagger.modules.newapp;\n"
       + "\n"
-      + "import static io.dagger.client.Dagger.dag;\n"
+      + "import static io.dagger.client.modules.core.Core.core;\n"
       + "\n"
-      + "import io.dagger.client.Directory;\n"
+      + "import io.dagger.client.modules.core.Directory;\n"
       + "import io.dagger.module.annotation.Function;\n"
       + "import io.dagger.module.annotation.Object;\n"
       + "import java.util.Optional;\n"
@@ -579,7 +579,7 @@ type E2e {
       + "    if (!found) {\n"
       + "      return Optional.empty();\n"
       + "    }\n"
-      + "    return Optional.of(dag().directory().withNewFile(\"found\", \"\"));\n"
+      + "    return Optional.of(core().directory().withNewFile(\"found\", \"\"));\n"
       + "  }\n"
       + "}\n"
   }
@@ -591,10 +591,10 @@ type E2e {
   let clientOptionalArgsSource: String! {
     "package io.dagger.modules.defaultsapp;\n"
       + "\n"
-      + "import static io.dagger.client.Dagger.dag;\n"
+      + "import static io.dagger.client.modules.core.Core.core;\n"
       + "\n"
-      + "import io.dagger.client.Client;\n"
       + "import io.dagger.client.exception.DaggerQueryException;\n"
+      + "import io.dagger.client.modules.core.Core;\n"
       + "import io.dagger.module.annotation.Function;\n"
       + "import io.dagger.module.annotation.Object;\n"
       + "import java.util.concurrent.ExecutionException;\n"
@@ -604,15 +604,15 @@ type E2e {
       + "  @Function\n"
       + "  public String defaults()\n"
       + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
-      + "    return dag().clientDefaults().greeting();\n"
+      + "    return core().clientDefaults().greeting();\n"
       + "  }\n"
       + "\n"
       + "  @Function\n"
       + "  public String overridden()\n"
       + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
-      + "    return dag()\n"
+      + "    return core()\n"
       + "        .clientDefaults(\n"
-      + "            new Client.ClientDefaultsArguments().withName(\"java\").withTimes(2).withSuffix(\"!\"))\n"
+      + "            new Core.ClientDefaultsArguments().withName(\"java\").withTimes(2).withSuffix(\"!\"))\n"
       + "        .greeting();\n"
       + "  }\n"
       + "}\n"

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.dagger.client.engineconn.TestConnections;
+import io.dagger.client.modules.core.JSON;
 import jakarta.json.Json;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;

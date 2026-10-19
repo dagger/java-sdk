@@ -19,7 +19,7 @@ import java.util.Set;
 /** Emits every package a {@link GenerationPlan} names, in one pass over one type registry. */
 public final class Generator {
 
-  public static final String CORE_PACKAGE = "io.dagger.client";
+  public static final String CORE_PACKAGE = ModulePackage.ROOT + "." + ModulePackage.CORE_SEGMENT;
 
   public static final String RUNTIME_PACKAGE = "io.dagger.client";
 

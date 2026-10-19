@@ -1,10 +1,10 @@
 package io.dagger.modules.entryapp;
 
-import static io.dagger.client.Dagger.dag;
+import static io.dagger.client.modules.core.Core.core;
 
-import io.dagger.client.Changeset;
-import io.dagger.client.Directory;
 import io.dagger.client.exception.DaggerQueryException;
+import io.dagger.client.modules.core.Changeset;
+import io.dagger.client.modules.core.Directory;
 import io.dagger.module.annotation.Check;
 import io.dagger.module.annotation.Default;
 import io.dagger.module.annotation.Function;
@@ -58,7 +58,7 @@ public class EntryApp {
 
   @Function
   public String nested() throws ExecutionException, DaggerQueryException, InterruptedException {
-    return dag()
+    return core()
         .container()
         .from("alpine:3.22")
         .withExec(List.of("echo", "nested " + greeting))
@@ -112,9 +112,9 @@ public class EntryApp {
   @Function
   @Generate
   public Changeset generateGreeting() {
-    return dag()
+    return core()
         .directory()
         .withNewFile("generated/greeting.txt", greeting + "\n")
-        .changes(dag().directory());
+        .changes(core().directory());
   }
 }

@@ -38,9 +38,9 @@ class DaggerTypeDangTest {
 
   @Test
   void objectsScalarsAndEnumsRenderByName() {
-    assertThat(declared("io.dagger.client.Container").toDangTypeDef())
+    assertThat(declared("io.dagger.client.modules.core.Container").toDangTypeDef())
         .isEqualTo("typeDef.withObject(\"Container\")");
-    assertThat(declared("io.dagger.client.JSON").toDangTypeDef())
+    assertThat(declared("io.dagger.client.modules.core.JSON").toDangTypeDef())
         .isEqualTo("typeDef.withScalar(\"JSON\")");
 
     DaggerType.setKnownEnums(Set.of("io.dagger.modules.demo.Severity"));
@@ -50,9 +50,9 @@ class DaggerTypeDangTest {
 
   @Test
   void listsAndArraysBothRenderAsListOf() {
-    assertThat(declared("java.util.List<io.dagger.client.File>").toDangTypeDef())
+    assertThat(declared("java.util.List<io.dagger.client.modules.core.File>").toDangTypeDef())
         .isEqualTo("typeDef.withListOf(typeDef.withObject(\"File\"))");
-    assertThat(DaggerType.of("io.dagger.client.File[]").toDangTypeDef())
+    assertThat(DaggerType.of("io.dagger.client.modules.core.File[]").toDangTypeDef())
         .isEqualTo("typeDef.withListOf(typeDef.withObject(\"File\"))");
   }
 

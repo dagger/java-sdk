@@ -21,6 +21,8 @@ class ObjectVisitor extends AbstractVisitor {
 
   private static final String TARGET = "TARGET";
 
+  private static final String CORE_ENTRY = "core";
+
   private final ClientEntryPoint entryPoint;
   private final TargetDescriptor descriptor;
 
@@ -86,26 +88,7 @@ class ObjectVisitor extends AbstractVisitor {
     }
 
     if ("Query".equals(type.getName())) {
-      MethodSpec constructor =
-          MethodSpec.constructorBuilder()
-              .addParameter(registry().runtime("engineconn", "Connection"), "connection")
-              .addStatement("this.connection = connection")
-              .addStatement(
-                  "this.queryBuilder = new $T(connection.getGraphQLClient())",
-                  registry().runtime("QueryBuilder"))
-              .build();
-      classBuilder.addMethod(constructor);
-      classBuilder.addField(
-          FieldSpec.builder(
-                  registry().runtime("engineconn", "Connection"), "connection", Modifier.PRIVATE)
-              .build());
-      MethodSpec closeMethod =
-          MethodSpec.methodBuilder("close")
-              .addException(Exception.class)
-              .addModifiers(Modifier.PUBLIC)
-              .addStatement("this.connection.close()")
-              .build();
-      classBuilder.addMethod(closeMethod);
+      buildCoreEntryPoint(classBuilder, thisType);
 
       // loadObjectFromID: load any object by its ID using node(id:) + inline fragment
       classBuilder.addMethod(
@@ -120,9 +103,11 @@ class ObjectVisitor extends AbstractVisitor {
               .addJavadoc("Load any object by its ID using node(id:) with an inline fragment.\n")
               .beginControlFlow("try")
               .addStatement(
-                  "QueryBuilder qb = this.queryBuilder.chainNode(clazz.getSimpleName(), id)")
+                  "$T qb = this.queryBuilder.chainNode(clazz.getSimpleName(), id)",
+                  registry().runtime("QueryBuilder"))
               .addStatement(
-                  "return clazz.getDeclaredConstructor(QueryBuilder.class).newInstance(qb)")
+                  "return clazz.getDeclaredConstructor($T.class).newInstance(qb)",
+                  registry().runtime("QueryBuilder"))
               .nextControlFlow("catch (Exception e)")
               .addStatement("throw new RuntimeException(\"Failed to load object from ID\", e)")
               .endControlFlow()
@@ -177,7 +162,7 @@ class ObjectVisitor extends AbstractVisitor {
                         .addStatement(
                             "$T id = ctx.deserialize($T.class, parser)", String.class, String.class)
                         .addStatement(
-                            "$T o = new $T($T.dag().nodeQueryBuilder($S, new $T(id)))",
+                            "$T o = new $T($T.dag().queryBuilder().chainNode($S, new $T(id)))",
                             thisType,
                             thisType,
                             registry().runtime("Dagger"),
@@ -244,6 +229,26 @@ class ObjectVisitor extends AbstractVisitor {
   }
 
   /**
+   * The way into core. Core is what the session answers, so the entry wraps the session's builder:
+   * it selects no field and serves no target.
+   */
+  private void buildCoreEntryPoint(TypeSpec.Builder classBuilder, ClassName core) {
+    MethodSpec entry =
+        MethodSpec.methodBuilder(CORE_ENTRY)
+            .addModifiers(Modifier.PUBLIC, Modifier.STATIC)
+            .returns(core)
+            .addParameter(
+                ParameterSpec.builder(registry().runtime("Session"), "session")
+                    .addJavadoc("the session to reach core in\n")
+                    .build())
+            .addJavadoc("The engine's core API.\n")
+            .addStatement("return new $T(session.queryBuilder())", core)
+            .build();
+    classBuilder.addMethod(entry);
+    classBuilder.addMethod(ambient(entry, "The engine's core API.\n"));
+  }
+
+  /**
    * The way into this client package: the module's {@code Query} field, and every field it
    * contributes to another core type.
    */
@@ -269,12 +274,12 @@ class ObjectVisitor extends AbstractVisitor {
       buildFieldArgumentsHelpers(classBuilder, field, type, entry);
       MethodSpec withOptArgs = buildFieldMethod(classBuilder, field, true, entry);
       if (entry.onQuery()) {
-        classBuilder.addMethod(ambient(withOptArgs, field));
+        classBuilder.addMethod(ambient(withOptArgs, Helpers.escapeJavadoc(field.getDescription())));
       }
     }
     MethodSpec method = buildFieldMethod(classBuilder, field, false, entry);
     if (entry.onQuery()) {
-      classBuilder.addMethod(ambient(method, field));
+      classBuilder.addMethod(ambient(method, Helpers.escapeJavadoc(field.getDescription())));
     }
   }
 
@@ -290,7 +295,7 @@ class ObjectVisitor extends AbstractVisitor {
   }
 
   /** The same entry over the ambient session, so a caller that never named one has a way in. */
-  private MethodSpec ambient(MethodSpec entry, Field field) {
+  private MethodSpec ambient(MethodSpec entry, String javadoc) {
     List<ParameterSpec> withoutSession = entry.parameters().subList(1, entry.parameters().size());
     CodeBlock.Builder call =
         CodeBlock.builder().add("return $L($T.dag()", entry.name(), registry().runtime("Dagger"));
@@ -302,7 +307,7 @@ class ObjectVisitor extends AbstractVisitor {
         .returns(entry.returnType())
         .addParameters(withoutSession)
         .addExceptions(entry.exceptions())
-        .addJavadoc(Helpers.escapeJavadoc(field.getDescription()))
+        .addJavadoc(javadoc)
         .addJavadoc("\n@see $T#dag()\n", registry().runtime("Dagger"))
         .addStatement(call.build())
         .build();
