@@ -104,7 +104,7 @@ type EngineE2e {
 
   """
   The floor engine should list this checkout as the java SDK, initialize a Java
-  module from it, and run the module.
+  module on the Dang entrypoint from it, and run the module.
   """
   pub devSdkCheck(ws: Workspace!): Void @check {
     let listed = floorClient(ws).withExec(withoutOuterSession(["sdk", "list"]))
@@ -118,7 +118,8 @@ type EngineE2e {
       .withExec(["test", "-f", modulePath + "/src/main/java/io/dagger/modules/sdksmoke/SdkSmoke.java"])
       .withExec(["test", "-f", modulePath + "/sdk/src/main/java/io/dagger/client/Dagger.java"])
       .withExec(["test", "-f", modulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"])
-      .withExec(["grep", "-q", "github.com/dagger/java-sdk/runtime", modulePath + "/dagger-module.toml"])
+      .withExec(["test", "-f", modulePath + "/src/generated/dang/entrypoint/main.dang"])
+      .withExec(["grep", "-q", "^\\[entrypoint\\]$", modulePath + "/dagger-module.toml"])
 
     let release = initialized
       .withExec(withoutOuterSession(["-m", modulePath, "call", "container", "file", "--path", "/etc/alpine-release", "contents"]))

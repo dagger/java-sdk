@@ -5,14 +5,15 @@ The user experience for authoring Dagger modules in Java.
 Modules created with this tool use a **self-contained** layout: the Dagger Java
 SDK is vendored into the module as real, buildable source, all generated files
 are committed to version control, and **no code generation runs at module load
-time** — the runtime just builds and packages the module.
+time**.
 
 > This repository owns both halves of the Java SDK. The root Dang module
 > (`main.dang` / `mod.dang`) owns code generation and scaffolding, and runs when
-> the engine asks it to generate a scope. The module *runtime* (the SDK
-> contract: building and packaging Java modules) is the build/package-only Dang
-> module under `runtime/`; new modules reference it as
-> `github.com/dagger/java-sdk/runtime`.
+> the engine asks it to generate a scope. A new module runs on a **Dang
+> entrypoint** generated into it: the engine reads the module's types from it
+> without building the module, and builds the jar only to call a function. A
+> module can instead run on the build/package-only Dang module under
+> `runtime/`, referenced as `github.com/dagger/java-sdk/runtime`.
 
 > [!IMPORTANT]
 > This SDK needs an engine `v1.0.0-beta.18` or later. On an older engine,
@@ -56,11 +57,13 @@ generates the SDK bindings in one step:
 
 ```
 <module>/
-  dagger-module.toml                                            # [runtime] source = github.com/dagger/java-sdk/runtime
+  dagger-module.toml                                            # name and [entrypoint] only
   pom.xml                                                       # two-pass build; dagger.proc defaults to "none"
   src/main/java/io/dagger/modules/<pkg>/<Module>.java
   src/main/java/io/dagger/modules/<pkg>/package-info.java
   src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java   # generated entrypoint
+  src/generated/dang/entrypoint/main.dang                       # the module's types and its calls
+  src/generated/dang/entrypoint/build.dang                      # the jar's Maven build
   sdk/src/main/java/...                                         # vendored SDK library
   sdk/src/processor/java/...                                    # vendored annotation processor
   sdk/src/generated/java/...                                    # client bindings (from the engine schema)
@@ -81,6 +84,40 @@ tag keeps following it.
 Because everything is committed and the pom defaults `dagger.proc=none`, the
 module builds with a plain `mvn package` (no annotation processor at build time)
 — in an IDE or CI, without Dagger.
+
+## The Dang entrypoint
+
+`dagger generate` writes the module's types into
+`src/generated/dang/entrypoint/main.dang`, so `dagger functions` lists them
+without a build. A call builds the jar with Maven from the module directory, in
+the images the runtime pins, and runs it once per call with the request on
+standard input. The dispatch is the switch the annotation processor generates in
+`Entrypoint.java`; a failed function's error reaches the caller with its text.
+
+The `dangEntrypoint` setting picks the entrypoint or the runtime:
+
+- Unset, a new module gets the entrypoint, and an existing module keeps what it
+  has.
+- `true` moves an existing module to the entrypoint.
+- `false` keeps a module on `github.com/dagger/java-sdk/runtime`. A module on
+  the entrypoint refuses it; remove `[entrypoint]` from its
+  `dagger-module.toml` to move it back.
+
+Set it on one module's scope in `dagger.toml`, or under
+`[modules.java-sdk.settings]` for every Java module of the workspace:
+
+```toml
+[sdks.java.scopes."path/to/module".settings]
+dangEntrypoint = true
+```
+
+A module on the entrypoint cannot use module clients yet. Its
+`dagger-module.toml` holds its name and the entrypoint only, so generation
+refuses a manifest setting it would drop, such as `include`.
+
+`@Function(cache = ...)` sets a function's cache policy on either path:
+`"never"`, `"session"`, or a duration such as `"10m"` after which the result is
+computed again.
 
 ## Generate
 
@@ -120,7 +157,8 @@ client is recorded in the manifest the module has — `dagger-module.toml`, or t
 bindings; a client that is removed is dropped from both.
 
 Standalone clients — in a scope that has no Java module — are not generated yet.
-Adding one is refused and the workspace is left unchanged.
+Adding one is refused and the workspace is left unchanged. A module on the Dang
+entrypoint refuses clients too; set `dangEntrypoint = false` to use them.
 
 > [!WARNING]
 > The client set is the *whole* dependency set. A module that recorded

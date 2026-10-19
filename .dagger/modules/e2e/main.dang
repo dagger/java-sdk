@@ -51,6 +51,15 @@ type E2e {
 
   let vendoredBindings: String! = "sdk/src/main/java/io/dagger/client/Dagger.java"
   let entrypointPath: String! = "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"
+  let dangEntrypointPath: String! = "src/generated/dang/entrypoint"
+
+  """
+  The manifest of a module with the Dang entrypoint: its name and the
+  entrypoint only.
+  """
+  let entrypointManifest(name: String!): String! {
+    "name = \"" + name + "\"\n\n[entrypoint]\n  kind = \"dang\"\n  source = \"./" + dangEntrypointPath + "\"\n"
+  }
 
   let floorVersion: String! = "v1.0.0-beta.18"
 
@@ -137,12 +146,13 @@ type E2e {
 
   """
   generateScope initializes a scope that has no config: the template, a
-  dagger-module.toml from the manifest builder naming this repository's runtime,
-  and the generated bindings and entrypoint, all under the scope, with the
-  workspace cwd and the files already there untouched.
+  dagger-module.toml that names the Dang entrypoint and nothing else, the
+  generated bindings, and both entrypoints, the Java one and the Dang one, all
+  under the scope, with the workspace cwd and the files already there untouched.
 
   Generating the result again changes nothing, so generation is reproducible and
-  a manifest that already says the right thing is not rewritten.
+  a manifest that already says the right thing is not rewritten. A deleted
+  generated entrypoint is generated again.
   """
   generateScopeInitCheck(ws: Workspace!): Void @check {
     let scoped = ws
@@ -162,6 +172,8 @@ type E2e {
     assertAdded(changes, newModulePath + "/src/main/java/io/dagger/modules/newapp/NewApp.java")
     assertAdded(changes, newModulePath + "/" + vendoredBindings)
     assertAdded(changes, newModulePath + "/" + entrypointPath)
+    assertAdded(changes, newModulePath + "/" + dangEntrypointPath + "/main.dang")
+    assertAdded(changes, newModulePath + "/" + dangEntrypointPath + "/build.dang")
     assert(
       changes.modifiedPaths.length == 0,
       "initializing a scope modified existing files: " + changes.modifiedPaths.join(", "),
@@ -171,11 +183,12 @@ type E2e {
       "initializing a scope removed existing files: " + changes.removedPaths.join(", "),
     )
 
-    assertContainsAll(changes.after.file(newModulePath + "/dagger-module.toml").contents, [
-      "name = \"" + newModuleName + "\"",
-      "engineVersion = \"",
-      "[runtime]",
-      "source = \"github.com/dagger/java-sdk/runtime\"",
+    let manifest = changes.after.file(newModulePath + "/dagger-module.toml").contents
+    assert(manifest == entrypointManifest(newModuleName), "the manifest is not the entrypoint manifest:\n" + manifest)
+    assertContainsAll(changes.after.file(newModulePath + "/" + dangEntrypointPath + "/build.dang").contents, [
+      "type JavaModuleBuild",
+      "maven:3.9.9-eclipse-temurin-21-alpine@sha256:",
+      "eclipse-temurin:21-jre-alpine-3.21@sha256:",
     ])
     assertContainsAll(changes.after.file(newModulePath + "/pom.xml").contents, [
       "<dagger.proc>none</dagger.proc>",
@@ -187,6 +200,83 @@ type E2e {
       .withWorkdir(".")
       .changes(generated.withWorkdir("."))
     assert(again.isEmpty, "regenerating an unchanged module should change nothing")
+
+    let recovered = javaSdk
+      .generateScope(
+        generated.withoutFile("/" + newModulePath + "/" + dangEntrypointPath + "/main.dang"),
+        isModule: true,
+        name: newModuleName,
+        clients: [],
+      )
+      .withWorkdir(".")
+      .changes(generated.withWorkdir("."))
+    assert(recovered.isEmpty, "regenerating should restore a deleted generated entrypoint")
+
+    null
+  }
+
+  """
+  With dangEntrypoint = false, a new module names this repository's runtime and
+  gets no Dang entrypoint.
+  """
+  generateScopeRuntimeCheck(ws: Workspace!): Void @check {
+    let generated = javaSdk(dangEntrypoint: false)
+      .generateScope(ws.withWorkdir(newModulePath), isModule: true, name: newModuleName, clients: [])
+    assertContainsAll(generated.file("/" + newModulePath + "/dagger-module.toml").contents, [
+      "name = \"" + newModuleName + "\"",
+      "engineVersion = \"",
+      "[runtime]",
+      "source = \"github.com/dagger/java-sdk/runtime\"",
+    ])
+    assertNotContains(generated.file("/" + newModulePath + "/dagger-module.toml").contents, "[entrypoint]", "a module on the runtime got an entrypoint")
+    assert(
+      generated.directory("/" + newModulePath).exists(dangEntrypointPath) == false,
+      "a module on the runtime got a Dang entrypoint",
+    )
+    null
+  }
+
+  """
+  An existing module keeps the runtime it has until dangEntrypoint = true
+  migrates it; a module on the entrypoint keeps it, and dangEntrypoint = false
+  is refused for it rather than leaving a manifest that names a stale
+  entrypoint. A module with the entrypoint refuses module clients and the
+  manifest settings its manifest has no place for.
+  """
+  entrypointSelectionCheck(ws: Workspace!): Void @check {
+    let manifestPath = "/" + newModulePath + "/dagger-module.toml"
+    let onRuntime = javaSdk(dangEntrypoint: false)
+      .generateScope(ws.withWorkdir(newModulePath), isModule: true, name: newModuleName, clients: [])
+    let kept = javaSdk.generateScope(onRuntime, isModule: true, name: newModuleName, clients: [])
+    assertContains(kept.file(manifestPath).contents, "[runtime]", "an existing module left its runtime without dangEntrypoint = true")
+
+    let migrated = javaSdk(dangEntrypoint: true)
+      .generateScope(onRuntime, isModule: true, name: newModuleName, clients: [])
+    assert(
+      migrated.file(manifestPath).contents == entrypointManifest(newModuleName),
+      "dangEntrypoint = true did not migrate the module:\n" + migrated.file(manifestPath).contents,
+    )
+    let regenerated = javaSdk.generateScope(migrated, isModule: true, name: newModuleName, clients: [])
+    assert(
+      regenerated.withWorkdir(".").changes(migrated.withWorkdir(".")).isEmpty,
+      "a module on the entrypoint did not stay on it",
+    )
+
+    let refused = javaSdk(dangEntrypoint: false)
+      .generateScope(migrated, isModule: true, name: newModuleName, clients: [])
+      .cwd rescue { err: Error => err.message }
+    assertContains(refused, "set dangEntrypoint = true", "moving a module off its entrypoint was not refused: " + refused)
+
+    let withClient = javaSdk
+      .generateScope(migrated, isModule: true, name: newModuleName, clients: [ws.moduleSource("/" + clientDepPath)])
+      .cwd rescue { err: Error => err.message }
+    assertContains(withClient, "cannot use module clients yet", "a client of a module on the entrypoint was not refused: " + withClient)
+
+    let included = onRuntime.withNewFile(manifestPath, onRuntime.file(manifestPath).contents.replace("[runtime]", "include = [\"../shared\"]\n\n[runtime]"))
+    let withInclude = javaSdk(dangEntrypoint: true)
+      .generateScope(included, isModule: true, name: newModuleName, clients: [])
+      .cwd rescue { err: Error => err.message }
+    assertContains(withInclude, "cannot carry (include)", "an include the entrypoint manifest drops was not refused: " + withInclude)
 
     null
   }
@@ -261,7 +351,7 @@ type E2e {
       .cwd rescue "raised"
     assert(refused == "raised", "generateScope should refuse standalone clients")
 
-    let withClient = javaSdk.generateScope(scoped, isModule: true, name: clientAppName, clients: [client])
+    let withClient = javaSdk(dangEntrypoint: false).generateScope(scoped, isModule: true, name: clientAppName, clients: [client])
     assertContainsAll(withClient.file("/" + manifestPath).contents, [
       "[[dependencies]]",
       "name = \"client-dep\"",
@@ -283,7 +373,7 @@ type E2e {
       "no ClientDep binding under " + bindingsDir + ", only: " + bindings.join(", "),
     )
 
-    let withoutClient = javaSdk.generateScope(withClient, isModule: true, name: clientAppName, clients: [])
+    let withoutClient = javaSdk(dangEntrypoint: false).generateScope(withClient, isModule: true, name: clientAppName, clients: [])
     assertNotContains(
       withoutClient.file("/" + manifestPath).contents,
       "client-dep",
@@ -307,7 +397,7 @@ type E2e {
   """
   clientOptionalArgsCheck(ws: Workspace!): Void @check {
     let client = ws.moduleSource("/" + clientDefaultsPath)
-    let scaffolded = javaSdk.generateScope(
+    let scaffolded = javaSdk(dangEntrypoint: false).generateScope(
       ws.withWorkdir(defaultsAppPath),
       isModule: true,
       name: defaultsAppName,
@@ -317,7 +407,7 @@ type E2e {
       "/" + defaultsAppPath + "/src/main/java/io/dagger/modules/defaultsapp/DefaultsApp.java",
       clientOptionalArgsSource,
     )
-    let bindings = javaSdk
+    let bindings = javaSdk(dangEntrypoint: false)
       .generateScope(withSource, isModule: true, name: defaultsAppName, clients: [client])
       .file("/" + defaultsAppPath + "/sdk/src/generated/java/io/dagger/client/Client.java")
       .contents
@@ -346,7 +436,7 @@ type E2e {
     let scoped = ws.withWorkdir(gitAppPath)
     let manifestPath = "/" + gitAppPath + "/dagger-module.toml"
 
-    let unlocked = javaSdk.generateScope(scoped, isModule: true, name: gitAppName, clients: [client])
+    let unlocked = javaSdk(dangEntrypoint: false).generateScope(scoped, isModule: true, name: gitAppName, clients: [client])
     assertContainsAll(unlocked.file(manifestPath).contents, [
       "name = \"" + gitClientName + "\"",
       "source = \"" + gitClientRef + "\"",
@@ -357,7 +447,7 @@ type E2e {
       "an unlocked generation should not pin a client",
     )
 
-    let locked = javaSdk(lock: true)
+    let locked = javaSdk(lock: true, dangEntrypoint: false)
       .generateScope(unlocked, isModule: true, name: gitAppName, clients: [client])
     assertContains(
       locked.file(manifestPath).contents,
@@ -365,7 +455,7 @@ type E2e {
       "a locked generation should record the commit the client resolved to",
     )
 
-    let unlockedAgain = javaSdk.generateScope(locked, isModule: true, name: gitAppName, clients: [client])
+    let unlockedAgain = javaSdk(dangEntrypoint: false).generateScope(locked, isModule: true, name: gitAppName, clients: [client])
     assertNotContains(
       unlockedAgain.file(manifestPath).contents,
       "pin =",
