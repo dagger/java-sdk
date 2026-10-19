@@ -36,6 +36,23 @@ class ObjectMethodNamesTest {
     }
   }
 
+  /** Every generated object carries a {@code queryBuilder()} accessor for client packages. */
+  @Test
+  void escapesAFieldNamedLikeTheQueryBuilderAccessor() throws Exception {
+    Type agent = agent();
+    agent.setFields(List.of(field(agent, "queryBuilder", List.of())));
+
+    String generated =
+        new ObjectVisitor(schema(), REGISTRY, output, StandardCharsets.UTF_8)
+            .generateType(agent)
+            .toString();
+
+    assertThat(generated)
+        .contains("Agent queryBuilder_()")
+        .contains("io.dagger.client.QueryBuilder queryBuilder()")
+        .contains("this.queryBuilder.chain(\"queryBuilder\")");
+  }
+
   @Test
   void escapesOptionalOverloadsButPreservesRequiredArgumentOverloads() throws Exception {
     Type agent = agent();

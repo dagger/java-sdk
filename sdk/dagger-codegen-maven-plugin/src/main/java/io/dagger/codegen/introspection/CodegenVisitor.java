@@ -17,10 +17,25 @@ public class CodegenVisitor implements SchemaVisitor {
 
   public CodegenVisitor(
       Schema schema, TypeRegistry registry, Path targetDirectory, Charset encoding) {
+    this(schema, registry, null, null, targetDirectory, encoding);
+  }
+
+  /**
+   * @param entryPoint how a caller enters the client package, or null when emitting core
+   * @param descriptor where that client's target lives, or null when emitting core
+   */
+  public CodegenVisitor(
+      Schema schema,
+      TypeRegistry registry,
+      ClientEntryPoint entryPoint,
+      TargetDescriptor descriptor,
+      Path targetDirectory,
+      Charset encoding) {
     this.scalarVisitor = new ScalarVisitor(schema, registry, targetDirectory, encoding);
     this.inputVisitor = new InputVisitor(schema, registry, targetDirectory, encoding);
     this.enumVisitor = new EnumVisitor(schema, registry, targetDirectory, encoding);
-    this.objectVisitor = new ObjectVisitor(schema, registry, targetDirectory, encoding);
+    this.objectVisitor =
+        new ObjectVisitor(schema, registry, entryPoint, descriptor, targetDirectory, encoding);
     this.interfaceVisitor = new InterfaceVisitor(schema, registry, targetDirectory, encoding);
     this.versionVisitor = new VersionVisitor(registry.targetPackage(), targetDirectory, encoding);
     this.idAbleVisitor = new IDAbleVisitor(schema, registry, targetDirectory, encoding);
