@@ -1,10 +1,13 @@
 package io.dagger.client;
 
+import static io.dagger.client.exception.DaggerExceptionConstants.CODE_KEY;
+import static io.dagger.client.exception.DaggerExceptionConstants.CODE_VALIDATION_FAILED_VALUE;
 import static io.dagger.client.exception.DaggerExceptionConstants.TYPE_EXEC_ERROR_VALUE;
 import static io.dagger.client.exception.DaggerExceptionConstants.TYPE_KEY;
 
 import io.dagger.client.exception.DaggerExecException;
 import io.dagger.client.exception.DaggerQueryException;
+import io.dagger.client.exception.StaleClientException;
 import io.dagger.client.graphql.GraphQLClient;
 import io.dagger.client.graphql.GraphQLError;
 import io.dagger.client.graphql.GraphQLResponse;
@@ -147,6 +150,13 @@ public final class QueryBuilder {
     if (response.getErrors().isEmpty()) {
       throw new DaggerQueryException();
     }
+    if (!targets.isEmpty()) {
+      for (GraphQLError error : response.getErrors()) {
+        if (failedValidation(error)) {
+          throw new StaleClientException(error, targets);
+        }
+      }
+    }
 
     GraphQLError error = response.getErrors().get(0);
     String errorType = (String) error.getExtensions().getOrDefault(TYPE_KEY, null);
@@ -156,6 +166,15 @@ public final class QueryBuilder {
     }
 
     throw new DaggerQueryException(response.getErrors().get(0));
+  }
+
+  /**
+   * Validation fails before anything runs, so its error has no path. An error with a path comes
+   * from something that ran, such as a nested call whose own client is stale.
+   */
+  private static boolean failedValidation(GraphQLError error) {
+    return error.getPath().length == 0
+        && CODE_VALIDATION_FAILED_VALUE.equals(error.getExtensions().get(CODE_KEY));
   }
 
   String buildQuery() throws ExecutionException, InterruptedException, DaggerQueryException {
