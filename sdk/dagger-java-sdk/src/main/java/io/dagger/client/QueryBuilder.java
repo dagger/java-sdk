@@ -20,8 +20,10 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Set;
 import java.util.Spliterators;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
@@ -40,31 +42,45 @@ public final class QueryBuilder {
   static final Logger LOG = LoggerFactory.getLogger(QueryBuilder.class);
 
   private final GraphQLClient client;
+  private final ModuleLoader loader;
+  private final Set<ModuleTarget> targets;
   private final Deque<QueryPart> parts;
   private final List<QueryPart> leaves;
   private final String inlineFragmentType;
 
   public QueryBuilder(GraphQLClient client) {
-    this(client, new LinkedList<>(), new ArrayList<>(), null);
-  }
-
-  private QueryBuilder(GraphQLClient client, Deque<QueryPart> parts) {
-    this(client, parts, new ArrayList<>(), null);
-  }
-
-  private QueryBuilder(GraphQLClient client, Deque<QueryPart> parts, List<String> finalFields) {
-    this(client, parts, finalFields, null);
+    this(client, new ModuleLoader(), Set.of(), new LinkedList<>(), new ArrayList<>(), null);
   }
 
   private QueryBuilder(
       GraphQLClient client,
+      ModuleLoader loader,
+      Set<ModuleTarget> targets,
       Deque<QueryPart> parts,
       List<String> finalFields,
       String inlineFragmentType) {
     this.client = client;
+    this.loader = loader;
+    this.targets = targets;
     this.parts = parts;
     this.leaves = finalFields.stream().map(QueryPart::new).toList();
     this.inlineFragmentType = inlineFragmentType;
+  }
+
+  /**
+   * The same chain, reaching into {@code target}. Its queries first serve the target into the
+   * session, once per session.
+   */
+  public QueryBuilder withTarget(ModuleTarget target) {
+    Set<ModuleTarget> targets = new LinkedHashSet<>(this.targets);
+    targets.add(target);
+    return new QueryBuilder(
+        client,
+        loader,
+        targets,
+        parts,
+        leaves.stream().map(QueryPart::getOperation).toList(),
+        inlineFragmentType);
   }
 
   public QueryBuilder chain(String operation) {
@@ -78,7 +94,7 @@ public final class QueryBuilder {
     Deque<QueryPart> list = new LinkedList<>();
     list.addAll(this.parts);
     list.push(new QueryPart(operation, arguments));
-    return new QueryBuilder(client, list, new ArrayList<>(), inlineFragmentType);
+    return new QueryBuilder(client, loader, targets, list, new ArrayList<>(), inlineFragmentType);
   }
 
   public QueryBuilder chain(String operation, List<String> leaves) {
@@ -88,7 +104,7 @@ public final class QueryBuilder {
     Deque<QueryPart> list = new LinkedList<>();
     list.addAll(this.parts);
     list.push(new QueryPart(operation));
-    return new QueryBuilder(client, list, leaves, inlineFragmentType);
+    return new QueryBuilder(client, loader, targets, list, leaves, inlineFragmentType);
   }
 
   public QueryBuilder chain(List<String> leaves) {
@@ -97,7 +113,7 @@ public final class QueryBuilder {
     }
     Deque<QueryPart> list = new LinkedList<>();
     list.addAll(this.parts);
-    return new QueryBuilder(client, list, leaves, inlineFragmentType);
+    return new QueryBuilder(client, loader, targets, list, leaves, inlineFragmentType);
   }
 
   /**
@@ -105,8 +121,9 @@ public final class QueryBuilder {
    *
    * <p>This produces queries like: {@code node(id: "...") { ... on Container { field { ... } } }}
    *
-   * <p>The node lookup starts a new query on the same client, whatever this builder's own chain is:
-   * an ID addresses an object from the root.
+   * <p>The node lookup starts a new query on the same session, whatever this builder's own chain
+   * is: an ID addresses an object from the root. It keeps this chain's targets, because the
+   * object's type may be one of theirs.
    */
   public QueryBuilder chainNode(String typeName, Object id) {
     Deque<QueryPart> list = new LinkedList<>();
@@ -114,7 +131,7 @@ public final class QueryBuilder {
     String idStr =
         (id instanceof Scalar<?>) ? ((Scalar<?>) id).convert().toString() : id.toString();
     list.push(new QueryPart("node", Arguments.newBuilder().add("id", idStr).build()));
-    return new QueryBuilder(client, list, new ArrayList<>(), typeName);
+    return new QueryBuilder(client, loader, targets, list, new ArrayList<>(), typeName);
   }
 
   private void handleErrors(GraphQLResponse response) throws DaggerQueryException {
@@ -159,6 +176,10 @@ public final class QueryBuilder {
 
   GraphQLResponse executeQuery(String query)
       throws ExecutionException, InterruptedException, DaggerQueryException {
+    for (ModuleTarget target : targets) {
+      loader.load(
+          new QueryBuilder(client, loader, Set.of(), new LinkedList<>(), List.of(), null), target);
+    }
     LOG.debug("Executing query: {}", query);
     GraphQLResponse response = client.executeQuery(query);
     handleErrors(response);
@@ -229,7 +250,7 @@ public final class QueryBuilder {
     if (id == null) {
       return null;
     }
-    return new QueryBuilder(this.client).chainNode(graphqlTypeName, id);
+    return chainNode(graphqlTypeName, id);
   }
 
   public <T> List<T> executeListQuery(Class<T> klass)
@@ -292,7 +313,7 @@ public final class QueryBuilder {
     List<QueryBuilder> rv = new ArrayList<>();
     for (int i = 0; i < array.size(); i++) {
       String id = array.getJsonObject(i).getString("id");
-      QueryBuilder qb = new QueryBuilder(this.client).chainNode(graphqlTypeName, id);
+      QueryBuilder qb = chainNode(graphqlTypeName, id);
       rv.add(qb);
     }
     return rv;
