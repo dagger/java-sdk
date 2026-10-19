@@ -23,14 +23,17 @@ type E2e {
   let newModuleName: String! = "new-app"
   let newModulePath: String! = outputRoot + "/" + newModuleName
   let newModuleSourcePath: String! = "src/main/java/io/dagger/modules/newapp/NewApp.java"
+  # The Java identifiers in clientAppSource are derived from this name by hand.
   let clientAppName: String! = "client-app"
   let clientAppPath: String! = outputRoot + "/" + clientAppName
+  let clientAppSourcePath: String! = "src/main/java/io/dagger/modules/clientapp/ClientApp.java"
 
   let lookupModulePath: String! = fixtureRoot + "/lookup/app"
   let lookupNestedPath: String! = lookupModulePath + "/nested"
   # A module using a different SDK, with no pom.xml: never a Java client root.
   let nonJavaModulePath: String! = fixtureRoot + "/lookup/not-java"
   let clientDepPath: String! = fixtureRoot + "/clients/dep"
+  let clientDepPackagePath: String! = "clients/client-dep/src/main/java/io/dagger/client/modules/clientdep"
 
   # A git client, because a local module source carries no commit and so can
   # never show a pin, at an immutable tag so the commit asserted on cannot move.
@@ -395,6 +398,89 @@ type E2e {
   }
 
   """
+  A module on the Dang entrypoint gets one package per client under
+  clients/<name>, which its code calls, and a manifest with no dependencies.
+  The client loads its target by its path from the workspace root, and core
+  holds none of its types. The pom's clients profile compiles the package, so
+  a plain Maven build of the module compiles too. Dropping the client drops
+  its package and the profile, which leaves the pom as it was.
+  """
+  entrypointClientsCheck(ws: Workspace!): Void @check {
+    let client = ws.moduleSource("/" + clientDepPath)
+    let appRoot = "/" + clientAppPath
+    let scaffolded = javaSdk.generateScope(ws.withWorkdir(clientAppPath), isModule: true, name: clientAppName, clients: [])
+    let generated = javaSdk.generateScope(
+      scaffolded.withNewFile(appRoot + "/" + clientAppSourcePath, clientAppSource),
+      isModule: true,
+      name: clientAppName,
+      clients: [client],
+    )
+    let module = generated.directory(appRoot)
+    assert(
+      module.file("dagger-module.toml").contents == entrypointManifest(clientAppName),
+      "the manifest of a module with a client is not its name and entrypoint:\n" + module.file("dagger-module.toml").contents,
+    )
+    assertContains(
+      module.file(clientDepPackagePath + "/ClientDep.java").contents,
+      "ModuleTarget.local(\"/" + clientDepPath + "\")",
+      "the client does not load its target by its path from the workspace root",
+    )
+    assert(module.exists(corePackagePath + "/ClientDep.java") == false, "core holds a type of the client")
+    assertNotContains(module.file(corePackagePath + "/Core.java").contents, "clientDep", "core enters the client")
+    assertContains(
+      module.file("pom.xml").contents,
+      "<source>clients/client-dep/src/main/java</source>",
+      "the pom does not compile the client's package",
+    )
+    let built = mavenCompile(module)
+    assert(built.exitCode == 0, "the module did not compile against its client:\n" + built.stdout)
+
+    let dropped = javaSdk.generateScope(
+      generated.withNewFile(appRoot + "/" + clientAppSourcePath, scaffolded.file(appRoot + "/" + clientAppSourcePath).contents),
+      isModule: true,
+      name: clientAppName,
+      clients: [],
+    )
+    assert(dropped.directory(appRoot).exists("clients/client-dep") == false, "a dropped client kept its package")
+    assert(
+      dropped.file(appRoot + "/pom.xml").contents == scaffolded.file(appRoot + "/pom.xml").contents,
+      "dropping the last client did not leave the pom as it was:\n" + dropped.file(appRoot + "/pom.xml").contents,
+    )
+    null
+  }
+
+  """
+  A module on the runtime moves to the Dang entrypoint with its clients: each
+  dependency a client covers leaves the manifest, and a dependency no client
+  covers is refused by name, before anything is written.
+  """
+  entrypointMigrationCheck(ws: Workspace!): Void @check {
+    let client = ws.moduleSource("/" + clientDepPath)
+    let appRoot = "/" + clientAppPath
+    let scaffolded = javaSdk(dangEntrypoint: false)
+      .generateScope(ws.withWorkdir(clientAppPath), isModule: true, name: clientAppName, clients: [client])
+    assertContains(scaffolded.file(appRoot + "/dagger-module.toml").contents, "name = \"client-dep\"", "the module on the runtime has no dependency to migrate")
+
+    let migrated = javaSdk(dangEntrypoint: true)
+      .generateScope(scaffolded, isModule: true, name: clientAppName, clients: [client])
+    assert(
+      migrated.file(appRoot + "/dagger-module.toml").contents == entrypointManifest(clientAppName),
+      "a dependency covered by a client stayed in the manifest:\n" + migrated.file(appRoot + "/dagger-module.toml").contents,
+    )
+    assert(migrated.directory(appRoot).exists(clientDepPackagePath + "/ClientDep.java"), "the migrated module has no package for its client")
+
+    let refused = javaSdk(dangEntrypoint: true)
+      .generateScope(scaffolded, isModule: true, name: clientAppName, clients: [])
+      .cwd rescue { err: Error => err.message }
+    assertContains(
+      refused,
+      "dagger-module.toml depends on client-dep, which the scope has no client for",
+      "a dependency no client covers was not refused by name: " + refused,
+    )
+    null
+  }
+
+  """
   A client constructor argument a caller may omit — non-null with a default the
   engine fills in, or nullable — is bound as an optional argument, not as a
   parameter. The module source constructs the client with none of them and with
@@ -724,6 +810,29 @@ type E2e {
       + "      return Optional.empty();\n"
       + "    }\n"
       + "    return Optional.of(core().directory().withNewFile(\"found\", \"\"));\n"
+      + "  }\n"
+      + "}\n"
+  }
+
+  """
+  A module that calls its client.
+  """
+  let clientAppSource: String! {
+    "package io.dagger.modules.clientapp;\n"
+      + "\n"
+      + "import static io.dagger.client.modules.clientdep.ClientDep.clientDep;\n"
+      + "\n"
+      + "import io.dagger.client.exception.DaggerQueryException;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "import java.util.concurrent.ExecutionException;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class ClientApp {\n"
+      + "  @Function\n"
+      + "  public String greeting()\n"
+      + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
+      + "    return clientDep().greeting();\n"
       + "  }\n"
       + "}\n"
   }
