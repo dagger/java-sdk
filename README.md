@@ -15,17 +15,15 @@ time** — the runtime just builds and packages the module.
 > `github.com/dagger/java-sdk/runtime`.
 
 > [!IMPORTANT]
-> This SDK implements the module-scope interface from
-> [dagger/dagger#13992](https://github.com/dagger/dagger/pull/13992) and needs an
-> engine that has it. On the released engine (`v1.0.0-beta.11`) the module loads
-> but every call into it fails.
+> This SDK needs an engine `v1.0.0-beta.18` or later.
 >
 > It writes module manifests through
 > [`github.com/dagger/sdk-helpers`](https://github.com/dagger/sdk-helpers), the
-> manifest builder that #13992 moved out of the engine, at the `v1.0.2` tag
-> rather than the `dagger.io/sdk/helpers@v1` vanity address the other SDKs moved
-> to: the released engine resolves that address as a local path and then fails to
-> load the workspace at all.
+> manifest builder that
+> [dagger/dagger#13992](https://github.com/dagger/dagger/pull/13992) moved out of
+> the engine, at the `v1.0.2` tag rather than the `dagger.io/sdk/helpers@v1`
+> vanity address the other SDKs moved to: engine `v1.0.0-beta.11` resolves that
+> address as a local path and then fails to load the workspace at all.
 
 ## Install
 
@@ -111,7 +109,7 @@ scope for it.
 Module dependencies are replaced by generated module clients:
 
 ```sh
-dagger module client add java <module-ref>
+dagger module client add <module-ref>
 ```
 
 In a module scope the client set becomes the module's dependency set. Each
@@ -128,12 +126,8 @@ Adding one is refused and the workspace is left unchanged.
 > so the first `dagger generate` drops them. Re-register each one first:
 >
 > ```sh
-> dagger module client add java <module-ref>
+> dagger module client add <module-ref>
 > ```
->
-> Then check that each one landed in `dagger.toml` before you generate. On the
-> `sdk-ux-module-max` engine builds this SDK currently needs,
-> `dagger module client add` reports success and writes nothing.
 
 ## Pre-1.0 modules
 
