@@ -93,6 +93,7 @@ type JavaSdk {
         rootPath: scope,
         ws: configured,
         vendorSdkJar: vendorSdkJar,
+        dangEntrypoint: null,
       ).generated.withWorkdir(scope)
     }
   }

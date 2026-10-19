@@ -19,6 +19,12 @@ type Mod {
   let vendorSdkJar: Boolean!
 
   """
+  Module-relative directory to write the Dang entrypoint into, or null for a
+  module on the runtime.
+  """
+  let dangEntrypoint: String
+
+  """
   The shared local Maven repository.
 
   Mounted LOCKED, not shared: seeding it from the committed prebuilt repository
@@ -151,10 +157,12 @@ type Mod {
 
   """
   Compile the module with the annotation processor enabled (proc=full) so it
-  emits io.dagger.gen.entrypoint.Entrypoint, and return the generated-sources
-  directory (the entrypoint) for vendoring under <module>/src/generated/java.
+  emits io.dagger.gen.entrypoint.Entrypoint under
+  target/generated-sources/annotations, for vendoring under
+  <module>/src/generated/java, and the Dang entrypoint's main.dang under
+  target/classes/dagger/entrypoint.
   """
-  let generatedEntrypoint(moduleDir: Directory!, name: String!): Directory! {
+  let processed(moduleDir: Directory!, name: String!): Container! {
     mvn
       .withoutEntrypoint
       .withMountedCache("/root/.m2", mavenRepo, sharing: CacheSharingMode.LOCKED)
@@ -162,7 +170,29 @@ type Mod {
       .withWorkdir("/module")
       .withEnvVariable("_DAGGER_JAVA_SDK_MODULE_NAME", name)
       .withExec(["mvn", "compile", "-Ddagger.proc=full", "-Ddagger.sdk=prebuilt", "-Ddagger.sdk.version=" + name, "--no-transfer-progress"])
-      .directory("/module/target/generated-sources/annotations")
+  }
+
+  """
+  The Dang entrypoint: main.dang from the annotation processor, and build.dang,
+  which builds the jar with the images the runtime pins.
+  """
+  let dangEntrypointDir(processedModule: Container!): Directory! {
+    directory
+      .withFile("main.dang", processedModule.file("/module/target/classes/dagger/entrypoint/main.dang"))
+      .withNewFile(
+        "build.dang",
+        currentModule.source.file("entrypoint/build.dang.tmpl").contents
+          .replace("<maven-image>", dockerfileImage("runtime/images/maven/Dockerfile"))
+          .replace("<jre-image>", dockerfileImage("runtime/images/java/Dockerfile")),
+      )
+  }
+
+  """
+  The image a single-FROM Dockerfile of the runtime names, which Dependabot
+  keeps up to date.
+  """
+  let dockerfileImage(path: String!): String! {
+    currentModule.source.file(path).contents.trimSpace.trimPrefix("FROM ")
   }
 
   """
@@ -182,11 +212,22 @@ type Mod {
       .withoutDirectory("sdk")
       .withDirectory("sdk", vendored)
       .withoutDirectory("src/generated")
-    let entrypoint = generatedEntrypoint(baseDir, name)
+    let processedModule = processed(baseDir, name)
 
-    let staged = ws
+    let withJava = ws
       .withNewDirectory(workspaceRef(joinPath(rootPath, "sdk")), vendored)
-      .withNewDirectory(workspaceRef(joinPath(rootPath, "src/generated/java")), entrypoint)
+      .withNewDirectory(
+        workspaceRef(joinPath(rootPath, "src/generated/java")),
+        processedModule.directory("/module/target/generated-sources/annotations"),
+      )
+    let staged = if (dangEntrypoint == null) {
+      withJava
+    } else {
+      withJava.withNewDirectory(
+        workspaceRef(joinPath(rootPath, dangEntrypoint ?? "")),
+        dangEntrypointDir(processedModule),
+      )
+    }
 
     if (vendorSdkJar) {
       staged.withNewDirectory(
