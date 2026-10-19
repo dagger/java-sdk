@@ -1,0 +1,259 @@
+"""
+Checks of modules on the Dang entrypoint that call other modules through their
+clients. The CLI of the engine running them works in a copy of this checkout
+registered as its java SDK, so modules and clients are added the way a user
+adds them, and the calls go through each module's generated entrypoint.
+"""
+type ClientChecks {
+  let playgroundRoot: String! = "/work/java-sdk"
+
+  # The Java identifiers in callerSource, middleSource and pinAppSource are
+  # derived from these names by hand.
+  let callerPath: String! = ".dagger/modules/hop-a"
+  let middlePath: String! = ".dagger/modules/hop-b"
+  let targetPath: String! = ".dagger/modules/hop-c"
+  let pinAppPath: String! = ".dagger/modules/pin-app"
+
+  let assert(condition: Boolean!, message: String!): Void {
+    if (condition == false) { raise message }
+    null
+  }
+
+  """
+  This checkout in a container with the CLI of the engine's release, with the
+  workspace config that registers it as the java SDK as its dagger.toml.
+  """
+  let playground(ws: Workspace!): Container! {
+    container
+      .from("registry.dagger.io/engine:" + (version.split("+")[0] ?? version))
+      .withoutEntrypoint
+      .withDirectory(
+        playgroundRoot,
+        ws.directory("/", exclude: [".git", "**/target/**"])
+          .withFile("dagger.toml", ws.file("/.dagger/modules/engine-e2e/workspace.toml")),
+      )
+      .withWorkdir(playgroundRoot)
+      .withExec(["git", "init", "--quiet"])
+  }
+
+  let cli(ctr: Container!, args: [String!]!): Container! {
+    ctr.withExec(["dagger"] + args, experimentalPrivilegedNesting: true)
+  }
+
+  """
+  A Java module initialized on the Dang entrypoint with its own source, which
+  calls clients it does not have yet.
+  """
+  let javaModule(ctr: Container!, path: String!, name: String!, sourcePath: String!, source: String!): Container! {
+    cli(ctr, ["--auto-apply", "module", "init", "java", "--name", name, "--path", path])
+      .withNewFile(path + "/" + sourcePath, source)
+  }
+
+  """
+  Add a client to the module at path, from the module's directory.
+  """
+  let withClient(ctr: Container!, path: String!, target: String!): Container! {
+    cli(ctr.withWorkdir(path), ["--auto-apply", "module", "client", "add", target, "--sdk", "java"])
+      .withWorkdir(playgroundRoot)
+  }
+
+  """
+  Module hop-a has a client for hop-b, and hop-b, a client for hop-c: a Java
+  module calls a Java module that calls a Dang module.
+  """
+  let chain(ws: Workspace!): Container! {
+    let withTarget = playground(ws)
+      .withNewFile(targetPath + "/dagger-module.toml", "name = \"hop-c\"\nengineVersion = \"v1.0.0-0\"\n\n[runtime]\n  source = \"dang\"\n")
+      .withNewFile(targetPath + "/main.dang", "type HopC {\n  pub greeting: String! { \"hello from hop-c\" }\n}\n")
+    let middle = withClient(
+      javaModule(withTarget, middlePath, "hop-b", "src/main/java/io/dagger/modules/hopb/HopB.java", middleSource),
+      middlePath,
+      "../hop-c",
+    )
+    withClient(
+      javaModule(middle, callerPath, "hop-a", "src/main/java/io/dagger/modules/hopa/HopA.java", callerSource),
+      callerPath,
+      "../hop-b",
+    )
+  }
+
+  """
+  A module calls a local client through its entrypoint, and that client calls
+  one of its own: two hops, with no dependency in either manifest. A changed
+  local target changes its caller's result: the engine keys a call on the
+  digests of the local clients its module declares (dagger/dagger#14489), and
+  the entrypoint keys the exec it runs on that call (callDigest,
+  dagger/dagger#14491). Each hop is changed on its own, because the engine
+  keys only a module loaded from the host on its declared clients, and hop-b
+  is served from hop-a's tree, so a change to hop-c alone leaves hop-a's call
+  of hop-b cached (dagger/dagger@249edbd6, core/modfunc.go:897).
+  """
+  pub chainCheck(ws: Workspace!): Void @check {
+    let ready = chain(ws)
+    [callerPath, middlePath].each { path =>
+      let manifest = ready.file(path + "/dagger-module.toml").contents
+      assert(
+        manifest.contains("[entrypoint]") and manifest.contains("[[dependencies]]") == false,
+        path + " is not on the entrypoint with no dependencies:\n" + manifest,
+      )
+    }
+    let script = "set -e\n" +
+      callResult +
+      "result -m " + callerPath + " call relay\n" +
+      "sed -i 's/hello from hop-c/changed hop-c/' " + targetPath + "/main.dang\n" +
+      "result -m " + middlePath + " call relay\n" +
+      "sed -i 's/\"b: \"/\"b, changed: \"/' " + middlePath + "/src/main/java/io/dagger/modules/hopb/HopB.java\n" +
+      "result -m " + callerPath + " call relay\n"
+    let ran = ready.withExec(["sh", "-c", script], experimentalPrivilegedNesting: true, expect: ReturnType.ANY)
+    let said = ran.stdout + ran.stderr
+    assert(ran.exitCode == 0, "the calls through the chain failed:\n" + said)
+    let results = ran.stdout.trimSpace.split("\n")
+    assert(
+      (results[0] ?? "") == "a: b: hello from hop-c",
+      "hop-a did not reach hop-c through hop-b: " + JSON.encode(results) + "\n" + said,
+    )
+    assert(
+      (results[1] ?? "") == "b: changed hop-c",
+      "a change to hop-c did not change hop-b's result: " + JSON.encode(results) + "\n" + said,
+    )
+    assert(
+      (results[2] ?? "") == "a: b, changed: changed hop-c",
+      "a change to hop-b did not change hop-a's result: " + JSON.encode(results) + "\n" + said,
+    )
+    null
+  }
+
+  """
+  A shell function that prints the result of a dagger CLI call on a line of
+  its own: the CLI ends a result with no newline.
+  """
+  let callResult: String! = "result() { r=$(dagger \"$@\"); echo \"$r\"; }\n"
+
+  """
+  A git server for one repository, pinned.git, whose one commit, tagged
+  v1.0.0, is a module whose message is its version.
+  """
+  let gitServer: Service! {
+    container
+      .from("alpine:3.22")
+      .withoutEntrypoint
+      .withExec(["apk", "add", "--no-cache", "git", "git-daemon"])
+      .withNewFile("/src/dagger-module.toml", "name = \"pinned\"\nengineVersion = \"v1.0.0-0\"\n\n[runtime]\n  source = \"dang\"\n")
+      .withNewFile("/src/main.dang", "type Pinned {\n  pub message: String! { \"v1.0.0\" }\n}\n")
+      .withWorkdir("/src")
+      .withExec(["git", "init", "-q", "-b", "main"])
+      .withExec(["git", "add", "-A"])
+      .withExec(["git", "-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "commit", "-q", "-m", "v1.0.0"])
+      .withExec(["git", "tag", "v1.0.0"])
+      .withExec(["git", "clone", "-q", "--bare", ".", "/srv/pinned.git"])
+      .withExposedPort(9418)
+      .withDefaultArgs(["git", "daemon", "--export-all", "--base-path=/srv", "/srv"])
+      .asService
+  }
+
+  """
+  A module calls a git client through its entrypoint. The client is added at
+  the version query @v1, and generated with the commit v1.0.0 resolved to as
+  its pin. engine-e2e's pinned-git-client-check shows that the pin holds after
+  a newer tag matches @v1, which takes a session per call.
+
+  The address names the server by its IP: the engine refuses a git host
+  without a dot, which a service hostname is. One script does everything,
+  because the server's IP lasts only as long as the exec that holds the
+  server. It runs in the module's directory, because the CLI of a nested exec
+  takes the exec's workdir as its cwd, not the shell's.
+  """
+  pub gitCheck(ws: Workspace!): Void @check {
+    let server = gitServer
+    let host = server.hostname
+    let ready = javaModule(
+      playground(ws).withServiceBinding(host, server),
+      pinAppPath,
+      "pin-app",
+      "src/main/java/io/dagger/modules/pinapp/PinApp.java",
+      pinAppSource,
+    )
+    let script = "set -e\n" +
+      callResult +
+      "address=git://$(getent hosts " + host + " | cut -d ' ' -f 1)/pinned.git@v1\n" +
+      "echo \"$address\"\n" +
+      "dagger --auto-apply module client add \"$address\" --sdk java >&2\n" +
+      "grep -o 'ModuleTarget.git(.*)' clients/pinned/src/main/java/io/dagger/client/modules/pinned/Pinned.java\n" +
+      "git ls-remote git://" + host + "/pinned.git refs/tags/v1.0.0 | cut -f 1\n" +
+      "result -m . call message\n"
+    let ran = ready
+      .withWorkdir(pinAppPath)
+      .withExec(["sh", "-c", script], experimentalPrivilegedNesting: true, expect: ReturnType.ANY)
+    let said = ran.stdout + ran.stderr
+    assert(ran.exitCode == 0, "the call of the git client failed:\n" + said)
+    let results = ran.stdout.trimSpace.split("\n")
+    let address = results[0] ?? ""
+    let pin = results[2] ?? ""
+    assert(
+      pin != "" and (results[1] ?? "") == "ModuleTarget.git(\"" + address + "\", \"" + pin + "\")",
+      "the client is not pinned to the commit v1.0.0 resolved to: " + JSON.encode(results) + "\n" + said,
+    )
+    assert((results[3] ?? "") == "pinned: v1.0.0", "the module did not call its git client: " + JSON.encode(results) + "\n" + said)
+    null
+  }
+
+  let callerSource: String! {
+    "package io.dagger.modules.hopa;\n"
+      + "\n"
+      + "import static io.dagger.client.modules.hopb.HopB.hopB;\n"
+      + "\n"
+      + "import io.dagger.client.exception.DaggerQueryException;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "import java.util.concurrent.ExecutionException;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class HopA {\n"
+      + "  @Function\n"
+      + "  public String relay()\n"
+      + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
+      + "    return \"a: \" + hopB().relay();\n"
+      + "  }\n"
+      + "}\n"
+  }
+
+  let middleSource: String! {
+    "package io.dagger.modules.hopb;\n"
+      + "\n"
+      + "import static io.dagger.client.modules.hopc.HopC.hopC;\n"
+      + "\n"
+      + "import io.dagger.client.exception.DaggerQueryException;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "import java.util.concurrent.ExecutionException;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class HopB {\n"
+      + "  @Function\n"
+      + "  public String relay()\n"
+      + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
+      + "    return \"b: \" + hopC().greeting();\n"
+      + "  }\n"
+      + "}\n"
+  }
+
+  let pinAppSource: String! {
+    "package io.dagger.modules.pinapp;\n"
+      + "\n"
+      + "import static io.dagger.client.modules.pinned.Pinned.pinned;\n"
+      + "\n"
+      + "import io.dagger.client.exception.DaggerQueryException;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "import java.util.concurrent.ExecutionException;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class PinApp {\n"
+      + "  @Function\n"
+      + "  public String message()\n"
+      + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
+      + "    return \"pinned: \" + pinned().message();\n"
+      + "  }\n"
+      + "}\n"
+  }
+}

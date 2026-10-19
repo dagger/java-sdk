@@ -155,4 +155,102 @@ type EngineE2e {
 
     null
   }
+
+  """
+  A git client of a module on the Dang entrypoint stays on the commit it was
+  generated against after a newer tag matches its ref (dagger/dagger#14284).
+  The client is added at @v1 when only v1.0.0 exists, and v1.0.1 is pushed
+  after. The workspace lock records what @v1 resolved to, so its entries for
+  the repository are dropped, and the next call resolves @v1 again, to
+  v1.0.1. Each CLI call is a session of its own, because a session keeps
+  what @v1 resolved to in it; the e2e checks, whose calls share one session,
+  cannot show this.
+
+  The address names the git server by its IP, because the engine refuses a
+  git host without a dot, and one script does everything, because the
+  server's IP and the tag pushed to it last only as long as the exec that
+  holds the server.
+  """
+  pub pinnedGitClientCheck(ws: Workspace!): Void @check {
+    let appPath = ".dagger/modules/pin-app"
+    let server = gitServer
+    let host = server.hostname
+    let initialized = floorClient(ws)
+      .withServiceBinding(host, server)
+      .withExec(withoutOuterSession(["--auto-apply", "module", "init", "java", "--name", "pin-app", "--path", appPath]))
+      .withNewFile(appPath + "/src/main/java/io/dagger/modules/pinapp/PinApp.java", pinAppSource)
+      .withWorkdir(appPath)
+    let script = "set -e\n" +
+      "d() { env -u DAGGER_SESSION_PORT -u DAGGER_SESSION_TOKEN dagger \"$@\"; }\n" +
+      "result() { r=$(d \"$@\"); echo \"$r\"; }\n" +
+      "address=git://$(getent hosts " + host + " | cut -d ' ' -f 1)/pinned.git@v1\n" +
+      "d --auto-apply module client add \"$address\" --sdk java >&2\n" +
+      "result -m . call message\n" +
+      "git clone -q git://" + host + "/pinned.git /tmp/pinned\n" +
+      "(cd /tmp/pinned && sed -i 's/v1.0.0/v1.0.1/' main.dang &&\n" +
+      "  git -c user.name=e2e -c user.email=e2e@example.com commit -q -am v1.0.1 &&\n" +
+      "  git tag v1.0.1 && git push -q origin main v1.0.1)\n" +
+      "grep -v '/pinned\"' /work/java-sdk/dagger.lock > /tmp/dagger.lock\n" +
+      "cp /tmp/dagger.lock /work/java-sdk/dagger.lock\n" +
+      "result -m \"$address\" call message\n" +
+      "result -m . call message\n"
+    let ran = initialized.withExec(["sh", "-c", script], expect: ReturnType.ANY)
+    let said = ran.stdout + ran.stderr
+    assert(ran.exitCode == 0, "the calls of the git client failed:\n" + said)
+    let results = ran.stdout.trimSpace.split("\n")
+    assert((results[0] ?? "") == "pinned: v1.0.0", "the module did not call its git client: " + JSON.encode(results) + "\n" + said)
+    assert((results[1] ?? "") == "v1.0.1", "@v1 did not resolve to the newer tag: " + JSON.encode(results) + "\n" + said)
+    assert(
+      (results[2] ?? "") == "pinned: v1.0.0",
+      "the git client left its pinned commit for the newer tag: " + JSON.encode(results) + "\n" + said,
+    )
+
+    null
+  }
+
+  """
+  A git server for one repository, pinned.git, that a push can add to. Its
+  first commit, tagged v1.0.0, is a module whose message is its version.
+  """
+  let gitServer: Service! {
+    container
+      .from("alpine:3.22")
+      .withoutEntrypoint
+      .withExec(["apk", "add", "--no-cache", "git", "git-daemon"])
+      .withNewFile("/src/dagger-module.toml", "name = \"pinned\"\nengineVersion = \"v1.0.0-0\"\n\n[runtime]\n  source = \"dang\"\n")
+      .withNewFile("/src/main.dang", "type Pinned {\n  pub message: String! { \"v1.0.0\" }\n}\n")
+      .withWorkdir("/src")
+      .withExec(["git", "init", "-q", "-b", "main"])
+      .withExec(["git", "add", "-A"])
+      .withExec(["git", "-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "commit", "-q", "-m", "v1.0.0"])
+      .withExec(["git", "tag", "v1.0.0"])
+      .withExec(["git", "clone", "-q", "--bare", ".", "/srv/pinned.git"])
+      .withExposedPort(9418)
+      .withDefaultArgs(["git", "daemon", "--export-all", "--enable=receive-pack", "--base-path=/srv", "/srv"])
+      .asService
+  }
+
+  """
+  A module whose call of its git client is never cached, so a call in a later
+  session loads the client again.
+  """
+  let pinAppSource: String! {
+    "package io.dagger.modules.pinapp;\n"
+      + "\n"
+      + "import static io.dagger.client.modules.pinned.Pinned.pinned;\n"
+      + "\n"
+      + "import io.dagger.client.exception.DaggerQueryException;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "import java.util.concurrent.ExecutionException;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class PinApp {\n"
+      + "  @Function(cache = \"never\")\n"
+      + "  public String message()\n"
+      + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
+      + "    return \"pinned: \" + pinned().message();\n"
+      + "  }\n"
+      + "}\n"
+  }
 }

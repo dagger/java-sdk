@@ -77,6 +77,14 @@ type E2e {
   }
 
   """
+  Checks of modules that call other modules through their clients, through
+  the CLI.
+  """
+  clients: ClientChecks! {
+    ClientChecks()
+  }
+
+  """
   Fail the current check when a condition is false.
   """
   let assert(condition: Boolean!, message: String!): Void {
