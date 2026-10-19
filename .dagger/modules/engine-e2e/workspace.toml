@@ -1,0 +1,13 @@
+# The workspace the e2e checks run in: this checkout as its java SDK, and the
+# e2e checks of it. engine-e2e puts this file in place of dagger.toml in the
+# copy it runs the checks on.
+
+[modules.e2e]
+source = ".dagger/modules/e2e"
+
+[modules.java-sdk]
+source = "."
+check.skip = ["*"]
+
+[sdks.java]
+module = "java-sdk"

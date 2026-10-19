@@ -145,19 +145,17 @@ onto this repository's.
 dagger check
 ```
 
-Checks run against two engines:
+On the engine the CLI runs on, this runs the SDK library's unit tests
+(`packager:unit-tests`) and the staleness checks of the prebuilt assets and the
+templates. The `engine-e2e` checks build engines from the dagger/dagger commits
+pinned in `.dagger/modules/engine-e2e`:
 
-- On the released engine, everything that does not call this module: the SDK
-  library's unit tests (`packager:unit-tests`), the prebuilt assets, and the
-  templates.
-- On an engine built from dagger/dagger#13992, the SDK interface itself.
-  `engine-e-2-e:dev-sdk-check` builds that engine from the commit pinned in
-  `.dagger/modules/engine-e2e` (the `engine-dev` dependency and `engineCommit`),
-  installs this checkout as the `java` SDK, initializes a Java module, and calls
-  it. `engine-e-2-e:sdk-contract-check` runs the `e-2-e:*` checks inside the same
-  engine. Bump both pins to follow the branch.
+- `engine-e2e:floor-check` builds the floor release, `v1.0.0-beta.18`, and runs
+  every e2e check on it.
+- `engine-e2e:dev-sdk-check` installs this checkout as the `java` SDK on the
+  same engine, initializes a Java module through the CLI, and calls it.
+- `engine-e2e:below-floor-check` builds `v1.0.0-beta.17` and checks that
+  generation and `dagger module init` refuse it.
 
-The `e2e` module is deliberately not installed in `dagger.toml`. Every check in
-it calls this module, which a released engine cannot run, so
-`engine-e-2-e:sdk-contract-check` loads it by path — `dagger -m
-.dagger/modules/e2e check` — inside an engine that can.
+`dagger.toml` does not install the `e2e` module, so `dagger check` runs the e2e
+checks only on the floor engine.

@@ -1,11 +1,10 @@
 """
 End-to-end checks for the Java SDK helper module.
 
-Every check here calls the java-sdk module, which needs an engine with
-dagger/dagger#13992. The module is deliberately not installed in dagger.toml, so
-a released-engine `dagger check` never reaches it; `engine-e-2-e:dev-sdk-check`
-runs `dagger -m .dagger/modules/e2e check` inside an engine built from that
-change.
+Every check here calls the java-sdk module, which needs an engine at its floor,
+v1.0.0-beta.18, or later. dagger.toml does not install this module, so
+`dagger check` runs these checks only through `engine-e2e:floor-check`, on an
+engine built from the floor's commit.
 """
 type E2e {
   let fixtureRoot: String! = ".dagger/modules/e2e/fixtures"
@@ -410,11 +409,27 @@ type E2e {
   }
 
   """
+  floorCheck's precondition, not a check of its own: the engine running these
+  checks is the floor release, by the version it reports itself. A release
+  reports its build after a "+", which is not part of the version; a dev or
+  later build is refused. engine-e2e's floorCheck calls it before the checks, so
+  that check cannot pass on another engine.
+  """
+  assertFloorEngine: Void {
+    if ((version.split("+")[0] ?? "") != floorVersion) {
+      raise "the floor is " + floorVersion + " and the engine running these checks is " + version +
+        ": a pass would not prove the floor. Run `dagger check engine-e2e:floor-check`, which provisions its engine"
+    }
+    null
+  }
+
+  """
   The SDK refuses an engine release older than its floor before it generates
   anything, and names the floor and the version it found. Every other version
   passes, a development build and one it cannot read among them, so an
   unexpected format never blocks a user. On an engine the SDK refuses,
-  generation itself refuses.
+  generation itself refuses; engine-e2e's belowFloorCheck runs this check on
+  one.
   """
   engineFloorRefusalCheck(ws: Workspace!): Void @check {
     let refused = [
