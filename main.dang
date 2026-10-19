@@ -27,7 +27,9 @@ type JavaSdk {
   Record the commit each git client resolved to as a pin in the module's
   manifest, so a generated module resolves the same dependencies later. Off by
   default because a pinned client stops following the branch or tag it was added
-  at until the pin is refreshed.
+  at until the pin is refreshed. It applies to a module on the runtime: a client
+  of a module on the Dang entrypoint always loads the commit it was generated
+  against.
   """
   lock: Boolean! = false
 
@@ -37,8 +39,8 @@ type JavaSdk {
   processor generates. Unset gives new modules the entrypoint and keeps the
   runtime of existing ones; true migrates an existing module; false keeps the
   module on github.com/dagger/java-sdk/runtime. A module with the entrypoint
-  cannot use module clients yet, and its dagger-module.toml holds its name and
-  the entrypoint only.
+  gets one package per client under clients/<name>, and its dagger-module.toml
+  holds its name and the entrypoint only.
   """
   dangEntrypoint: Boolean
 
@@ -81,8 +83,10 @@ type JavaSdk {
   generated; a pre-1.0 dagger.json is migrated into it and removed, so two
   manifest files cannot disagree. On the runtime, the scope's module clients
   become the module's dependencies, so the generated bindings include their
-  types. With the Dang entrypoint, the manifest names the entrypoint and nothing
-  else. Standalone clients, in a scope without a module, are not generated yet.
+  types. With the Dang entrypoint, each client is generated under
+  clients/<name> and loads its target when the module first calls it, and the
+  manifest names the entrypoint and nothing else. Standalone clients, in a scope
+  without a module, are not generated yet.
   """
   generateScope(
     ws: Workspace!,
@@ -125,6 +129,7 @@ type JavaSdk {
           ws: configured,
           vendorSdkJar: vendorSdkJar,
           dangEntrypoint: null,
+          clients: [],
         ).generated.withWorkdir(scope)
       }
     }
@@ -148,8 +153,10 @@ type JavaSdk {
   Generate a module on the Dang entrypoint. The module's schema is read through
   a staged manifest on the engine's builtin dang runtime, because the engine
   loads a module with an entrypoint through that entrypoint, which may not be
-  generated yet, and the builtin runtime resolves nothing remote. The manifest
-  builder then writes the manifest that names the entrypoint.
+  generated yet, and the builtin runtime resolves nothing remote. The staged
+  manifest has no dependencies, so the schema is core alone, and each client
+  is generated from its own schema. The manifest builder then writes the
+  manifest that names the entrypoint.
   """
   let entrypointModule(
     ws: Workspace!,
@@ -157,9 +164,6 @@ type JavaSdk {
     name: String!,
     clients: [ModuleSource!]!,
   ): Workspace! {
-    if (clients.length > 0) {
-      raise "a module with a Dang entrypoint cannot use module clients yet: set dangEntrypoint = false"
-    }
     refuseEntrypointSettings(ws, scope, "dagger-module.toml", "runtime")
     refuseEntrypointSettings(ws, scope, "dagger.json", "sdk")
     let staged = sdkHelpers.moduleManifest
@@ -172,6 +176,7 @@ type JavaSdk {
       ws: staged,
       vendorSdkJar: vendorSdkJar,
       dangEntrypoint: entrypointPath,
+      clients: clients,
     ).generated
     sdkHelpers.moduleManifest
       .withName(name: name)

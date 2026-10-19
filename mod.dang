@@ -25,6 +25,13 @@ type Mod {
   let dangEntrypoint: String
 
   """
+  The clients generated into packages of their own under clients/<name>, for a
+  module on the Dang entrypoint. A module on the runtime has none: its clients
+  are its dependencies, whose types the engine adds to its schema.
+  """
+  let clients: [ModuleSource!]!
+
+  """
   The shared local Maven repository.
 
   Mounted LOCKED, not shared: seeding it from the committed prebuilt repository
@@ -100,9 +107,44 @@ type Mod {
   prebuilt repo. Cached across a module's own edits.
   """
   let sdkBuilt(introspectionJSON: File!, name: String!): Container! {
-    codegenBase(introspectionJSON)
+    let versioned = codegenBase(introspectionJSON)
       .withExec(["mvn", "versions:set", "-DnewVersion=" + name, "-DgenerateBackupPoms=false", "--no-transfer-progress"])
-      .withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", "-Ddaggerengine.schema=/schema.json", "-Ddaggerengine.version=" + engineVersion, "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+    let planned = if (clients.length == 0) {
+      versioned
+    } else {
+      versioned.withMountedDirectory("/plan", generationPlan(introspectionJSON))
+    }
+    let input = if (clients.length == 0) { "-Ddaggerengine.schema=/schema.json" } else { "-Ddaggerengine.plan=/plan" }
+    planned.withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", input, "-Ddaggerengine.version=" + engineVersion, "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+  }
+
+  """
+  What the codegen plugin generates for a module with clients: core from the
+  module's own schema, and one target per client. A client's schema is read in
+  the module's view, so it names only the core types the module's core has.
+  """
+  let generationPlan(introspectionJSON: File!): Directory! {
+    let view = ws.moduleSource(workspaceRef(rootPath)).engineVersion
+    clients.reduce(directory.withFile("core/schema.json", introspectionJSON)) { plan, client =>
+      let entry = "target-" + client.moduleName
+      plan
+        .withFile(entry + "/schema.json", client.withEngineVersion(view).clientSchemaIntrospectionJSON)
+        .withNewFile(entry + "/module", client.moduleName + "\n")
+        .withNewFile(entry + "/descriptor", clientDescriptor(client))
+    }
+  }
+
+  """
+  Where a client loads its target from: a git ref with the commit it resolved
+  to, or a module of the workspace by its path from the workspace root, which
+  serveModule reads in the calling module's own tree.
+  """
+  let clientDescriptor(client: ModuleSource!): String! {
+    if (client.kind == ModuleSourceKind.GIT_SOURCE) {
+      "git\n" + client.asString + "\n" + client.pin + "\n"
+    } else {
+      "local\n" + workspaceRef(client.sourceRootSubpath) + "\n"
+    }
   }
 
   """
@@ -139,11 +181,122 @@ type Mod {
   let coreClientPath: String! = "clients/core/src/main/java"
 
   """
+  Every package the SDK generated: core, and one package per client.
+  """
+  let generatedPackages(introspectionJSON: File!, name: String!): Directory! {
+    sdkBuilt(introspectionJSON, name)
+      .directory("/dagger-io/dagger-java-sdk/target/generated-sources/dagger")
+  }
+
+  """
   The engine's core API, generated from the module's schema with the SDK.
   """
   let coreClient(introspectionJSON: File!, name: String!): Directory! {
-    sdkBuilt(introspectionJSON, name)
-      .directory("/dagger-io/dagger-java-sdk/target/generated-sources/dagger")
+    clients.reduce(generatedPackages(introspectionJSON, name)) { core, client =>
+      core.withoutDirectory(clientPackagePath(client))
+    }
+  }
+
+  """
+  One client's package, as the source root of clients/<name>.
+  """
+  let clientSources(introspectionJSON: File!, name: String!, client: ModuleSource!): Directory! {
+    let path = clientPackagePath(client)
+    directory.withDirectory(path, generatedPackages(introspectionJSON, name).directory(path))
+  }
+
+  """
+  The directory of a client's package: the module name lowercased and stripped
+  to ASCII letters and digits, as ModulePackage.segmentFor names the package.
+  """
+  let clientPackagePath(client: ModuleSource!): String! {
+    "io/dagger/client/modules/" + client.moduleName.toLower.replaceMatches(Regexp("[^a-z0-9]"), "")
+  }
+
+  let clientSourcePath(client: ModuleSource!): String! {
+    "clients/" + client.moduleName + "/src/main/java"
+  }
+
+  """
+  Directories under clients/ that this SDK generated for a client the module
+  no longer has. A directory holding no generated package is not the SDK's.
+  """
+  let staleClientDirs(committed: Directory!): [String!]! {
+    if (committed.exists("clients") == false) {
+      return [] :: [String!]!
+    }
+    let current = clients.map { client => client.moduleName }
+    committed.directory("clients").entries
+      .map { entry => entry.trimSuffix("/") }
+      .filter { dir =>
+        dir != "core" and current.contains(dir) == false and
+          committed.exists("clients/" + dir + "/src/main/java/io/dagger/client/modules")
+      }
+  }
+
+  """
+  The pom.xml with this SDK's clients profile, which adds each client's
+  package as a compile root. The profile is rewritten on every generation,
+  added before the pom's last </profiles> when it has none, and removed with
+  the module's last client. It is active unless dagger.clients.skip is set,
+  because a profile active by default turns off when any other profile turns
+  on, and the SDK's own profiles do.
+  """
+  let withClientsProfile(pom: String!): String! {
+    let stripped = pom.replaceMatches(Regexp("(?s)\n[ \t]*<!-- " + clientsProfileMarker + ":.*?<!-- /" + clientsProfileMarker + " -->"), "")
+    if (clients.length == 0) {
+      return stripped
+    }
+    let profile = clientsProfile
+    if (stripped.contains("</profiles>")) {
+      stripped.replaceMatches(Regexp("(?s)^(.*)(\n[ \t]*</profiles>)"), "${1}" + profile + "${2}")
+    } else if (stripped.contains("</project>")) {
+      stripped.replaceMatches(
+        Regexp("(?s)^(.*)(\n[ \t]*</project>)"),
+        "${1}\n\n    <profiles>" + profile + "\n    </profiles>${2}",
+      )
+    } else {
+      raise "pom.xml has no </project>: it cannot hold the profile that compiles the module's clients"
+    }
+  }
+
+  let clientsProfileMarker: String! = "dagger-java-sdk clients"
+
+  let clientsProfile: String! {
+    let sources = clients.map { client =>
+      "\n                                        <source>" + clientSourcePath(client) + "</source>"
+    }
+    "\n        <!-- " + clientsProfileMarker + ": generated from the module's clients. DO NOT EDIT. -->" +
+      "\n        <profile>" +
+      "\n            <id>dagger-clients</id>" +
+      "\n            <activation>" +
+      "\n                <property>" +
+      "\n                    <name>!dagger.clients.skip</name>" +
+      "\n                </property>" +
+      "\n            </activation>" +
+      "\n            <build>" +
+      "\n                <plugins>" +
+      "\n                    <plugin>" +
+      "\n                        <groupId>org.codehaus.mojo</groupId>" +
+      "\n                        <artifactId>build-helper-maven-plugin</artifactId>" +
+      "\n                        <executions>" +
+      "\n                            <execution>" +
+      "\n                                <id>add-dagger-client-sources</id>" +
+      "\n                                <goals>" +
+      "\n                                    <goal>add-source</goal>" +
+      "\n                                </goals>" +
+      "\n                                <configuration>" +
+      "\n                                    <sources>" +
+      sources.join("") +
+      "\n                                    </sources>" +
+      "\n                                </configuration>" +
+      "\n                            </execution>" +
+      "\n                        </executions>" +
+      "\n                    </plugin>" +
+      "\n                </plugins>" +
+      "\n            </build>" +
+      "\n        </profile>" +
+      "\n        <!-- /" + clientsProfileMarker + " -->"
   }
 
   """
@@ -229,17 +382,37 @@ type Mod {
     let name = modSource.moduleName
     let introspectionJSON = modSource.introspectionSchemaJSON
     let vendored = vendoredSdk(introspectionJSON, name)
+    let pom = withClientsProfile(committed.file("pom.xml").contents)
+    let stale = staleClientDirs(committed)
 
     # the module as committed, with the whole committed sdk/ dropped (source and
     # any previously vendored jar) and the freshly vendored SDK sources overlaid,
-    # plus any stale generated entrypoint dropped so the processor regenerates it
-    let baseDir = committed
+    # plus any stale generated entrypoint dropped so the processor regenerates it,
+    # and the fresh client packages and pom in place, so the processor compiles
+    # the clients the module will be built with
+    let withoutStale = stale.reduce(committed) { dir, stalePath => dir.withoutDirectory("clients/" + stalePath) }
+    let baseDir = clients
+      .reduce(withoutStale) { dir, client =>
+        dir
+          .withoutDirectory(clientSourcePath(client))
+          .withDirectory(clientSourcePath(client), clientSources(introspectionJSON, name, client))
+      }
+      .withNewFile("pom.xml", pom)
       .withoutDirectory("sdk")
       .withDirectory("sdk", vendored)
       .withoutDirectory("src/generated")
     let processedModule = processed(baseDir, name)
 
-    let withJava = ws
+    let withClients = clients.reduce(
+      stale.reduce(ws) { w, stalePath => w.withoutDirectory(workspaceRef(joinPath(rootPath, "clients/" + stalePath))) },
+    ) { w, client =>
+      w.withNewDirectory(
+        workspaceRef(joinPath(rootPath, "clients/" + client.moduleName)),
+        directory.withDirectory("src/main/java", clientSources(introspectionJSON, name, client)),
+      )
+    }
+    let withJava = withClients
+      .withNewFile(workspaceRef(joinPath(rootPath, "pom.xml")), pom)
       .withNewDirectory(workspaceRef(joinPath(rootPath, "sdk")), vendored)
       .withNewDirectory(
         workspaceRef(joinPath(rootPath, coreClientPath)),

@@ -251,8 +251,8 @@ type E2e {
   An existing module keeps the runtime it has until dangEntrypoint = true
   migrates it; a module on the entrypoint keeps it, and dangEntrypoint = false
   is refused for it rather than leaving a manifest that names a stale
-  entrypoint. A module with the entrypoint refuses module clients and the
-  manifest settings its manifest has no place for.
+  entrypoint. A module with the entrypoint refuses the manifest settings its
+  manifest has no place for.
   """
   entrypointSelectionCheck(ws: Workspace!): Void @check {
     let manifestPath = "/" + newModulePath + "/dagger-module.toml"
@@ -277,11 +277,6 @@ type E2e {
       .generateScope(migrated, isModule: true, name: newModuleName, clients: [])
       .cwd rescue { err: Error => err.message }
     assertContains(refused, "set dangEntrypoint = true", "moving a module off its entrypoint was not refused: " + refused)
-
-    let withClient = javaSdk
-      .generateScope(migrated, isModule: true, name: newModuleName, clients: [ws.moduleSource("/" + clientDepPath)])
-      .cwd rescue { err: Error => err.message }
-    assertContains(withClient, "cannot use module clients yet", "a client of a module on the entrypoint was not refused: " + withClient)
 
     let included = onRuntime.withNewFile(manifestPath, onRuntime.file(manifestPath).contents.replace("[runtime]", "include = [\"../shared\"]\n\n[runtime]"))
     let withInclude = javaSdk(dangEntrypoint: true)
