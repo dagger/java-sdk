@@ -13,6 +13,9 @@ type ClientChecks {
   let middlePath: String! = ".dagger/modules/hop-b"
   let targetPath: String! = ".dagger/modules/hop-c"
   let pinAppPath: String! = ".dagger/modules/pin-app"
+  # The Java identifiers in checkAppSource are derived from these names by hand.
+  let checkLibPath: String! = ".dagger/modules/check-lib"
+  let checkAppPath: String! = ".dagger/modules/check-app"
 
   let assert(condition: Boolean!, message: String!): Void {
     if (condition == false) { raise message }
@@ -197,6 +200,46 @@ type ClientChecks {
     null
   }
 
+  """
+  A module calls a passing and a failing check of its client and reads pass
+  and error off each. A client runs in a v1 session, where a check is the core
+  object Check, so its client types every check as Check. The target's
+  engineVersion is before v1, where its checks keep the Void their author
+  wrote, which a v1 session refuses without a selection (dagger/go-sdk#77).
+  """
+  pub clientChecksCheck(ws: Workspace!): Void @check {
+    let withTarget = playground(ws)
+      .withNewFile(checkLibPath + "/dagger-module.toml", "name = \"check-lib\"\nengineVersion = \"v0.20.6\"\n\n[runtime]\n  source = \"dang\"\n")
+      .withNewFile(checkLibPath + "/main.dang", checkLibSource)
+    let ready = withClient(
+      javaModule(withTarget, checkAppPath, "check-app", "src/main/java/io/dagger/modules/checkapp/CheckApp.java", checkAppSource),
+      checkAppPath,
+      "../check-lib",
+    )
+    let script = "set -e\n" +
+      callResult +
+      "grep -o 'public Check [a-z]*()' " + checkAppPath + "/clients/check-lib/src/main/java/io/dagger/client/modules/checklib/CheckLib.java\n" +
+      "result -m " + checkAppPath + " call results\n"
+    let ran = ready.withExec(["sh", "-c", script], experimentalPrivilegedNesting: true, expect: ReturnType.ANY)
+    let said = ran.stdout + ran.stderr
+    assert(ran.exitCode == 0, "the calls of the client's checks failed:\n" + said)
+    let results = ran.stdout.trimSpace.split("\n")
+    assert(
+      (results[0] ?? "") == "public Check failing()" and (results[1] ?? "") == "public Check passing()",
+      "the client does not type its checks as Check: " + JSON.encode(results) + "\n" + said,
+    )
+    assert(
+      (results[2] ?? "") == "passing: pass=true, error=none",
+      "the passing check did not pass: " + JSON.encode(results) + "\n" + said,
+    )
+    let failing = results[3] ?? ""
+    assert(
+      failing.hasPrefix("failing: pass=false, error=") and failing.contains("check-lib's failing check failed"),
+      "the failing check did not fail with its error: " + JSON.encode(results) + "\n" + said,
+    )
+    null
+  }
+
   let callerSource: String! {
     "package io.dagger.modules.hopa;\n"
       + "\n"
@@ -253,6 +296,46 @@ type ClientChecks {
       + "  public String message()\n"
       + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
       + "    return \"pinned: \" + pinned().message();\n"
+      + "  }\n"
+      + "}\n"
+  }
+
+  let checkLibSource: String! {
+    "type CheckLib {\n"
+      + "  pub passing: Void @check {\n"
+      + "    null\n"
+      + "  }\n"
+      + "\n"
+      + "  pub failing: Void @check {\n"
+      + "    raise \"check-lib's failing check failed\"\n"
+      + "  }\n"
+      + "}\n"
+  }
+
+  let checkAppSource: String! {
+    "package io.dagger.modules.checkapp;\n"
+      + "\n"
+      + "import static io.dagger.client.modules.checklib.CheckLib.checkLib;\n"
+      + "\n"
+      + "import io.dagger.client.exception.DaggerQueryException;\n"
+      + "import io.dagger.client.modules.core.Check;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "import java.util.concurrent.ExecutionException;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class CheckApp {\n"
+      + "  @Function\n"
+      + "  public String results()\n"
+      + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
+      + "    return describe(\"passing\", checkLib().passing()) + \"\\n\" + describe(\"failing\", checkLib().failing());\n"
+      + "  }\n"
+      + "\n"
+      + "  private static String describe(String name, Check check)\n"
+      + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
+      + "    var error = check.error();\n"
+      + "    String message = error.isPresent() ? error.get().message().replace(\"\\n\", \" \") : \"none\";\n"
+      + "    return name + \": pass=\" + check.pass() + \", error=\" + message;\n"
       + "  }\n"
       + "}\n"
   }
