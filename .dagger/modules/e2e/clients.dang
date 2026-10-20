@@ -16,6 +16,10 @@ type ClientChecks {
   # The Java identifiers in checkAppSource are derived from these names by hand.
   let checkLibPath: String! = ".dagger/modules/check-lib"
   let checkAppPath: String! = ".dagger/modules/check-app"
+  # The Java identifiers in selfGreetingSource and selfRelaySource are derived
+  # from this name by hand.
+  let selfPath: String! = ".dagger/modules/self-app"
+  let selfSourcePath: String! = "src/main/java/io/dagger/modules/selfapp/SelfApp.java"
 
   let assert(condition: Boolean!, message: String!): Void {
     if (condition == false) { raise message }
@@ -58,6 +62,13 @@ type ClientChecks {
   let withClient(ctr: Container!, path: String!, target: String!): Container! {
     cli(ctr.withWorkdir(path), ["--auto-apply", "module", "client", "add", target, "--sdk", "java"])
       .withWorkdir(playgroundRoot)
+  }
+
+  """
+  Run dagger generate from the module at path, which regenerates that module.
+  """
+  let generate(ctr: Container!, path: String!): Container! {
+    cli(ctr.withWorkdir(path), ["--auto-apply", "generate"]).withWorkdir(playgroundRoot)
   }
 
   """
@@ -240,6 +251,53 @@ type ClientChecks {
     null
   }
 
+  """
+  A module calls one of its own functions through a client to itself. The
+  client's target is the module's own path, which the engine resolves in the
+  module's own tree. The engine reads the client's schema from the module's
+  committed entrypoint, which the same generation then rewrites, so a function
+  reaches the client one generation after the one that adds it.
+  """
+  pub selfClientCheck(ws: Workspace!): Void @check {
+    let greeting = generate(
+      javaModule(playground(ws), selfPath, "self-app", selfSourcePath, selfGreetingSource),
+      selfPath,
+    )
+    let relaying = generate(
+      withClient(greeting, selfPath, ".").withNewFile(selfPath + "/" + selfSourcePath, selfRelaySource),
+      selfPath,
+    )
+    let client = selfPath + "/clients/self-app/src/main/java/io/dagger/client/modules/selfapp/SelfApp.java"
+    let script = "set -e\n" +
+      callResult +
+      "grep -o 'ModuleTarget.local(.*)' " + client + "\n" +
+      "grep -c 'public String relay()' " + client + " || true\n" +
+      "result -m " + selfPath + " call relay\n" +
+      "(cd " + selfPath + " && dagger --auto-apply generate >&2)\n" +
+      "grep -c 'public String relay()' " + client + "\n"
+    let ran = relaying.withExec(["sh", "-c", script], experimentalPrivilegedNesting: true, expect: ReturnType.ANY)
+    let said = ran.stdout + ran.stderr
+    assert(ran.exitCode == 0, "the call through the self client failed:\n" + said)
+    let results = ran.stdout.trimSpace.split("\n")
+    assert(
+      (results[0] ?? "") == "ModuleTarget.local(\"/" + selfPath + "\")",
+      "the self client does not target the module's own path: " + JSON.encode(results) + "\n" + said,
+    )
+    assert(
+      (results[1] ?? "") == "0",
+      "the self client has relay before the generation after the one that added it: " + JSON.encode(results) + "\n" + said,
+    )
+    assert(
+      (results[2] ?? "") == "relayed: hello, self",
+      "the module did not call itself through its self client: " + JSON.encode(results) + "\n" + said,
+    )
+    assert(
+      (results[3] ?? "") == "1",
+      "the next generation did not add relay to the self client: " + JSON.encode(results) + "\n" + said,
+    )
+    null
+  }
+
   let callerSource: String! {
     "package io.dagger.modules.hopa;\n"
       + "\n"
@@ -336,6 +394,46 @@ type ClientChecks {
       + "    var error = check.error();\n"
       + "    String message = error.isPresent() ? error.get().message().replace(\"\\n\", \" \") : \"none\";\n"
       + "    return name + \": pass=\" + check.pass() + \", error=\" + message;\n"
+      + "  }\n"
+      + "}\n"
+  }
+
+  let selfGreetingSource: String! {
+    "package io.dagger.modules.selfapp;\n"
+      + "\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class SelfApp {\n"
+      + "  @Function\n"
+      + "  public String greeting(String name) {\n"
+      + "    return \"hello, \" + name;\n"
+      + "  }\n"
+      + "}\n"
+  }
+
+  let selfRelaySource: String! {
+    "package io.dagger.modules.selfapp;\n"
+      + "\n"
+      + "import static io.dagger.client.modules.selfapp.SelfApp.selfApp;\n"
+      + "\n"
+      + "import io.dagger.client.exception.DaggerQueryException;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "import java.util.concurrent.ExecutionException;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class SelfApp {\n"
+      + "  @Function\n"
+      + "  public String greeting(String name) {\n"
+      + "    return \"hello, \" + name;\n"
+      + "  }\n"
+      + "\n"
+      + "  @Function\n"
+      + "  public String relay()\n"
+      + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
+      + "    return \"relayed: \" + selfApp().greeting(\"self\");\n"
       + "  }\n"
       + "}\n"
   }
