@@ -176,4 +176,39 @@ type CollectionChecks {
     assert(said.contains("the item's verify ran") == false, "the item's own check ran:\n" + said)
     null
   }
+
+  let itemsSourcePath: String! = "src/main/java/io/dagger/modules/shelf/Items.java"
+
+  """
+  A collection whose get method lacks @Function is refused when the module
+  is generated, and a build that runs the processor prints an error that
+  names the method and the missing annotation, where the engine would name
+  neither (python-sdk#45).
+  """
+  pub collectionGetWithoutFunctionCheck(ws: Workspace!): Void @check {
+    let generated = app(ws)
+    let source = generated.file(itemsSourcePath).contents
+    let bare = source.replace("  @Function\n  @Get\n", "  @Get\n")
+    assert(bare != source, "Items.java has no @Function @Get method to strip")
+    let broken = generated.withNewFile(itemsSourcePath, bare)
+
+    let refused = javaSdk
+      .generateScope(ws.withDirectory("/" + appPath, broken).withWorkdir(appPath), isModule: true, name: appName, clients: [])
+      .cwd rescue { err: Error => "refused: " + err.message }
+    assert(refused.hasPrefix("refused: "), "generation accepted a collection whose get method lacks @Function")
+
+    let built = container
+      .from("maven:3.9.9-eclipse-temurin-21-alpine@sha256:4cbb8bf76c46b97e028998f2486ed014759a8e932480431039bdb93dffe6813e")
+      .withoutEntrypoint
+      .withMountedCache("/root/.m2", cacheVolume("e2e-maven-m2"))
+      .withDirectory("/module", broken, exclude: ["**/target/**"])
+      .withWorkdir("/module")
+      .withExec(["mvn", "compile", "-Ddagger.proc=full", "--no-transfer-progress"], expect: ReturnType.ANY)
+    let want = "Method 'lookup' of 'Items' is marked @Get but not @Function. Add @Function: a collection's get function must be exposed."
+    assert(
+      built.exitCode != 0 and built.stdout.contains(want),
+      "the build did not refuse the collection with " + JSON.encode(want) + ":\n" + built.stdout + built.stderr,
+    )
+    null
+  }
 }
