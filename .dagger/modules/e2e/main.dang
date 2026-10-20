@@ -85,6 +85,13 @@ type E2e {
   }
 
   """
+  Checks of clients generated into a plain Maven project.
+  """
+  standalone: StandaloneChecks! {
+    StandaloneChecks()
+  }
+
+  """
   Fail the current check when a condition is false.
   """
   let assert(condition: Boolean!, message: String!): Void {
