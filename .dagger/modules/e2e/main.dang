@@ -347,8 +347,7 @@ type E2e {
   In a module scope the client set becomes the module's dependency set: the
   client is recorded in the manifest and its types reach the generated bindings,
   and a client that is no longer requested is dropped from both. A scope without
-  a module is left alone, and standalone clients are refused rather than
-  silently skipped.
+  a module and without clients is left alone.
   """
   generateScopeClientsCheck(ws: Workspace!): Void @check {
     let root = ws.withWorkdir(".")
@@ -362,11 +361,6 @@ type E2e {
       .withWorkdir(".")
       .changes(root)
     assert(untouched.isEmpty, "a scope without a module should not be generated")
-
-    let refused = javaSdk
-      .generateScope(scoped, isModule: false, name: clientAppName, clients: [client])
-      .cwd rescue "raised"
-    assert(refused == "raised", "generateScope should refuse standalone clients")
 
     let withClient = javaSdk(dangEntrypoint: false).generateScope(scoped, isModule: true, name: clientAppName, clients: [client])
     assertContainsAll(withClient.file("/" + manifestPath).contents, [
