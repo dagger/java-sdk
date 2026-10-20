@@ -60,7 +60,8 @@ class EntrypointGenerationTest {
             new FunctionInfo[] {
               function("fresh", "never"), function("session", "session"), function("hourly", "1h")
             },
-            Optional.empty());
+            Optional.empty(),
+            false);
     return DaggerModuleAnnotationProcessor.generate(
             new ModuleInfo(null, new ObjectInfo[] {hello}, Map.of()))
         .toString();
@@ -74,6 +75,7 @@ class EntrypointGenerationTest {
         cache,
         new TypeInfo("java.lang.String", TypeKind.DECLARED.name()),
         new ParameterInfo[0],
+        false,
         false,
         false,
         false);

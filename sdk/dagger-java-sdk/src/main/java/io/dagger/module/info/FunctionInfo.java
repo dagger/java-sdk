@@ -9,4 +9,5 @@ public record FunctionInfo(
     ParameterInfo[] parameters,
     boolean isCheck,
     boolean isGenerate,
-    boolean isUp) {}
+    boolean isUp,
+    boolean isGet) {}

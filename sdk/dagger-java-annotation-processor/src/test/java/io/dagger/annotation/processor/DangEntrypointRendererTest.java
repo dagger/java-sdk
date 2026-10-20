@@ -156,7 +156,8 @@ class DangEntrypointRendererTest {
             "a \"quoted\" \\ description\nover two lines",
             new FieldInfo[0],
             new FunctionInfo[0],
-            Optional.empty());
+            Optional.empty(),
+            false);
 
     String dang =
         DangEntrypointRenderer.render(
@@ -171,7 +172,16 @@ class DangEntrypointRendererTest {
   private static String renderFunction(String cache) {
     FunctionInfo fn =
         new FunctionInfo(
-            "fresh", "fresh", "", cache, string(), new ParameterInfo[0], false, false, false);
+            "fresh",
+            "fresh",
+            "",
+            cache,
+            string(),
+            new ParameterInfo[0],
+            false,
+            false,
+            false,
+            false);
     ObjectInfo object =
         new ObjectInfo(
             "Demo",
@@ -179,7 +189,8 @@ class DangEntrypointRendererTest {
             "",
             new FieldInfo[0],
             new FunctionInfo[] {fn},
-            Optional.empty());
+            Optional.empty(),
+            false);
     return DangEntrypointRenderer.render(
         new ModuleInfo(null, new ObjectInfo[] {object}, Map.of()), "demo");
   }
@@ -191,7 +202,8 @@ class DangEntrypointRendererTest {
         "",
         new FieldInfo[0],
         new FunctionInfo[0],
-        constructor);
+        constructor,
+        false);
   }
 
   private static TypeInfo string() {
@@ -240,6 +252,7 @@ class DangEntrypointRendererTest {
             },
             false,
             false,
+            false,
             false);
 
     FunctionInfo lint =
@@ -251,6 +264,7 @@ class DangEntrypointRendererTest {
             new TypeInfo("void", TypeKind.VOID.name()),
             new ParameterInfo[0],
             true,
+            false,
             false,
             false);
 
@@ -273,6 +287,7 @@ class DangEntrypointRendererTest {
             },
             false,
             false,
+            false,
             false);
 
     ObjectInfo demo =
@@ -284,10 +299,13 @@ class DangEntrypointRendererTest {
               new FieldInfo(
                   "source",
                   "the source tree",
-                  new TypeInfo("io.dagger.client.modules.core.Directory", TypeKind.DECLARED.name()))
+                  new TypeInfo("io.dagger.client.modules.core.Directory", TypeKind.DECLARED.name()),
+                  false,
+                  false)
             },
             new FunctionInfo[] {greet, lint},
-            Optional.of(constructor));
+            Optional.of(constructor),
+            false);
 
     EnumInfo severity =
         new EnumInfo(

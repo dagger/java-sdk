@@ -42,7 +42,9 @@ class DaggerTypeTest {
             "",
             new TypeInfo(
                 "java.util.Optional<io.dagger.client.modules.core.Container>",
-                TypeKind.DECLARED.name()));
+                TypeKind.DECLARED.name()),
+            false,
+            false);
 
     assertThat(DaggerType.of(field.type()).toDaggerTypeDef().toString())
         .isEqualTo(

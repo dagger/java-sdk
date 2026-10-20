@@ -25,12 +25,16 @@ import io.dagger.client.modules.core.JsonConverter;
 import io.dagger.client.modules.core.TypeDef;
 import io.dagger.client.telemetry.Telemetry;
 import io.dagger.module.annotation.Check;
+import io.dagger.module.annotation.Collection;
 import io.dagger.module.annotation.Default;
 import io.dagger.module.annotation.DefaultPath;
+import io.dagger.module.annotation.Delta;
 import io.dagger.module.annotation.Enum;
 import io.dagger.module.annotation.Function;
 import io.dagger.module.annotation.Generate;
+import io.dagger.module.annotation.Get;
 import io.dagger.module.annotation.Ignore;
+import io.dagger.module.annotation.Keys;
 import io.dagger.module.annotation.Module;
 import io.dagger.module.annotation.Object;
 import io.dagger.module.annotation.Up;
@@ -146,6 +150,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
             }
 
             boolean mainObject = areSimilar(name, moduleName);
+            boolean collection = typeElement.getAnnotation(Collection.class) != null;
 
             if (!element.getModifiers().contains(Modifier.PUBLIC)) {
               throw new RuntimeException(
@@ -189,7 +194,8 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                             parseParameters((ExecutableElement) elt).toArray(new ParameterInfo[0]),
                             false, // constructors are never checks
                             false, // constructors are never generators
-                            false)); // constructors are never up services
+                            false, // constructors are never up services
+                            false)); // constructors are never collection lookups
               } else if (constructorDefs.size() > 1) {
                 // There's more than one non-empty constructor, but Dagger only supports to expose a
                 // single one
@@ -207,7 +213,9 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                     .filter(
                         elt ->
                             elt.getModifiers().contains(Modifier.PUBLIC)
-                                || elt.getAnnotation(Function.class) != null)
+                                || elt.getAnnotation(Function.class) != null
+                                || elt.getAnnotation(Keys.class) != null
+                                || elt.getAnnotation(Delta.class) != null)
                     .map(
                         elt -> {
                           String fieldName = elt.getSimpleName().toString();
@@ -217,7 +225,9 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                               new FieldInfo(
                                   fieldName,
                                   parseSimpleDescription(elt),
-                                  new TypeInfo(tm.toString(), tk.name()));
+                                  new TypeInfo(tm.toString(), tk.name()),
+                                  collection && elt.getAnnotation(Keys.class) != null,
+                                  collection && elt.getAnnotation(Delta.class) != null);
                           return f;
                         })
                     .toList();
@@ -247,6 +257,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                           boolean isCheck = elt.getAnnotation(Check.class) != null;
                           boolean isGenerate = elt.getAnnotation(Generate.class) != null;
                           boolean isUp = elt.getAnnotation(Up.class) != null;
+                          boolean isGet = collection && elt.getAnnotation(Get.class) != null;
                           FunctionInfo functionInfo =
                               new FunctionInfo(
                                   fName,
@@ -257,10 +268,24 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                                   parameterInfos.toArray(new ParameterInfo[parameterInfos.size()]),
                                   isCheck,
                                   isGenerate,
-                                  isUp);
+                                  isUp,
+                                  isGet);
                           return functionInfo;
                         })
                     .toList();
+            // A collection without a get function fails to load, and the engine's error names
+            // neither the method marked @Get nor the missing @Function.
+            if (collection
+                && functionInfos.stream().noneMatch(f -> f.isGet() || f.name().equals("get"))) {
+              for (Element elt : typeElement.getEnclosedElements()) {
+                if (elt.getKind() == ElementKind.METHOD && elt.getAnnotation(Get.class) != null) {
+                  throw new RuntimeException(
+                      ("Method '%s' of '%s' is marked @Get but not @Function. Add @Function: a"
+                              + " collection's get function must be exposed.")
+                          .formatted(elt.getSimpleName(), name));
+                }
+              }
+            }
             annotatedObjects.add(
                 new ObjectInfo(
                     name,
@@ -268,7 +293,8 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                     parseObjectDescription(typeElement),
                     fieldInfoInfos.toArray(new FieldInfo[fieldInfoInfos.size()]),
                     functionInfos.toArray(new FunctionInfo[functionInfos.size()]),
-                    constructorInfo));
+                    constructorInfo,
+                    collection));
           }
         }
       }
