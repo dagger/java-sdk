@@ -209,6 +209,50 @@ type EngineE2e {
   }
 
   """
+  A plain Maven project calls a module through a client the CLI added to it,
+  from a program run with java -jar that holds no connection code. With no
+  session in its environment, the program starts `dagger session` on its
+  first call and stops it before the JVM exits, so no session process
+  outlives the program. The project builds with mvn package in a container
+  with no engine and no dagger CLI.
+  """
+  pub standaloneClientCheck(ws: Workspace!): Void @check {
+    let appPath = "standalone-app"
+    let javaClient = container.from(runtimeImage(ws, "java")).withExec(["apk", "add", "--no-cache", "git"])
+    let added = sdkClient(ws, engineDev(ws: daggerSource(floorCommit)).installClient(client: javaClient))
+      .withExec(["cp", "-R", ".dagger/modules/e2e/fixtures/standalone/app", appPath])
+      .withWorkdir(appPath)
+      .withExec(withoutOuterSession([
+        "--auto-apply", "module", "client", "add", "../.dagger/modules/e2e/fixtures/clients/dep", "--sdk", "java",
+      ]))
+    let jar = container
+      .from(runtimeImage(ws, "maven"))
+      .withoutEntrypoint
+      .withMountedCache("/root/.m2", cacheVolume("engine-e2e-maven-m2"))
+      .withDirectory("/app", added.directory("."))
+      .withWorkdir("/app")
+      .withExec(["mvn", "package", "--no-transfer-progress"])
+      .file("/app/target/app.jar")
+    # CLISession runs the CLI installClient mounts at /.dagger-cli.
+    let script = "set -e\n" +
+      "env -u DAGGER_SESSION_PORT -u DAGGER_SESSION_TOKEN java -jar app.jar\n" +
+      "if ps -o args | grep -qE '[d]agger[^ ]* session'; then ps -o pid,args >&2; exit 1; fi\n"
+    let ran = added.withFile("app.jar", jar).withExec(["sh", "-c", script], expect: ReturnType.ANY)
+    let said = ran.stdout + ran.stderr
+    assert(ran.exitCode == 0, "the program failed, or left its dagger session running:\n" + said)
+    assert(ran.stdout.trimSpace == "hello from the client dependency", "the program did not call its client:\n" + said)
+
+    null
+  }
+
+  """
+  The image a single-FROM Dockerfile under runtime/images names.
+  """
+  let runtimeImage(ws: Workspace!, name: String!): String! {
+    ws.file("/runtime/images/" + name + "/Dockerfile").contents.trimSpace.trimPrefix("FROM ")
+  }
+
+  """
   A git server for one repository, pinned.git, that a push can add to. Its
   first commit, tagged v1.0.0, is a module whose message is its version.
   """
