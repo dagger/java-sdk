@@ -50,6 +50,7 @@ import java.io.IOException;
 import java.io.Writer;
 import java.lang.reflect.InvocationTargetException;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -312,9 +313,12 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
       enumSimpleNames.add(simpleName);
     }
 
+    // ObjectInfo hashes its arrays by identity, so the set's order changes from run to run.
     return new ModuleInfo(
         moduleDescription,
-        annotatedObjects.toArray(new ObjectInfo[annotatedObjects.size()]),
+        annotatedObjects.stream()
+            .sorted(Comparator.comparing(ObjectInfo::qualifiedName))
+            .toArray(ObjectInfo[]::new),
         enumInfos);
   }
 

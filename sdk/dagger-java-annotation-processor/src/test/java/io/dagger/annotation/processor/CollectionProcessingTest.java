@@ -346,6 +346,35 @@ class CollectionProcessingTest {
         .contains("Items res = obj.items();\n        return JsonConverter.toJSON(res);");
   }
 
+  /** The committed entrypoint is compared with a fresh one, so one module gives one text. */
+  @Test
+  void theObjectsComeInTheOrderOfTheirNames() throws Exception {
+    String other =
+        """
+        package demo;
+
+        import io.dagger.module.annotation.Object;
+
+        @Object
+        public class Other {
+          public String name;
+        }
+        """;
+    Map<String, String> sources = Map.of("Other", other, "Item", ITEM, "Main", MAIN);
+
+    String dang = process(sources);
+    String java = entrypoint();
+    for (int run = 0; run < 4; run++) {
+      assertThat(process(sources)).isEqualTo(dang);
+      assertThat(entrypoint()).isEqualTo(java);
+    }
+    assertThat(dang)
+        .containsSubsequence(
+            "typeDef.withObject(\"Item\"",
+            "typeDef.withObject(\"Main\"",
+            "typeDef.withObject(\"Other\"");
+  }
+
   private static String collectionMain(String getAnnotations) {
     return """
         package demo;
