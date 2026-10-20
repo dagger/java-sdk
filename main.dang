@@ -1,12 +1,12 @@
 """
-Manage Dagger modules that use the Java SDK (new self-contained code organisation).
+Manage Dagger modules that use the Java SDK, and the clients of plain Maven
+projects.
 
-Modules created by this SDK use the self-contained layout: the Java SDK is
-vendored as source and code is generated into the module, and the module runtime
-is this repository's build/package-only runtime
-(`github.com/dagger/java-sdk/runtime`). Because the generated files are committed,
-the runtime skips codegen at module load and just builds and packages the
-committed sources.
+A module vendors the Java SDK as source and commits every file generation
+writes, so the engine generates nothing when it loads the module. A new module
+runs on a Dang entrypoint generated into it. An existing module keeps this
+repository's build/package-only runtime (`github.com/dagger/java-sdk/runtime`)
+until dangEntrypoint = true moves it.
 """
 type JavaSdk {
   """
@@ -45,7 +45,8 @@ type JavaSdk {
   dangEntrypoint: Boolean
 
   """
-  Runtime source written into the dagger-module.toml of new Java modules.
+  Runtime source written into the dagger-module.toml of a new module on the
+  runtime.
   """
   let targetRuntime: String! = "github.com/dagger/java-sdk/runtime"
 
@@ -341,7 +342,7 @@ type JavaSdk {
   }
 
   """
-  The dagger-module.toml a new module starts from.
+  The dagger-module.toml a new module on the runtime starts from.
 
   The builder has one runtime setter per builtin runtime, and this SDK targets
   its own repository's runtime, so the runtime is named by loading a seed file:
