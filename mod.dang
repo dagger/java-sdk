@@ -237,17 +237,24 @@ type Mod {
   """
   The pom.xml with this SDK's clients profile, which adds each client's
   package as a compile root. The profile is rewritten on every generation,
-  added before the pom's last </profiles> when it has none, and removed with
-  the module's last client. It is active unless dagger.clients.skip is set,
-  because a profile active by default turns off when any other profile turns
-  on, and the SDK's own profiles do.
+  and removed with the module's last client. It is active unless
+  dagger.clients.skip is set, because a profile active by default turns off
+  when any other profile turns on, and the SDK's own profiles do.
   """
   let withClientsProfile(pom: String!): String! {
-    let stripped = pom.replaceMatches(Regexp("(?s)\n[ \t]*<!-- " + clientsProfileMarker + ":.*?<!-- /" + clientsProfileMarker + " -->"), "")
-    if (clients.length == 0) {
+    withMarkedProfile(pom, clientsProfileMarker, if (clients.length == 0) { "" } else { clientsProfile })
+  }
+
+  """
+  The pom.xml with the profile between a marker's comments replaced: the old
+  one removed, and the new one, unless it is empty, added before the pom's
+  last </profiles>, or in a <profiles> of its own when the pom has none.
+  """
+  let withMarkedProfile(pom: String!, marker: String!, profile: String!): String! {
+    let stripped = pom.replaceMatches(Regexp("(?s)\n[ \t]*<!-- " + marker + ":.*?<!-- /" + marker + " -->"), "")
+    if (profile == "") {
       return stripped
     }
-    let profile = clientsProfile
     if (stripped.contains("</profiles>")) {
       stripped.replaceMatches(Regexp("(?s)^(.*)(\n[ \t]*</profiles>)"), "${1}" + profile + "${2}")
     } else if (stripped.contains("</project>")) {
@@ -256,7 +263,7 @@ type Mod {
         "${1}\n\n    <profiles>" + profile + "\n    </profiles>${2}",
       )
     } else {
-      raise "pom.xml has no </project>: it cannot hold the profile that compiles the module's clients"
+      raise "pom.xml has no </project>: it cannot hold the " + marker + " profile"
     }
   }
 
@@ -403,21 +410,7 @@ type Mod {
       .withoutDirectory("src/generated")
     let processedModule = processed(baseDir, name)
 
-    let withClients = clients.reduce(
-      stale.reduce(ws) { w, stalePath => w.withoutDirectory(workspaceRef(joinPath(rootPath, "clients/" + stalePath))) },
-    ) { w, client =>
-      w.withNewDirectory(
-        workspaceRef(joinPath(rootPath, "clients/" + client.moduleName)),
-        directory.withDirectory("src/main/java", clientSources(introspectionJSON, name, client)),
-      )
-    }
-    let withJava = withClients
-      .withNewFile(workspaceRef(joinPath(rootPath, "pom.xml")), pom)
-      .withNewDirectory(workspaceRef(joinPath(rootPath, "sdk")), vendored)
-      .withNewDirectory(
-        workspaceRef(joinPath(rootPath, coreClientPath)),
-        coreClient(introspectionJSON, name),
-      )
+    let withJava = withSdkAndClients(stale, vendored, introspectionJSON, name, pom)
       .withNewDirectory(
         workspaceRef(joinPath(rootPath, "src/generated/java")),
         processedModule.directory("/module/target/generated-sources/annotations"),
@@ -439,6 +432,35 @@ type Mod {
     } else {
       staged
     }
+  }
+
+  """
+  The workspace with the pom.xml, the vendored SDK, core and one package per
+  client written, and the package of each client the module no longer has
+  removed.
+  """
+  let withSdkAndClients(
+    stale: [String!]!,
+    vendored: Directory!,
+    introspectionJSON: File!,
+    name: String!,
+    pom: String!,
+  ): Workspace! {
+    let withClients = clients.reduce(
+      stale.reduce(ws) { w, stalePath => w.withoutDirectory(workspaceRef(joinPath(rootPath, "clients/" + stalePath))) },
+    ) { w, client =>
+      w.withNewDirectory(
+        workspaceRef(joinPath(rootPath, "clients/" + client.moduleName)),
+        directory.withDirectory("src/main/java", clientSources(introspectionJSON, name, client)),
+      )
+    }
+    withClients
+      .withNewFile(workspaceRef(joinPath(rootPath, "pom.xml")), pom)
+      .withNewDirectory(workspaceRef(joinPath(rootPath, "sdk")), vendored)
+      .withNewDirectory(
+        workspaceRef(joinPath(rootPath, coreClientPath)),
+        coreClient(introspectionJSON, name),
+      )
   }
 
   """
