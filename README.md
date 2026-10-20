@@ -1,19 +1,21 @@
 # Dagger Java SDK
 
-The user experience for authoring Dagger modules in Java.
+The user experience for authoring Dagger modules in Java, and for calling
+modules from Java programs.
 
-Modules created with this tool use a **self-contained** layout: the Dagger Java
-SDK is vendored into the module as real, buildable source, all generated files
-are committed to version control, and **no code generation runs at module load
-time**.
+A Java module is **self-contained**: the Dagger Java SDK is vendored into it as
+buildable source, every file generation writes is committed, and **nothing is
+generated when the engine loads the module**. The module builds with a plain
+`mvn package`, in an IDE or in CI, without Dagger.
 
 > This repository owns both halves of the Java SDK. The root Dang module
 > (`main.dang` / `mod.dang`) owns code generation and scaffolding, and runs when
 > the engine asks it to generate a scope. A new module runs on a **Dang
 > entrypoint** generated into it: the engine reads the module's types from it
 > without building the module, and builds the jar only to call a function. A
-> module can instead run on the build/package-only Dang module under
-> `runtime/`, referenced as `github.com/dagger/java-sdk/runtime`.
+> module generated before the entrypoint keeps the build/package-only Dang
+> module under `runtime/`, referenced as `github.com/dagger/java-sdk/runtime`,
+> until it moves to the entrypoint.
 
 > [!IMPORTANT]
 > This SDK needs an engine `v1.0.0-beta.18` or later. On an older engine,
@@ -24,9 +26,7 @@ time**.
 > [`github.com/dagger/sdk-helpers`](https://github.com/dagger/sdk-helpers), the
 > manifest builder that
 > [dagger/dagger#13992](https://github.com/dagger/dagger/pull/13992) moved out of
-> the engine, at the `v1.0.2` tag rather than the `dagger.io/sdk/helpers@v1`
-> vanity address the other SDKs moved to: engine `v1.0.0-beta.11` resolves that
-> address as a local path and then fails to load the workspace at all.
+> the engine, pinned at its `v1.0.2` tag.
 
 ## Install
 
@@ -84,9 +84,67 @@ manifest; without it a client added at a branch or tag keeps following it. A
 client of a module on the entrypoint always loads the commit it was generated
 against.
 
-Because everything is committed and the pom defaults `dagger.proc=none`, the
-module builds with a plain `mvn package` (no annotation processor at build time)
-— in an IDE or CI, without Dagger.
+Because everything is committed and the pom defaults `dagger.proc=none`, a
+plain `mvn package` runs no annotation processor: it compiles the committed
+entrypoint.
+
+## Generate
+
+```sh
+dagger generate
+```
+
+This regenerates every scope recorded in `dagger.toml`: each module, and each
+plain project with clients. The engine narrows the set to the scopes containing
+your current directory, so running it inside a module regenerates that module.
+
+Generation runs Maven in containers this SDK controls: it builds the vendored
+codegen plugin, generates core from the engine's introspection schema and each
+client from its target's schema, vendors the SDK library and annotation
+processor as source, and runs the processor once to produce the entrypoint. It
+does not delegate code generation back to the engine.
+
+A Java scope is a directory with a `pom.xml`. `findClientRoot` answers with the
+nearest one at or above your current directory, which is how
+`dagger module client add` and friends find the module or the
+[plain project](#clients-in-a-plain-maven-project) you are standing in. A
+project built with anything but Maven has no `pom.xml`, so this SDK reports no
+scope for it.
+
+## The Dang entrypoint
+
+`dagger generate` writes the module's types into
+`src/generated/dang/entrypoint/main.dang`, so `dagger functions` lists them
+without a build. A call builds the jar with Maven from the module directory, in
+the images the runtime pins, and runs it once per call with the request on
+standard input. The dispatch is the switch the annotation processor generates in
+`Entrypoint.java`; a failed function's error reaches the caller with its text.
+
+The `dangEntrypoint` setting picks the entrypoint or the runtime:
+
+- Unset, a new module gets the entrypoint, and an existing module keeps what it
+  has.
+- `true` moves an existing module to the entrypoint.
+- `false` keeps a module on `github.com/dagger/java-sdk/runtime`. A module on
+  the entrypoint refuses it; remove `[entrypoint]` from its
+  `dagger-module.toml` to move it back.
+
+Set it on one module's scope in `dagger.toml`, or under
+`[modules.java-sdk.settings]` for every Java module of the workspace:
+
+```toml
+[sdks.java.scopes."path/to/module".settings]
+dangEntrypoint = true
+```
+
+A module on the entrypoint calls other modules through its
+[clients](#module-clients). Its `dagger-module.toml` holds its name and the
+entrypoint only, so generation refuses a manifest setting it would drop, such
+as `include`.
+
+`@Function(cache = ...)` sets a function's cache policy on either path:
+`"never"`, `"session"`, or a duration such as `"10m"` after which the result is
+computed again.
 
 ## The core API
 
@@ -134,78 +192,9 @@ To upgrade the module:
    `Client.ClientDepArguments` with `Core.ClientDepArguments`.
 6. Run `dagger generate`.
 
-## The Dang entrypoint
-
-`dagger generate` writes the module's types into
-`src/generated/dang/entrypoint/main.dang`, so `dagger functions` lists them
-without a build. A call builds the jar with Maven from the module directory, in
-the images the runtime pins, and runs it once per call with the request on
-standard input. The dispatch is the switch the annotation processor generates in
-`Entrypoint.java`; a failed function's error reaches the caller with its text.
-
-The `dangEntrypoint` setting picks the entrypoint or the runtime:
-
-- Unset, a new module gets the entrypoint, and an existing module keeps what it
-  has.
-- `true` moves an existing module to the entrypoint.
-- `false` keeps a module on `github.com/dagger/java-sdk/runtime`. A module on
-  the entrypoint refuses it; remove `[entrypoint]` from its
-  `dagger-module.toml` to move it back.
-
-Set it on one module's scope in `dagger.toml`, or under
-`[modules.java-sdk.settings]` for every Java module of the workspace:
-
-```toml
-[sdks.java.scopes."path/to/module".settings]
-dangEntrypoint = true
-```
-
-A module on the entrypoint calls other modules through its
-[clients](#module-clients). Its `dagger-module.toml` holds its name and the
-entrypoint only, so generation refuses a manifest setting it would drop, such
-as `include`.
-
-`@Function(cache = ...)` sets a function's cache policy on either path:
-`"never"`, `"session"`, or a duration such as `"10m"` after which the result is
-computed again.
-
-## Collections
-
-`@Collection` marks an object whose items the engine serves by key, as `keys`,
-`get`, `list`, `subset` and `batch`. `@Keys` marks its keys field, `@Get` its
-get function, and `@Delta` a `CollectionDelta` field that receives the keys
-added and removed since the module returned it. A function that returns its
-receiver keeps the collection's base; a new instance starts its own.
-[docs/collections.md](docs/collections.md) describes them.
-
-## Generate
-
-```sh
-dagger generate
-```
-
-This regenerates every scope recorded in `dagger.toml`: each module, and each
-plain project with clients. The engine narrows the set to the scopes containing
-your current directory, so running it inside a module regenerates that module.
-
-Generation runs Maven in containers this SDK controls: it builds the vendored
-codegen plugin, generates the core client from the engine's introspection
-schema, vendors the SDK library and annotation processor as source, and runs the
-processor once to produce the entrypoint. It does not delegate code generation
-back to the engine.
-
-## Module scopes
-
-A Java scope is a directory with a `pom.xml`. `findClientRoot` answers with the
-nearest one at or above your current directory, which is how
-`dagger module client add` and friends find the module or the
-[plain project](#clients-in-a-plain-maven-project) you are standing in. A
-project built with anything but Maven has no `pom.xml`, so this SDK reports no
-scope for it.
-
 ## Module clients
 
-Module dependencies are replaced by generated module clients:
+A module calls other modules through generated clients:
 
 ```sh
 dagger module client add <module-ref>
@@ -250,6 +239,8 @@ A module that moves to the entrypoint keeps its `[[dependencies]]` as clients:
 generation drops each dependency that a client of the scope covers, and refuses
 a dependency that no client covers, by name. Add a client for it, or remove it
 from the manifest.
+
+### Clients on the runtime
 
 On the runtime (`dangEntrypoint = false`), the client set becomes the module's
 dependency set instead. Each client is recorded in the manifest the module has —
@@ -319,6 +310,15 @@ The project builds with `mvn package` and no engine. Its `pom.xml` decides how
 to package the program. The SDK logs through SLF4J and adds no backend for it:
 add one, such as `slf4j-simple`, to see the session's progress.
 
+## Collections
+
+`@Collection` marks an object whose items the engine serves by key, as `keys`,
+`get`, `list`, `subset` and `batch`. `@Keys` marks its keys field, `@Get` its
+get function, and `@Delta` a `CollectionDelta` field that receives the keys
+added and removed since the module returned it. A function that returns its
+receiver keeps the collection's base; a new instance starts its own.
+[docs/collections.md](docs/collections.md) describes them.
+
 ## Pre-1.0 modules
 
 A module configured by `dagger.json` is migrated the first time it is generated:
@@ -344,6 +344,10 @@ pinned in `.dagger/modules/engine-e2e`:
   same engine, initializes a Java module through the CLI, and calls it.
 - `engine-e2e:below-floor-check` builds `v1.0.0-beta.17` and checks that
   generation and `dagger module init` refuse it.
+- `engine-e2e:cache-policy-sessions-check`, `pinned-git-client-check` and
+  `standalone-client-check` run calls in sessions of their own on the same
+  engine, which the e2e checks cannot do: their calls share the check's
+  session.
 
 `dagger.toml` does not install the `e2e` module, so `dagger check` runs the e2e
 checks only on the floor engine. AGENTS.md has the commands that run them on the
