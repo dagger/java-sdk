@@ -240,6 +240,31 @@ generation drops each dependency that a client of the scope covers, and refuses
 a dependency that no client covers, by name. Add a client for it, or remove it
 from the manifest.
 
+### A client to the module itself
+
+A module calls one of its own functions through the engine with a client to
+itself. Add it from the module's directory:
+
+```sh
+dagger module client add .
+```
+
+The client is a package like any other, and its target is the module's own
+path:
+
+```java
+import static io.dagger.client.modules.mymodule.MyModule.myModule;
+
+String greeting = myModule().greeting("self");
+```
+
+Generation reads the client's schema from the module's committed entrypoint,
+which the same generation then rewrites. A function therefore reaches the
+client one `dagger generate` after the one that adds it to the module. Until
+then, module code that calls it through the client does not compile, and
+generation fails. Add the function and run `dagger generate` twice before you
+call it through the client.
+
 ### Clients on the runtime
 
 On the runtime (`dangEntrypoint = false`), the client set becomes the module's
