@@ -476,17 +476,46 @@ type Mod {
 
   """
   The Dang entrypoint: main.dang from the annotation processor, and build.dang,
-  which builds the jar with the images the runtime pins.
+  which builds the jar with the images the runtime pins. build.dang runs the
+  processor again under the name it ran under here, because the name decides
+  which object is the module's.
   """
-  let dangEntrypointDir(processedModule: Container!): Directory! {
+  let dangEntrypointDir(processedModule: Container!, name: String!): Directory! {
     directory
       .withFile("main.dang", processedModule.file("/module/target/classes/dagger/entrypoint/main.dang"))
       .withNewFile(
         "build.dang",
         currentModule.source.file("entrypoint/build.dang.tmpl").contents
           .replace("<maven-image>", dockerfileImage("runtime/images/maven/Dockerfile"))
-          .replace("<jre-image>", dockerfileImage("runtime/images/java/Dockerfile")),
+          .replace("<jre-image>", dockerfileImage("runtime/images/java/Dockerfile"))
+          .replace("<module-name>", name),
       )
+  }
+
+  """
+  Where a module on the Dang entrypoint lists every file generation wrote into
+  it with its SHA-256, which build.dang checks before a call.
+  """
+  let generatedSumsPath: String! = "src/generated/sha256sums"
+
+  """
+  The list at generatedSumsPath, in the format of sha256sum: the vendored SDK,
+  core, each client and src/generated, as ws holds them.
+  """
+  let generatedSums(ws: Workspace!): String! {
+    let owned = ["sdk", "clients/core", "src/generated"] + clients.map { client => "clients/" + client.moduleName }
+    let tree = ws.directory(
+      "/",
+      include: owned.map { dir => joinPath(rootPath, dir) + "/**" },
+      exclude: [joinPath(rootPath, generatedSumsPath)],
+    )
+    let moduleTree = if (rootPath == ".") { tree } else { tree.directory(rootPath) }
+    mvn
+      .withoutEntrypoint
+      .withDirectory("/generated", moduleTree)
+      .withWorkdir("/generated")
+      .withExec(["sh", "-c", "find . -type f | LC_ALL=C sort | xargs sha256sum | sed 's|  \\./|  |'"])
+      .stdout
   }
 
   """
@@ -540,23 +569,25 @@ type Mod {
         workspaceRef(joinPath(rootPath, "src/generated/java")),
         processedModule.directory("/module/target/generated-sources/annotations"),
       )
-    let staged = if (dangEntrypoint == null) {
-      withJava
-    } else {
+    let staged = if (vendorSdkJar) {
       withJava.withNewDirectory(
-        workspaceRef(joinPath(rootPath, dangEntrypoint ?? "")),
-        dangEntrypointDir(processedModule),
-      )
-    }
-
-    if (vendorSdkJar) {
-      staged.withNewDirectory(
         workspaceRef(joinPath(rootPath, "sdk/repo")),
         vendoredSdkJar(introspectionJSON, name),
       )
     } else {
-      staged
+      withJava
     }
+    if (dangEntrypoint == null) {
+      return staged
+    }
+    let withEntrypoint = staged.withNewDirectory(
+      workspaceRef(joinPath(rootPath, dangEntrypoint ?? "")),
+      dangEntrypointDir(processedModule, name),
+    )
+    withEntrypoint.withNewFile(
+      workspaceRef(joinPath(rootPath, generatedSumsPath)),
+      generatedSums(withEntrypoint),
+    )
   }
 
   """
