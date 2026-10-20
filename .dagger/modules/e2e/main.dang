@@ -77,6 +77,13 @@ type E2e {
   }
 
   """
+  Checks of a module whose objects are collections, through the CLI.
+  """
+  collections: CollectionChecks! {
+    CollectionChecks()
+  }
+
+  """
   Checks of modules that call other modules through their clients, through
   the CLI.
   """

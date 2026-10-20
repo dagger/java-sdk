@@ -1,0 +1,179 @@
+"""
+Checks of a module whose objects are collections, on the Dang entrypoint
+generated into it, driven through the CLI of the engine that runs them. The
+engine serves keys, get, list, subset and batch on a collection, from the
+markers the module declares.
+"""
+type CollectionChecks {
+  let fixturePath: String! = ".dagger/modules/e2e/fixtures/collections/shelf"
+  let appName: String! = "shelf"
+  let appPath: String! = ".dagger/modules/e2e/out/shelf"
+  let playgroundRoot: String! = "/work"
+
+  let assert(condition: Boolean!, message: String!): Void {
+    if (condition == false) { raise message }
+    null
+  }
+
+  """
+  The fixture module with its entrypoint: generated once to scaffold it, and
+  again with the fixture's source in place of the template's, because the
+  entrypoint holds the module's types.
+  """
+  let app(ws: Workspace!): Directory! {
+    let scaffolded = javaSdk.generateScope(ws.withWorkdir(appPath), isModule: true, name: appName, clients: [])
+    let withSource = scaffolded.withDirectory("/" + appPath, ws.directory("/" + fixturePath))
+    javaSdk
+      .generateScope(withSource.withWorkdir(appPath), isModule: true, name: appName, clients: [])
+      .directory("/" + appPath)
+  }
+
+  """
+  A container with the CLI of the engine's release, and a git workspace that
+  holds the module at app/.
+  """
+  let playground(app: Directory!): Container! {
+    container
+      .from("registry.dagger.io/engine:" + (version.split("+")[0] ?? version))
+      .withoutEntrypoint
+      .withDirectory(playgroundRoot + "/app", app)
+      .withWorkdir(playgroundRoot)
+      .withExec(["git", "init", "--quiet"])
+  }
+
+  let cli(ctr: Container!, args: [String!]!): Container! {
+    ctr.withExec(["dagger"] + args, experimentalPrivilegedNesting: true, expect: ReturnType.ANY)
+  }
+
+  """
+  Run a GraphQL query against the module and compare its answer, with the
+  whitespace the CLI prints removed.
+  """
+  let assertQuery(pg: Container!, document: String!, want: String!): Void {
+    let queried = pg.withExec(
+      ["dagger", "-m", "app", "query"],
+      stdin: document,
+      experimentalPrivilegedNesting: true,
+      expect: ReturnType.ANY,
+    )
+    let got = queried.stdout.replace(" ", "").replace("\n", "")
+    assert(
+      queried.exitCode == 0 and got == want,
+      "the collections answered " + got + ", not " + want + "\n" + queried.stderr,
+    )
+  }
+
+  """
+  Call a function of the module and compare what it prints.
+  """
+  let assertCall(pg: Container!, args: [String!]!, want: String!): Void {
+    let called = cli(pg, ["-m", "app", "call"] + args)
+    let got = called.stdout.trimSpace
+    assert(
+      called.exitCode == 0 and got == want,
+      "dagger call " + args.join(" ") + ": want " + JSON.encode(want) + ", got " + JSON.encode(got) +
+        " (exit code " + JSON.encode(called.exitCode) + ")\n" + called.stderr,
+    )
+  }
+
+  """
+  The engine serves keys, list, get, subset and batch on a collection whose
+  members it finds by their markers, and fills the delta field with the keys
+  added and removed since the module returned the collection.
+
+  A collection that a function changes and returns keeps its base, so its
+  delta compares it with the keys the module first returned. A new instance
+  starts a base of its own, so its delta is empty, even when the receiver it
+  came from had another base.
+  """
+  pub collectionCheck(ws: Workspace!): Void @check {
+    assertQuery(playground(app(ws)), itemsQuery, itemsAnswer)
+    null
+  }
+
+  let itemsQuery: String! = "{ items {\n" +
+    "  keys\n" +
+    "  list { name }\n" +
+    "  get(key: \"a\") { name }\n" +
+    "  batch { selected removed }\n" +
+    "  subset(keys: [\"c\", \"b\"]) { keys batch { selected removed } }\n" +
+    "  changed: batch { change(names: [\"c\", \"d\"]) { keys batch { added removed } } }\n" +
+    "  fresh: subset(keys: [\"c\"]) { batch { fresh { keys batch { added removed } } } }\n" +
+    "} }"
+
+  """The answer to itemsQuery, with its keys sorted the way the CLI prints them."""
+  let itemsAnswer: String! = "{\"items\":{" +
+    "\"batch\":{\"removed\":[],\"selected\":[\"b\",\"a\",\"c\"]}," +
+    "\"changed\":{\"change\":{\"batch\":{\"added\":[\"d\"],\"removed\":[\"b\",\"a\"]},\"keys\":[\"c\",\"d\"]}}," +
+    "\"fresh\":{\"batch\":{\"fresh\":{\"batch\":{\"added\":[],\"removed\":[]},\"keys\":[\"z\"]}}}," +
+    "\"get\":{\"name\":\"item:a\"}," +
+    "\"keys\":[\"b\",\"a\",\"c\"]," +
+    "\"list\":[{\"name\":\"item:b\"},{\"name\":\"item:a\"},{\"name\":\"item:c\"}]," +
+    "\"subset\":{\"batch\":{\"removed\":[\"a\"],\"selected\":[\"b\",\"c\"]},\"keys\":[\"b\",\"c\"]}" +
+    "}}"
+
+  """
+  Collections keyed by every type the engine takes: Int, Float, Boolean, an
+  enum and the core scalar Platform. The delta names a removed key as text,
+  whatever the key type. An item can be a collection itself.
+  """
+  pub collectionKeyTypesCheck(ws: Workspace!): Void @check {
+    assertQuery(playground(app(ws)), kindsQuery, kindsAnswer)
+    null
+  }
+
+  let kindsQuery: String! = "{\n" +
+    "  numbers { keys get(key: 2) { name } subset(keys: [3, 1]) { keys batch { removed } } }\n" +
+    "  ratios { keys get(key: 1.5) { name } subset(keys: [1.5]) { batch { removed } } }\n" +
+    "  flags { keys get(key: false) { name } subset(keys: [false]) { batch { removed } } }\n" +
+    "  colors { keys get(key: BLUE) { name } subset(keys: [BLUE]) { batch { removed } } }\n" +
+    "  platforms { keys get(key: \"linux/arm64\") { name } subset(keys: [\"linux/arm64\"]) { batch { removed } } }\n" +
+    "  racks { keys get(key: \"r2\") { keys get(key: \"r2-1\") { name } subset(keys: [\"r2-2\"]) { batch { selected } } } subset(keys: [\"r1\"]) { batch { count } } }\n" +
+    "}"
+
+  """The answer to kindsQuery, with its keys sorted the way the CLI prints them."""
+  let kindsAnswer: String! = "{" +
+    "\"colors\":{\"get\":{\"name\":\"blue\"},\"keys\":[\"RED\",\"BLUE\"],\"subset\":{\"batch\":{\"removed\":[\"RED\"]}}}," +
+    "\"flags\":{\"get\":{\"name\":\"ffalse\"},\"keys\":[true,false],\"subset\":{\"batch\":{\"removed\":[\"true\"]}}}," +
+    "\"numbers\":{\"get\":{\"name\":\"n2\"},\"keys\":[2,1,3],\"subset\":{\"batch\":{\"removed\":[\"2\"]},\"keys\":[1,3]}}," +
+    "\"platforms\":{\"get\":{\"name\":\"linux/arm64\"},\"keys\":[\"linux/amd64\",\"linux/arm64\"],\"subset\":{\"batch\":{\"removed\":[\"linux/amd64\"]}}}," +
+    "\"racks\":{\"get\":{\"get\":{\"name\":\"r2-1\"},\"keys\":[\"r2-1\",\"r2-2\"],\"subset\":{\"batch\":{\"selected\":[\"r2-2\"]}}},\"keys\":[\"r1\",\"r2\"],\"subset\":{\"batch\":{\"count\":1}}}," +
+    "\"ratios\":{\"get\":{\"name\":\"r1.5\"},\"keys\":[0.5,1.5],\"subset\":{\"batch\":{\"removed\":[\"0.5\"]}}}" +
+    "}"
+
+  """
+  The CLI names an item of a collection with a selector named after the module
+  and the item type: after the collection, in place of the path to it, and
+  repeated to select a subset for a batch function.
+  """
+  pub collectionSelectorsCheck(ws: Workspace!): Void @check {
+    let pg = playground(app(ws))
+    assertCall(pg, ["items", "name", "--shelf-item=a"], "item:a")
+    assertCall(pg, ["--shelf-item=c", "name"], "item:c")
+    assertCall(pg, ["items", "selected", "--shelf-item=c", "--shelf-item=b"], "b\nc")
+    null
+  }
+
+  """
+  `dagger check` runs a batch check once over the items its selectors name,
+  in place of the check of the same name on the item type. With -m, the
+  selectors go in the check's link. Items.verify rejects item c, and
+  Item.verify fails wherever it runs.
+  """
+  pub collectionBatchCheck(ws: Workspace!): Void @check {
+    let pg = playground(app(ws))
+    let passed = cli(pg, ["-m", "app", "check", "items/verify?shelf-item=a&shelf-item=b"])
+    assert(
+      passed.exitCode == 0 and passed.stderr.contains("1 passed"),
+      "the batch check over a and b did not pass once:\n" + passed.stdout + passed.stderr,
+    )
+    let failed = cli(pg, ["-m", "app", "check", "items/verify?shelf-item=a&shelf-item=c"])
+    let said = failed.stdout + failed.stderr
+    assert(
+      failed.exitCode != 0 and said.contains("1 failed") and said.contains("verified a,c: c is rejected"),
+      "the batch check over a and c did not fail once with its error:\n" + said,
+    )
+    assert(said.contains("the item's verify ran") == false, "the item's own check ran:\n" + said)
+    null
+  }
+}
