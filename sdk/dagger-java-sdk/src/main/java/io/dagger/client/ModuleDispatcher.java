@@ -6,6 +6,7 @@ import io.dagger.client.telemetry.Telemetry;
 import jakarta.json.Json;
 import jakarta.json.JsonException;
 import jakarta.json.JsonObject;
+import jakarta.json.JsonReader;
 import jakarta.json.JsonString;
 import jakarta.json.JsonValue;
 import jakarta.json.stream.JsonParser;
@@ -37,6 +38,9 @@ public final class ModuleDispatcher {
    * encodes a character in at most six bytes.
    */
   static final int MAX_REPORTED_ERROR_LENGTH = 16 * 1024;
+
+  /** Where the engine keeps a collection's base in the object's state, outside its schema. */
+  static final String COLLECTION_BASE_FIELD = "__daggerCollectionBase";
 
   private ModuleDispatcher() {}
 
@@ -86,6 +90,37 @@ public final class ModuleDispatcher {
     }
     JSON value = dispatch.call(parentJson, parentName, fnName, inputArgs);
     return value == null ? "null" : value.convert();
+  }
+
+  /**
+   * The JSON of what a function of a collection returned. When the function returned its receiver,
+   * the receiver's base goes with it, so the engine computes the delta against the collection the
+   * module first returned. Any other result, a new instance included, starts a base of its own.
+   */
+  public static JSON collectionResult(
+      JSON receiverJson, Object receiver, Object result, JSON resultJson) {
+    if (result != receiver) {
+      return resultJson;
+    }
+    JsonValue state = read(receiverJson);
+    if (state.getValueType() != JsonValue.ValueType.OBJECT) {
+      return resultJson;
+    }
+    JsonValue base = state.asJsonObject().get(COLLECTION_BASE_FIELD);
+    if (base == null) {
+      return resultJson;
+    }
+    return JSON.from(
+        Json.createObjectBuilder(read(resultJson).asJsonObject())
+            .add(COLLECTION_BASE_FIELD, base)
+            .build()
+            .toString());
+  }
+
+  private static JsonValue read(JSON json) {
+    try (JsonReader reader = Json.createReader(new StringReader(json.convert()))) {
+      return reader.readValue();
+    }
   }
 
   /**

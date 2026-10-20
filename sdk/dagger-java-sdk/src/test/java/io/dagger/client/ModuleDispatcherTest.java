@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.dagger.client.engineconn.TestConnections;
 import io.dagger.client.modules.core.JSON;
+import io.dagger.client.modules.core.JsonConverter;
 import jakarta.json.Json;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -15,6 +16,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -179,6 +181,53 @@ class ModuleDispatcherTest {
     assertThat(
             lastLine(failWith(new RuntimeException(message), "")).getBytes(StandardCharsets.UTF_8))
         .hasSizeLessThan(100 * 1024);
+  }
+
+  @Test
+  void aCollectionThatReturnsItselfKeepsItsReceiversBase() throws Exception {
+    JSON receiverJson =
+        JSON.from("{\"names\":[\"b\",\"a\"],\"__daggerCollectionBase\":\"base-id\"}");
+    Items receiver = JsonConverter.fromJSON(receiverJson, Items.class);
+    receiver.names = List.of("c");
+
+    JSON result =
+        ModuleDispatcher.collectionResult(
+            receiverJson, receiver, receiver, JsonConverter.toJSON(receiver));
+
+    assertThat(result.convert())
+        .isEqualTo("{\"names\":[\"c\"],\"__daggerCollectionBase\":\"base-id\"}");
+  }
+
+  /** Without the base, the engine makes the new instance its own base, so its delta is empty. */
+  @Test
+  void aNewCollectionDoesNotInheritTheReceiversBase() throws Exception {
+    JSON receiverJson =
+        JSON.from("{\"names\":[\"b\",\"a\"],\"__daggerCollectionBase\":\"base-id\"}");
+    Items receiver = JsonConverter.fromJSON(receiverJson, Items.class);
+    Items fresh = new Items();
+    fresh.names = List.of("b", "a");
+
+    JSON result =
+        ModuleDispatcher.collectionResult(
+            receiverJson, receiver, fresh, JsonConverter.toJSON(fresh));
+
+    assertThat(result.convert()).isEqualTo("{\"names\":[\"b\",\"a\"]}");
+  }
+
+  @Test
+  void aReceiverWithoutBaseLeavesTheResultAsItIs() throws Exception {
+    JSON receiverJson = JSON.from("{\"names\":[\"a\"]}");
+    Items receiver = JsonConverter.fromJSON(receiverJson, Items.class);
+    JSON resultJson = JsonConverter.toJSON(receiver);
+
+    assertThat(ModuleDispatcher.collectionResult(receiverJson, receiver, receiver, resultJson))
+        .isSameAs(resultJson);
+  }
+
+  public static class Items {
+    private List<String> names;
+
+    public Items() {}
   }
 
   private interface ExitCode {

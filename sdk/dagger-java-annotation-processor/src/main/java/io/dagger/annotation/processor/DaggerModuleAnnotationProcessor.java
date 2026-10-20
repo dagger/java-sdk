@@ -759,6 +759,14 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
         .add(");\n");
     if (returnsVoid && !isConstructor) {
       code.addStatement("return $T.toJSON(null)", JsonConverter.class);
+    } else if (objectInfo.isCollection() && !isConstructor) {
+      CodeBlock value = returnType.valueForSerialization("res");
+      code.addStatement(
+          "return $T.collectionResult(parentJson, obj, $L, $T.toJSON($L))",
+          ModuleDispatcher.class,
+          value,
+          JsonConverter.class,
+          value);
     } else {
       code.addStatement(
           "return $T.toJSON($L)", JsonConverter.class, returnType.valueForSerialization("res"));

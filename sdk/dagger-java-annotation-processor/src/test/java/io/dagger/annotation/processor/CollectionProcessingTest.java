@@ -271,6 +271,81 @@ class CollectionProcessingTest {
     assertThat(entrypoint()).doesNotContain("withCollection");
   }
 
+  /** Only a collection's functions can return their receiver with a base the engine handed in. */
+  @Test
+  void theSwitchHandsWhatACollectionReturnsToTheDispatcher() throws Exception {
+    String items =
+        """
+        package demo;
+
+        import io.dagger.module.annotation.Collection;
+        import io.dagger.module.annotation.Function;
+        import io.dagger.module.annotation.Get;
+        import io.dagger.module.annotation.Keys;
+        import io.dagger.module.annotation.Object;
+        import java.util.List;
+        import java.util.Optional;
+
+        @Object
+        @Collection
+        public class Items {
+          @Keys public List<String> names;
+
+          @Function
+          @Get
+          public Item lookup(String name) {
+            return new Item();
+          }
+
+          @Function
+          public Items change(List<String> names) {
+            this.names = names;
+            return this;
+          }
+
+          @Function
+          public Optional<Items> maybe() {
+            return Optional.of(this);
+          }
+
+          @Function
+          public void nothing() {}
+        }
+        """;
+    String main =
+        """
+        package demo;
+
+        import io.dagger.module.annotation.Function;
+        import io.dagger.module.annotation.Object;
+
+        @Object
+        public class Main {
+          @Function
+          public Items items() {
+            return new Items();
+          }
+        }
+        """;
+
+    process(Map.of("Item", ITEM, "Items", items, "Main", main));
+
+    assertThat(entrypoint())
+        .contains(
+            "Item res = obj.lookup(name);\n"
+                + "        return ModuleDispatcher.collectionResult(parentJson, obj, res,"
+                + " JsonConverter.toJSON(res));")
+        .contains(
+            "Items res = obj.change(names);\n"
+                + "        return ModuleDispatcher.collectionResult(parentJson, obj, res,"
+                + " JsonConverter.toJSON(res));")
+        .contains(
+            "return ModuleDispatcher.collectionResult(parentJson, obj, res.orElse(null),"
+                + " JsonConverter.toJSON(res.orElse(null)));")
+        .contains("obj.nothing();\n        return JsonConverter.toJSON(null);")
+        .contains("Items res = obj.items();\n        return JsonConverter.toJSON(res);");
+  }
+
   private static String collectionMain(String getAnnotations) {
     return """
         package demo;
