@@ -85,8 +85,9 @@ type JavaSdk {
   become the module's dependencies, so the generated bindings include their
   types. With the Dang entrypoint, each client is generated under
   clients/<name> and loads its target when the module first calls it, and the
-  manifest names the entrypoint and nothing else. Standalone clients, in a scope
-  without a module, are not generated yet.
+  manifest names the entrypoint and nothing else. A scope without a module, a
+  plain Maven project, gets the same sdk/ and clients/ tree for its clients,
+  compiled by a profile of its pom.xml, and no module config.
   """
   generateScope(
     ws: Workspace!,
@@ -96,11 +97,21 @@ type JavaSdk {
   ): Workspace! {
     checkEngine
     if (isModule == false) {
-      if (clients.length > 0) {
-        raise "java-sdk does not generate standalone module clients yet"
-      } else {
-        ws
+      if (clients.length == 0) {
+        return ws
       }
+      let scope = normalizePath(ws.cwd)
+      if (scopeHasFile(ws, scope, "pom.xml") == false) {
+        raise "the Java scope " + scope + " has no pom.xml: its clients are generated into a Maven project"
+      }
+      Mod(
+        rootPath: scope,
+        ws: ws,
+        isModule: false,
+        vendorSdkJar: false,
+        dangEntrypoint: null,
+        clients: clients,
+      ).generated
     } else {
       let scope = normalizePath(ws.cwd)
       # The rest works with the cwd at the workspace root: the engine resolves a
@@ -127,6 +138,7 @@ type JavaSdk {
         Mod(
           rootPath: scope,
           ws: configured,
+          isModule: true,
           vendorSdkJar: vendorSdkJar,
           dangEntrypoint: null,
           clients: [],
@@ -174,6 +186,7 @@ type JavaSdk {
     let generated = Mod(
       rootPath: scope,
       ws: staged,
+      isModule: true,
       vendorSdkJar: vendorSdkJar,
       dangEntrypoint: entrypointPath,
       clients: clients,

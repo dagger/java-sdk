@@ -184,9 +184,9 @@ receiver keeps the collection's base; a new instance starts its own.
 dagger generate
 ```
 
-This regenerates every module scope recorded in `dagger.toml`. The engine
-narrows the set to the scopes containing your current directory, so running it
-inside a module regenerates that module.
+This regenerates every scope recorded in `dagger.toml`: each module, and each
+plain project with clients. The engine narrows the set to the scopes containing
+your current directory, so running it inside a module regenerates that module.
 
 Generation runs Maven in containers this SDK controls: it builds the vendored
 codegen plugin, generates the core client from the engine's introspection
@@ -198,7 +198,8 @@ back to the engine.
 
 A Java scope is a directory with a `pom.xml`. `findClientRoot` answers with the
 nearest one at or above your current directory, which is how
-`dagger module client add` and friends find the module you are standing in. A
+`dagger module client add` and friends find the module or the
+[plain project](#clients-in-a-plain-maven-project) you are standing in. A
 project built with anything but Maven has no `pom.xml`, so this SDK reports no
 scope for it.
 
@@ -257,9 +258,6 @@ are generated into the core package, so module code reaches it through
 `core()`, as `core().clientDep()`. A client that is removed is dropped from
 both.
 
-Standalone clients — in a scope that has no Java module — are not generated yet.
-Adding one is refused and the workspace is left unchanged.
-
 > [!WARNING]
 > On the runtime, the client set is the *whole* dependency set. A module that
 > recorded dependencies before this interface existed has no clients recorded
@@ -269,6 +267,57 @@ Adding one is refused and the workspace is left unchanged.
 > ```sh
 > dagger module client add <module-ref>
 > ```
+
+## Clients in a plain Maven project
+
+A plain Maven project, a `pom.xml` with no `dagger-module.toml`, calls modules
+through clients too. Add a client from inside the project:
+
+```sh
+dagger module client add <module-ref> --sdk java
+```
+
+Generation writes the tree a module gets, without the module's own files:
+
+```
+<project>/
+  pom.xml                            # gains the dagger-sdk and dagger-clients profiles
+  sdk/src/main/java/...              # vendored SDK library
+  sdk/src/processor/java/...         # vendored annotation processor, not compiled here
+  clients/core/src/main/java/...     # the engine's core API, as a client sees it
+  clients/<name>/src/main/java/...   # one package per client
+```
+
+The `dagger-sdk` profile compiles `sdk/` and `clients/core` and adds the
+dependencies they need. The `dagger-clients` profile compiles each client's
+package, as in a module. Generation rewrites both profiles every time, so do not
+edit them. The SDK sources need Java 17 or later.
+
+A client package is the same in a project as in a module. Core is not: a
+project gets the engine's client API, which has `host()` and the engine's own
+types that a module's core hides.
+
+A program calls a client with no connection code:
+
+```java
+import static io.dagger.client.modules.clientdep.ClientDep.clientDep;
+
+public class App {
+  public static void main(String[] args) throws Exception {
+    System.out.println(clientDep().greeting());
+  }
+}
+```
+
+The first call starts `dagger session` in the program's working directory, with
+the CLI that `_EXPERIMENTAL_DAGGER_CLI_BIN` names or the `dagger` on the `PATH`.
+The session stops before the program exits. A local target is named by its path
+from the workspace root, so run the program inside the workspace. A program that
+Dagger starts uses the session in its environment instead.
+
+The project builds with `mvn package` and no engine. Its `pom.xml` decides how
+to package the program. The SDK logs through SLF4J and adds no backend for it:
+add one, such as `slf4j-simple`, to see the session's progress.
 
 ## Pre-1.0 modules
 
