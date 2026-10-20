@@ -70,6 +70,7 @@ public class Arguments {
     } else if (value instanceof String
         || value instanceof Integer
         || value instanceof Long
+        || value instanceof Float
         || value instanceof Boolean) {
       return value;
     } else if (value instanceof List<?>) {
@@ -106,6 +107,11 @@ public class Arguments {
     }
 
     public Builder add(String name, int value) {
+      args.put(name, value);
+      return this;
+    }
+
+    public Builder add(String name, Float value) {
       args.put(name, value);
       return this;
     }
