@@ -6,9 +6,10 @@ import java.lang.reflect.Method;
 
 class PrivateVisibilityStrategy implements PropertyVisibilityStrategy {
 
+  /** As in {@link FieldsStrategy}, java.base keeps the fields of {@link Enum} closed. */
   @Override
   public boolean isVisible(Field field) {
-    return true;
+    return field.getDeclaringClass() != Enum.class;
   }
 
   @Override

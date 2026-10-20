@@ -49,6 +49,26 @@ class QueryBuilderTest {
     }
   }
 
+  @Test
+  void aListOfEnumValuesIsReadAsTheEnum() throws Exception {
+    try (Server server =
+        Server.replying(
+            "{\"data\":{\"colors\":{\"keys\":[\"RED\",\"BLUE\"]}}}", new AtomicReference<>())) {
+      List<Color> keys =
+          new QueryBuilder(server.client())
+              .chain("colors")
+              .chain("keys")
+              .executeListQuery(Color.class);
+
+      assertThat(keys).containsExactly(Color.RED, Color.BLUE);
+    }
+  }
+
+  public enum Color {
+    RED,
+    BLUE
+  }
+
   /** A GraphQL endpoint serving one canned response, so a real client can be exercised. */
   private record Server(HttpServer http, GraphQLClient client) implements AutoCloseable {
 
