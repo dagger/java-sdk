@@ -211,4 +211,57 @@ type CollectionChecks {
     )
     null
   }
+
+  let checkoutRoot: String! = "/work/java-sdk"
+  let callerFixturePath: String! = ".dagger/modules/e2e/fixtures/collections/shelf-caller"
+
+  """
+  This checkout in a container with the CLI of the engine's release, with the
+  workspace config that registers it as the java SDK as its dagger.toml, and
+  the generated fixture module at .dagger/modules/shelf.
+  """
+  let sdkPlayground(ws: Workspace!): Container! {
+    container
+      .from("registry.dagger.io/engine:" + (version.split("+")[0] ?? version))
+      .withoutEntrypoint
+      .withDirectory(
+        checkoutRoot,
+        ws.directory("/", exclude: [".git", "**/target/**"])
+          .withFile("dagger.toml", ws.file("/.dagger/modules/engine-e2e/workspace.toml")),
+      )
+      .withDirectory(checkoutRoot + "/.dagger/modules/shelf", app(ws))
+      .withWorkdir(checkoutRoot)
+      .withExec(["git", "init", "--quiet"])
+  }
+
+  let run(ctr: Container!, args: [String!]!): Container! {
+    ctr.withExec(["dagger"] + args, experimentalPrivilegedNesting: true)
+  }
+
+  """
+  A Java module calls the collections of the fixture module through the
+  client generated from it: keys, list, get, subset and batch, with keys of
+  the types Int, an enum and Platform, and an item that is a collection.
+  """
+  pub collectionClientCheck(ws: Workspace!): Void @check {
+    let callerPath = ".dagger/modules/shelf-caller"
+    let initialized = run(sdkPlayground(ws), ["--auto-apply", "module", "init", "java", "--name", "shelf-caller", "--path", callerPath])
+      .withDirectory(checkoutRoot + "/" + callerPath, ws.directory("/" + callerFixturePath))
+    let ready = run(initialized.withWorkdir(callerPath), ["--auto-apply", "module", "client", "add", "../shelf", "--sdk", "java"])
+      .withWorkdir(checkoutRoot)
+    [
+      ["report", "keys=[b, a, c] list=[item:b, item:a, item:c] get=item:a removed=[b, a]"],
+      ["key-types", "number=n2 colors=[RED, BLUE] platform=linux/arm64 rack=[r2-1, r2-2]"],
+    ].each { call =>
+      let fn = call[0] ?? ""
+      let want = call[1] ?? ""
+      let called = cli(ready, ["-m", callerPath, "call", fn])
+      let got = called.stdout.trimSpace
+      assert(
+        called.exitCode == 0 and got == want,
+        "the caller's " + fn + ": want " + JSON.encode(want) + ", got " + JSON.encode(got) + "\n" + called.stderr,
+      )
+    }
+    null
+  }
 }
