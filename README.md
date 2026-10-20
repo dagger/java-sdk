@@ -227,6 +227,19 @@ resolves that path in the calling module's own tree. A git target is loaded at
 the commit its ref resolved to when the client was generated, even after a newer
 tag matches the ref; `dagger generate` moves the client to the newer commit.
 
+A client types each check of its target as the core object `Check`, whatever
+type the check's author wrote and whatever engine version the target declares.
+Reading `pass()` or `error()` runs the check. `error()` is empty when the check
+passes:
+
+```java
+import io.dagger.client.modules.core.Check;
+
+Check test = clientDep().test();
+boolean passed = test.pass();
+String failure = passed ? "" : test.error().orElseThrow().message();
+```
+
 The module's `dagger-module.toml` lists no dependencies. Generation adds a
 `dagger-clients` profile to `pom.xml`, which compiles each client's package. It
 rewrites the profile on every generation and removes it with the last client, so

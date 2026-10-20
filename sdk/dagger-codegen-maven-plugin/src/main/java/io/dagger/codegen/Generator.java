@@ -2,9 +2,13 @@ package io.dagger.codegen;
 
 import io.dagger.codegen.introspection.ClientEntryPoint;
 import io.dagger.codegen.introspection.CodegenVisitor;
+import io.dagger.codegen.introspection.Field;
 import io.dagger.codegen.introspection.Schema;
 import io.dagger.codegen.introspection.SchemaPartition;
 import io.dagger.codegen.introspection.TargetDescriptor;
+import io.dagger.codegen.introspection.Type;
+import io.dagger.codegen.introspection.TypeKind;
+import io.dagger.codegen.introspection.TypeRef;
 import io.dagger.codegen.introspection.TypeRegistry;
 import java.io.IOException;
 import java.io.InputStream;
@@ -44,7 +48,8 @@ public final class Generator {
     Map<String, String> targetByTypeName = new LinkedHashMap<>();
     Map<String, SchemaPartition> clients = new LinkedHashMap<>();
     for (GenerationPlan.Target target : plan.targets()) {
-      SchemaPartition client = SchemaPartition.client(read(target.schema()), target.module());
+      SchemaPartition client =
+          SchemaPartition.client(typeChecksAsCheck(read(target.schema())), target.module());
       clients.put(target.module(), client);
       for (String owned : client.typeNames()) {
         requireUnclaimed(targetByTypeName, owned, target.module());
@@ -67,6 +72,36 @@ public final class Generator {
           new ClientEntryPoint(client),
           target.descriptor());
     }
+  }
+
+  /**
+   * A client runs in a v1 session, where every check returns the core object Check. A target's
+   * schema read in a view before v1 keeps the type the check's author wrote, and a v1 session
+   * refuses that query: a field of type Check needs a selection. So every check is typed {@code
+   * Check!}, as a v1 view types it, whatever view the schema was read in.
+   */
+  private static Schema typeChecksAsCheck(Schema schema) {
+    for (Type type : schema.getTypes()) {
+      if (type.getKind() != TypeKind.OBJECT || type.getFields() == null) {
+        continue;
+      }
+      for (Field field : type.getFields()) {
+        if (field.isCheck()) {
+          field.setTypeRef(nonNullCheck());
+        }
+      }
+    }
+    return schema;
+  }
+
+  private static TypeRef nonNullCheck() {
+    TypeRef check = new TypeRef();
+    check.setKind(TypeKind.OBJECT);
+    check.setName("Check");
+    TypeRef nonNull = new TypeRef();
+    nonNull.setKind(TypeKind.NON_NULL);
+    nonNull.setOfType(check);
+    return nonNull;
   }
 
   /**
