@@ -318,6 +318,52 @@ class GeneratorTest {
         .hasMessageContaining("Container");
   }
 
+  /**
+   * A client runs in a v1 session, where a check is the core object Check. A target read in a view
+   * before v1 keeps the type the check's author wrote, which a v1 session refuses: a field of type
+   * Check needs a selection.
+   */
+  @Test
+  void aCheckOfATargetBeforeV1IsTypedCheck() throws Exception {
+    writePlan(CORE_WITH_CHECK, target("lib", LIB_BEFORE_V1));
+
+    generate();
+
+    String lib = read("io/dagger/client/modules/lib/Lib.java");
+    assertThat(lib).contains("import io.dagger.client.modules.core.Check;");
+    assertThat(methodOf(lib, "test()"))
+        .isEqualTo(
+            """
+                public Check test() {
+                    QueryBuilder nextQueryBuilder = this.queryBuilder.chain("test");
+                    return new Check(nextQueryBuilder);
+                }
+            """
+                .stripTrailing());
+    assertThat(methodOf(lib, "build()")).contains("executeQuery(");
+  }
+
+  @Test
+  void aCheckOfATargetOnV1StaysTypedCheck() throws Exception {
+    writePlan(CORE_WITH_CHECK, target("lib", LIB_ON_V1));
+
+    generate();
+
+    String lib = read("io/dagger/client/modules/lib/Lib.java");
+    assertThat(methodOf(lib, "test()"))
+        .isEqualTo(
+            """
+                public Check test() {
+                    QueryBuilder nextQueryBuilder = this.queryBuilder.chain("test");
+                    return new Check(nextQueryBuilder);
+                }
+            """
+                .stripTrailing());
+    assertThat(methodOf(lib, "lint()")).contains("public Check lint()");
+    assertThat(methodOf(lib, "build()")).contains("executeQuery(");
+    assertThat(emitted()).doesNotContain("io/dagger/client/modules/lib/Check.java");
+  }
+
   @Test
   void aPlanWithoutACoreSchemaIsRefused() throws Exception {
     writePlanAt(plan, null, target("alpha", ALPHA));
@@ -624,6 +670,77 @@ class GeneratorTest {
       ]}}
       """
           .formatted(owned("alpha"), owned("alpha"), owned("alpha"), owned("alpha"));
+
+  private static String ownedCheck(String module) {
+    return owned(module).replace("]}]", "]}, {\"name\": \"check\", \"args\": []}]");
+  }
+
+  /** The module-facing core of a v1 view, which has the Check object. */
+  private static final String CORE_WITH_CHECK =
+      """
+      {"__schema": {"queryType": {"name": "Query"}, "types": [
+        {"kind": "OBJECT", "name": "Query", "fields": [
+          {"name": "container", "type": {"kind": "NON_NULL", "ofType": {"kind": "OBJECT", "name": "Container"}}, "args": []}
+        ]},
+        {"kind": "OBJECT", "name": "Container", "fields": []},
+        {"kind": "OBJECT", "name": "Check", "fields": [
+          {"name": "pass", "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "Boolean"}}, "args": []},
+          {"name": "error", "type": {"kind": "OBJECT", "name": "Error"}, "args": []}
+        ]},
+        {"kind": "OBJECT", "name": "Error", "fields": [
+          {"name": "message", "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "String"}}, "args": []}
+        ]},
+        {"kind": "SCALAR", "name": "Void"}
+      ]}}
+      """;
+
+  /**
+   * A target with a check, in a view before v1: the check keeps its author's Void, and the view has
+   * no Check object.
+   */
+  private static final String LIB_BEFORE_V1 =
+      """
+      {"__schema": {"queryType": {"name": "Query"}, "types": [
+        {"kind": "OBJECT", "name": "Query", "fields": [
+          {"name": "container", "type": {"kind": "NON_NULL", "ofType": {"kind": "OBJECT", "name": "Container"}}, "args": []},
+          {"name": "lib", "type": {"kind": "NON_NULL", "ofType": {"kind": "OBJECT", "name": "Lib"}}, "args": [], %s}
+        ]},
+        {"kind": "OBJECT", "name": "Container", "fields": []},
+        {"kind": "OBJECT", "name": "Lib", "fields": [
+          {"name": "test", "type": {"kind": "SCALAR", "name": "Void"}, "args": [], %s},
+          {"name": "build", "type": {"kind": "SCALAR", "name": "Void"}, "args": [], %s}
+        ], %s},
+        {"kind": "SCALAR", "name": "Void"}
+      ]}}
+      """
+          .formatted(owned("lib"), ownedCheck("lib"), owned("lib"), owned("lib"));
+
+  /** The same target in a v1 view, where every check is already Check!. */
+  private static final String LIB_ON_V1 =
+      """
+      {"__schema": {"queryType": {"name": "Query"}, "types": [
+        {"kind": "OBJECT", "name": "Query", "fields": [
+          {"name": "container", "type": {"kind": "NON_NULL", "ofType": {"kind": "OBJECT", "name": "Container"}}, "args": []},
+          {"name": "lib", "type": {"kind": "NON_NULL", "ofType": {"kind": "OBJECT", "name": "Lib"}}, "args": [], %s}
+        ]},
+        {"kind": "OBJECT", "name": "Container", "fields": []},
+        {"kind": "OBJECT", "name": "Check", "fields": [
+          {"name": "pass", "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "Boolean"}}, "args": []},
+          {"name": "error", "type": {"kind": "OBJECT", "name": "Error"}, "args": []}
+        ]},
+        {"kind": "OBJECT", "name": "Error", "fields": [
+          {"name": "message", "type": {"kind": "NON_NULL", "ofType": {"kind": "SCALAR", "name": "String"}}, "args": []}
+        ]},
+        {"kind": "OBJECT", "name": "Lib", "fields": [
+          {"name": "test", "type": {"kind": "NON_NULL", "ofType": {"kind": "OBJECT", "name": "Check"}}, "args": [], %s},
+          {"name": "lint", "type": {"kind": "NON_NULL", "ofType": {"kind": "OBJECT", "name": "Check"}}, "args": [], %s},
+          {"name": "build", "type": {"kind": "SCALAR", "name": "Void"}, "args": [], %s}
+        ], %s},
+        {"kind": "SCALAR", "name": "Void"}
+      ]}}
+      """
+          .formatted(
+              owned("lib"), ownedCheck("lib"), ownedCheck("lib"), owned("lib"), owned("lib"));
 
   private static final String BETA =
       """
