@@ -64,6 +64,7 @@ generates the SDK bindings in one step:
   src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java   # generated entrypoint
   src/generated/dang/entrypoint/main.dang                       # the module's types and its calls
   src/generated/dang/entrypoint/build.dang                      # the jar's Maven build
+  src/generated/sha256sums                                      # every generated file, with its SHA-256
   sdk/src/main/java/...                                         # vendored SDK library
   sdk/src/processor/java/...                                    # vendored annotation processor
   clients/core/src/main/java/...                                # the engine's core API (from the engine schema)
@@ -145,6 +146,26 @@ as `include`.
 `@Function(cache = ...)` sets a function's cache policy on either path:
 `"never"`, `"session"`, or a duration such as `"10m"` after which the result is
 computed again.
+
+### Stale generated files
+
+A call refuses a module on the entrypoint whose generated files are stale, and
+names the files. Before it runs the jar, `build.dang` checks two things:
+
+- Every file in `src/generated/sha256sums` still has the SHA-256 that
+  generation recorded. A generated file edited or removed by hand fails the
+  call.
+- The entrypoint the annotation processor generates from the module's code at
+  call time is the committed one. The build packages that fresh entrypoint and
+  compares it with `Entrypoint.java` and `main.dang`. A function added,
+  removed or changed without `dagger generate` fails the call.
+
+A change to a function's body alone generates the same entrypoint, so the call
+runs the new code. `dagger generate` writes the stale files again. With
+`vendorSdkJar`, the build compiles against the vendored jar, which has no
+annotation processor, so only the first check applies. `dagger functions` reads
+the committed `main.dang` and checks nothing. A module on the runtime gets
+neither check.
 
 ## The core API
 
