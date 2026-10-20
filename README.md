@@ -169,6 +169,15 @@ as `include`.
 `"never"`, `"session"`, or a duration such as `"10m"` after which the result is
 computed again.
 
+## Collections
+
+`@Collection` marks an object whose items the engine serves by key, as `keys`,
+`get`, `list`, `subset` and `batch`. `@Keys` marks its keys field, `@Get` its
+get function, and `@Delta` a `CollectionDelta` field that receives the keys
+added and removed since the module returned it. A function that returns its
+receiver keeps the collection's base; a new instance starts its own.
+[docs/collections.md](docs/collections.md) describes them.
+
 ## Generate
 
 ```sh
