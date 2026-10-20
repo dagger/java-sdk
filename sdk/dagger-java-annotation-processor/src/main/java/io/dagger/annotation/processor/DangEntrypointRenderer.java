@@ -117,6 +117,22 @@ final class DangEntrypointRenderer {
     appendNamed(b, "description", object.description());
     b.append(")");
 
+    if (object.isCollection()) {
+      b.append("\n  .withCollection");
+    }
+    for (FieldInfo field : object.fields()) {
+      if (field.isKeys()) {
+        b.append("\n  .withCollectionKeys(").append(Dang.quote(field.name())).append(")");
+      }
+      if (field.isDelta()) {
+        b.append("\n  .withCollectionDelta(").append(Dang.quote(field.name())).append(")");
+      }
+    }
+    for (FunctionInfo function : object.functions()) {
+      if (function.isGet()) {
+        b.append("\n  .withCollectionGet(").append(Dang.quote(function.name())).append(")");
+      }
+    }
     for (FunctionInfo function : object.functions()) {
       b.append("\n  .withFunction(\n")
           .append(Dang.indent(renderFunction(object, function), 4))

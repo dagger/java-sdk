@@ -434,6 +434,22 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
               objectInfo.description());
         }
         rm.addCode(")"); // end of core().TypeDef().withObject(
+        if (objectInfo.isCollection()) {
+          rm.addCode("\n            .withCollection()");
+        }
+        for (var fieldInfo : objectInfo.fields()) {
+          if (fieldInfo.isKeys()) {
+            rm.addCode("\n            .withCollectionKeys($S)", fieldInfo.name());
+          }
+          if (fieldInfo.isDelta()) {
+            rm.addCode("\n            .withCollectionDelta($S)", fieldInfo.name());
+          }
+        }
+        for (var fnInfo : objectInfo.functions()) {
+          if (fnInfo.isGet()) {
+            rm.addCode("\n            .withCollectionGet($S)", fnInfo.name());
+          }
+        }
         for (var fnInfo : objectInfo.functions()) {
           rm.addCode("\n            .withFunction(")
               .addCode(withFunction(moduleInfo.enumInfos().keySet(), objectInfo, fnInfo))

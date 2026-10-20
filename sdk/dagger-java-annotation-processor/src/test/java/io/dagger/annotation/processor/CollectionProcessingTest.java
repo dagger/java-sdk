@@ -154,6 +154,123 @@ class CollectionProcessingTest {
         .doesNotContain("\"prefix\"");
   }
 
+  /** The members carry names of their own, so the engine can find them only by the markers. */
+  @Test
+  void bothBackendsDeclareTheCollectionAndItsMembers() throws Exception {
+    String items =
+        """
+        package demo;
+
+        import io.dagger.client.modules.core.CollectionDelta;
+        import io.dagger.module.annotation.Collection;
+        import io.dagger.module.annotation.Delta;
+        import io.dagger.module.annotation.Function;
+        import io.dagger.module.annotation.Get;
+        import io.dagger.module.annotation.Keys;
+        import io.dagger.module.annotation.Object;
+        import java.util.List;
+
+        @Object
+        @Collection
+        public class Items {
+          @Keys public List<String> names;
+          @Delta public CollectionDelta selection;
+
+          @Function("find")
+          @Get
+          public Item lookup(String name) {
+            return new Item();
+          }
+        }
+        """;
+
+    String dang = process(Map.of("Item", ITEM, "Items", items, "Main", MAIN));
+
+    assertThat(dang)
+        .contains(
+            String.join(
+                "\n",
+                "      typeDef.withObject(\"Items\")",
+                "        .withCollection",
+                "        .withCollectionKeys(\"names\")",
+                "        .withCollectionDelta(\"selection\")",
+                "        .withCollectionGet(\"find\")",
+                "        .withFunction("));
+    assertThat(entrypoint())
+        .contains(
+            String.join(
+                "\n",
+                "            core().typeDef().withObject(\"Items\")",
+                "                .withCollection()",
+                "                .withCollectionKeys(\"names\")",
+                "                .withCollectionDelta(\"selection\")",
+                "                .withCollectionGet(\"find\")",
+                "                .withFunction("));
+  }
+
+  /** Without the markers, the engine looks for members named keys and get. */
+  @Test
+  void anUnmarkedCollectionDeclaresOnlyThatItIsOne() throws Exception {
+    String items =
+        """
+        package demo;
+
+        import io.dagger.module.annotation.Collection;
+        import io.dagger.module.annotation.Function;
+        import io.dagger.module.annotation.Object;
+        import java.util.List;
+
+        @Object
+        @Collection
+        public class Items {
+          public List<String> keys;
+
+          @Function
+          public Item get(String key) {
+            return new Item();
+          }
+        }
+        """;
+
+    String dang = process(Map.of("Item", ITEM, "Items", items, "Main", MAIN));
+
+    assertThat(dang).contains("typeDef.withObject(\"Items\")\n        .withCollection\n");
+    assertThat(dang)
+        .doesNotContain("withCollectionKeys", "withCollectionGet", "withCollectionDelta");
+    assertThat(entrypoint())
+        .contains(".withCollection()")
+        .doesNotContain("withCollectionKeys", "withCollectionGet", "withCollectionDelta");
+  }
+
+  /** Markers outside a collection would make the engine refuse the object, so none are sent. */
+  @Test
+  void membersMarkedOutsideACollectionAreNotDeclared() throws Exception {
+    String main =
+        """
+        package demo;
+
+        import io.dagger.module.annotation.Function;
+        import io.dagger.module.annotation.Get;
+        import io.dagger.module.annotation.Keys;
+        import io.dagger.module.annotation.Object;
+        import java.util.List;
+
+        @Object
+        public class Main {
+          @Keys public List<String> names;
+
+          @Function
+          @Get
+          public String lookup(String name) {
+            return name;
+          }
+        }
+        """;
+
+    assertThat(process(Map.of("Main", main))).doesNotContain("withCollection");
+    assertThat(entrypoint()).doesNotContain("withCollection");
+  }
+
   private static String collectionMain(String getAnnotations) {
     return """
         package demo;
@@ -212,6 +329,13 @@ class CollectionProcessingTest {
       assertThat(task.call()).as(diagnostics.getDiagnostics().toString()).isTrue();
     }
     return Files.readString(classes.resolve("dagger/entrypoint/main.dang"));
+  }
+
+  /**
+   * The Java entrypoint the last {@link #process} generated, whose register() serves the runtime.
+   */
+  private String entrypoint() throws IOException {
+    return Files.readString(out.resolve("generated/io/dagger/gen/entrypoint/Entrypoint.java"));
   }
 
   /** The SDK library, which holds the annotations and the core client the sources import. */
