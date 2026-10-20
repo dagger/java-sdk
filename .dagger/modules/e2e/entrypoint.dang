@@ -118,6 +118,43 @@ type EntrypointChecks {
   }
 
   """
+  A call refuses a module whose generated files are stale, and names them: a
+  generated file edited by hand, or a function added without generating the
+  entrypoint again. A function's body is not in the entrypoint, so a call runs
+  an edited body without a generation.
+  """
+  pub staleCheck(ws: Workspace!): Void @check {
+    let generated = app(ws)
+    let core = "clients/core/src/main/java/io/dagger/client/modules/core/Container.java"
+    let entrypoint = "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"
+    let source = "src/main/java/io/dagger/modules/entryapp/EntryApp.java"
+    let greet = ["-m", "app", "call", "greet", "--name", "World"]
+    [core, entrypoint].each { path =>
+      let called = cli(playground(generated.withNewFile(path, generated.file(path).contents + "// edited by hand\n")), greet)
+      let said = called.stdout + called.stderr
+      assert(
+        called.exitCode != 0 and said.contains("these generated files changed since dagger generate wrote them: " + path + "."),
+        "a call ran with " + path + " edited by hand:\n" + said,
+      )
+    }
+    let withFunction = generated.file(source).contents.replace(
+      "  public void nothing() {}\n",
+      "  public void nothing() {}\n\n  @Function\n  public String added() {\n    return \"added\";\n  }\n",
+    )
+    let added = cli(playground(generated.withNewFile(source, withFunction)), greet)
+    let said = added.stdout + added.stderr
+    assert(
+      added.exitCode != 0 and said.contains(
+        "the module's code no longer generates these committed files: src/generated/java, src/generated/dang/entrypoint/main.dang.",
+      ),
+      "a call ran with a function added and no generation:\n" + said,
+    )
+    let reworded = generated.file(source).contents.replace("name + \"!\"", "name + \"?\"")
+    assertCall(playground(generated.withNewFile(source, reworded)), ["greet", "--name", "World"], "Hello, World?")
+    null
+  }
+
+  """
   Each cache policy holds in a session: a default or per-session result is
   reused, a never result is not, and a result with an explicit TTL is reused
   until it expires and computed again after (dagger/dagger#14694). Every CLI
