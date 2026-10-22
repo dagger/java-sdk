@@ -19,8 +19,6 @@ import io.dagger.client.modules.core.Core;
 import io.dagger.client.modules.core.FunctionCachePolicy;
 import io.dagger.client.modules.core.FunctionCall;
 import io.dagger.client.modules.core.FunctionCallArgValue;
-import io.dagger.client.modules.core.ID;
-import io.dagger.client.modules.core.JSON;
 import io.dagger.client.modules.core.JsonConverter;
 import io.dagger.client.modules.core.TypeDef;
 import io.dagger.client.telemetry.Telemetry;
@@ -413,11 +411,13 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
   }
 
   static JavaFile generate(ModuleInfo moduleInfo) {
+    ClassName idClass = DaggerType.ID_CLASS;
+    ClassName jsonClass = DaggerType.JSON_CLASS;
     try {
       var rm =
           MethodSpec.methodBuilder("register")
               .addModifiers(Modifier.PRIVATE)
-              .returns(ID.class)
+              .returns(idClass)
               .addException(ExecutionException.class)
               .addException(DaggerQueryException.class)
               .addException(InterruptedException.class)
@@ -506,13 +506,15 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
       var im =
           MethodSpec.methodBuilder("invoke")
               .addModifiers(Modifier.PRIVATE, Modifier.STATIC)
-              .returns(JSON.class)
+              .returns(jsonClass)
               .addException(Exception.class)
-              .addParameter(JSON.class, "parentJson")
+              .addParameter(jsonClass, "parentJson")
               .addParameter(String.class, "parentName")
               .addParameter(String.class, "fnName")
               .addParameter(
-                  ParameterizedTypeName.get(Map.class, String.class, JSON.class), "inputArgs");
+                  ParameterizedTypeName.get(
+                      ClassName.get(Map.class), ClassName.get(String.class), jsonClass),
+                  "inputArgs");
       var firstObj = true;
       for (var objectInfo : moduleInfo.objects()) {
         if (firstObj) {
@@ -529,7 +531,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
           // The Dang entrypoint declares a constructor for the entry object, which the legacy
           // runtime constructs itself from its empty state.
           im.beginControlFlow("if (fnName.equals(\"\"))")
-              .addStatement("return $T.from($S)", JSON.class, "{}")
+              .addStatement("return $T.from($S)", jsonClass, "{}")
               .endControlFlow();
           im.addStatement("$T clazz = Class.forName($S)", Class.class, objectInfo.qualifiedName())
               .addStatement(
@@ -584,9 +586,10 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                               .beginControlFlow(
                                   "if (args.length > 0 && args[0].equals($S))", "engine-call")
                               .addStatement(
-                                  "$T.exit($T.engineCall(args, Entrypoint::invoke))",
+                                  "$T.exit($T.engineCall(args, $T::from, Entrypoint::invoke))",
                                   System.class,
-                                  ModuleDispatcher.class)
+                                  ModuleDispatcher.class,
+                                  jsonClass)
                               .endControlFlow()
                               .beginControlFlow(
                                   "try ($T telemetry = new $T())", Telemetry.class, Telemetry.class)
@@ -606,7 +609,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                               .beginControlFlow("try")
                               .addStatement("$T parentName = fnCall.parentName()", String.class)
                               .addStatement("$T fnName = fnCall.name()", String.class)
-                              .addStatement("$T parentJson = fnCall.parent()", JSON.class)
+                              .addStatement("$T parentJson = fnCall.parent()", jsonClass)
                               .addStatement(
                                   "$T fnArgs = fnCall.inputArgs()",
                                   ParameterizedTypeName.get(List.class, FunctionCallArgValue.class))
@@ -614,16 +617,16 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                                   "$T<$T, $T> inputArgs = new $T<>()",
                                   Map.class,
                                   String.class,
-                                  JSON.class,
+                                  jsonClass,
                                   HashMap.class)
                               .beginControlFlow(
                                   "for ($T fnArg : fnArgs)", FunctionCallArgValue.class)
                               .addStatement("inputArgs.put(fnArg.name(), fnArg.value())")
                               .endControlFlow()
                               .addCode("\n")
-                              .addStatement("$T result", JSON.class)
+                              .addStatement("$T result", jsonClass)
                               .beginControlFlow("if (parentName.isEmpty())")
-                              .addStatement("$T modID = register()", ID.class)
+                              .addStatement("$T modID = register()", idClass)
                               .addStatement("result = $T.toJSON(modID)", JsonConverter.class)
                               .nextControlFlow("else")
                               .addStatement(
@@ -766,17 +769,32 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
     } else if (objectInfo.isCollection() && !isConstructor) {
       CodeBlock value = returnType.valueForSerialization("res");
       code.addStatement(
-          "return $T.collectionResult(parentJson, obj, $L, $T.toJSON($L))",
+          "return $T.collectionResult(parentJson, obj, $L, $T.toJSON($L), $T::from)",
           ModuleDispatcher.class,
           value,
           JsonConverter.class,
-          value);
+          value,
+          DaggerType.JSON_CLASS);
     } else {
       code.addStatement(
           "return $T.toJSON($L)", JsonConverter.class, returnType.valueForSerialization("res"));
     }
 
     return code.build();
+  }
+
+  /**
+   * The name of a FunctionCachePolicy constant in the SDK this processor runs with: Java's
+   * convention ({@code PER_SESSION}) when the schema's names were formatted, else the schema's
+   * spelling ({@code PerSession}). Either reaches the same value.
+   */
+  static String cachePolicy(String conventionName, String schemaName) {
+    try {
+      FunctionCachePolicy.class.getField(conventionName);
+      return conventionName;
+    } catch (NoSuchFieldException e) {
+      return schemaName;
+    }
   }
 
   public static CodeBlock withFunction(
@@ -800,14 +818,20 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
     switch (fnInfo.cache()) {
       case "" -> {}
       case "never" ->
-          code.add("\n                    .withCachePolicy($T.Never)", FunctionCachePolicy.class);
+          code.add(
+              "\n                    .withCachePolicy($T.$L)",
+              FunctionCachePolicy.class,
+              cachePolicy("NEVER", "Never"));
       case "session" ->
           code.add(
-              "\n                    .withCachePolicy($T.PerSession)", FunctionCachePolicy.class);
+              "\n                    .withCachePolicy($T.$L)",
+              FunctionCachePolicy.class,
+              cachePolicy("PER_SESSION", "PerSession"));
       default ->
           code.add(
-              "\n                    .withCachePolicy($T.Default, new $T.WithCachePolicyArguments().withTimeToLive($S))",
+              "\n                    .withCachePolicy($T.$L, new $T.WithCachePolicyArguments().withTimeToLive($S))",
               FunctionCachePolicy.class,
+              cachePolicy("DEFAULT", "Default"),
               io.dagger.client.modules.core.Function.class,
               fnInfo.cache());
     }
@@ -837,7 +861,9 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
         }
         if (hasDefaultValue) {
           code.add(
-              ".withDefaultValue($T.from($S))", JSON.class, parameterInfo.defaultValue().get());
+              ".withDefaultValue($T.from($S))",
+              DaggerType.JSON_CLASS,
+              parameterInfo.defaultValue().get());
         }
         if (hasDefaultPath) {
           code.add(".withDefaultPath($S)", parameterInfo.defaultPath().get());

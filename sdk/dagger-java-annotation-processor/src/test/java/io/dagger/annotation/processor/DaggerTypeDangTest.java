@@ -2,6 +2,7 @@ package io.dagger.annotation.processor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.dagger.client.GraphQLType;
 import io.dagger.module.info.TypeInfo;
 import java.util.Set;
 import javax.lang.model.type.TypeKind;
@@ -40,12 +41,33 @@ class DaggerTypeDangTest {
   void objectsScalarsAndEnumsRenderByName() {
     assertThat(declared("io.dagger.client.modules.core.Container").toDangTypeDef())
         .isEqualTo("typeDef.withObject(\"Container\")");
-    assertThat(declared("io.dagger.client.modules.core.JSON").toDangTypeDef())
+    assertThat(declared(DaggerType.JSON_CLASS.canonicalName()).toDangTypeDef())
         .isEqualTo("typeDef.withScalar(\"JSON\")");
 
     DaggerType.setKnownEnums(Set.of("io.dagger.modules.demo.Severity"));
     assertThat(declared("io.dagger.modules.demo.Severity").toDangTypeDef())
         .isEqualTo("typeDef.withEnum(\"Severity\")");
+  }
+
+  /** A class named by Java's convention registers as the GraphQL type it stands for. */
+  @GraphQLType("JSONValue")
+  public static class JsonValue extends io.dagger.client.Scalar<String> {
+    public JsonValue(String value) {
+      super(value);
+    }
+  }
+
+  @Test
+  void aClassNamedApartFromItsTypeRendersByItsGraphQLType() {
+    String name = JsonValue.class.getName();
+    assertThat(declared(name).toDangTypeDef()).isEqualTo("typeDef.withScalar(\"JSONValue\")");
+    assertThat(declared(name).toDaggerTypeDef().toString()).contains("withScalar(\"JSONValue\")");
+  }
+
+  @Test
+  void theIdAndJsonClassesAreTheGeneratedOnes() throws Exception {
+    assertThat(Class.forName(DaggerType.ID_CLASS.canonicalName())).isNotNull();
+    assertThat(Class.forName(DaggerType.JSON_CLASS.canonicalName())).isNotNull();
   }
 
   @Test

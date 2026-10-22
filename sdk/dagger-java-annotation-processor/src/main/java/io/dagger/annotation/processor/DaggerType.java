@@ -3,6 +3,7 @@ package io.dagger.annotation.processor;
 import com.palantir.javapoet.ClassName;
 import com.palantir.javapoet.CodeBlock;
 import com.palantir.javapoet.ParameterizedTypeName;
+import io.dagger.client.GraphQLType;
 import io.dagger.client.modules.core.Core;
 import io.dagger.client.modules.core.TypeDefKind;
 import io.dagger.module.info.TypeInfo;
@@ -11,6 +12,46 @@ import javax.lang.model.type.TypeKind;
 
 public abstract class DaggerType {
   protected static Set<String> knownEnums = Set.of();
+
+  private static final String CORE_PACKAGE = "io.dagger.client.modules.core";
+
+  /**
+   * The SDK's ID and JSON scalar classes. Their names depend on the schema the SDK was generated
+   * from: Java's convention ({@code Id}, {@code Json}) with engine-formatted names, the schema's
+   * ({@code ID}, {@code JSON}) without.
+   */
+  static final ClassName ID_CLASS = coreClass("Id", "ID");
+
+  static final ClassName JSON_CLASS = coreClass("Json", "JSON");
+
+  private static ClassName coreClass(String conventionName, String schemaName) {
+    try {
+      Class<?> clazz = Class.forName(CORE_PACKAGE + "." + conventionName);
+      GraphQLType graphQLType = clazz.getAnnotation(GraphQLType.class);
+      if (graphQLType != null && graphQLType.value().equals(schemaName)) {
+        return ClassName.get(CORE_PACKAGE, conventionName);
+      }
+    } catch (ClassNotFoundException | LinkageError e) {
+      // generated without formatted names
+    }
+    return ClassName.get(CORE_PACKAGE, schemaName);
+  }
+
+  /**
+   * The GraphQL type a class stands for: the type its {@link GraphQLType} names, for SDK classes
+   * named by Java's convention ({@code JsonValue} for {@code JSONValue}), else its simple name.
+   */
+  static String graphQLName(String qualifiedName, String simpleName) {
+    try {
+      GraphQLType graphQLType = Class.forName(qualifiedName).getAnnotation(GraphQLType.class);
+      if (graphQLType != null) {
+        return graphQLType.value();
+      }
+    } catch (ClassNotFoundException | LinkageError e) {
+      // not an SDK class: the module's own types are named by their simple names
+    }
+    return simpleName;
+  }
 
   public static void setKnownEnums(Set<String> enums) {
     knownEnums = enums;
@@ -129,12 +170,13 @@ public abstract class DaggerType {
 
     @Override
     CodeBlock toDaggerTypeDef() {
-      return CodeBlock.of("$T.core().typeDef().withEnum($S)", Core.class, simpleName);
+      return CodeBlock.of(
+          "$T.core().typeDef().withEnum($S)", Core.class, graphQLName(qualifiedName, simpleName));
     }
 
     @Override
     String toDangTypeDef() {
-      return "typeDef.withEnum(" + Dang.quote(simpleName) + ")";
+      return "typeDef.withEnum(" + Dang.quote(graphQLName(qualifiedName, simpleName)) + ")";
     }
 
     @Override
@@ -217,12 +259,13 @@ public abstract class DaggerType {
 
     @Override
     CodeBlock toDaggerTypeDef() {
-      return CodeBlock.of("$T.core().typeDef().withScalar($S)", Core.class, simpleName);
+      return CodeBlock.of(
+          "$T.core().typeDef().withScalar($S)", Core.class, graphQLName(qualifiedName, simpleName));
     }
 
     @Override
     String toDangTypeDef() {
-      return "typeDef.withScalar(" + Dang.quote(simpleName) + ")";
+      return "typeDef.withScalar(" + Dang.quote(graphQLName(qualifiedName, simpleName)) + ")";
     }
 
     @Override
@@ -270,12 +313,13 @@ public abstract class DaggerType {
 
     @Override
     CodeBlock toDaggerTypeDef() {
-      return CodeBlock.of("$T.core().typeDef().withObject($S)", Core.class, simpleName);
+      return CodeBlock.of(
+          "$T.core().typeDef().withObject($S)", Core.class, graphQLName(qualifiedName, simpleName));
     }
 
     @Override
     String toDangTypeDef() {
-      return "typeDef.withObject(" + Dang.quote(simpleName) + ")";
+      return "typeDef.withObject(" + Dang.quote(graphQLName(qualifiedName, simpleName)) + ")";
     }
 
     @Override

@@ -15,15 +15,26 @@ import org.junit.jupiter.api.Test;
 
 class EntrypointGenerationTest {
 
+  /** The JSON scalar's class, named by the schema the SDK under test was generated from. */
+  private static final String JSON = DaggerType.JSON_CLASS.simpleName();
+
   /** The Dang entrypoint runs the jar with engine-call, which reaches this switch directly. */
   @Test
   void engineCallModeRunsTheStaticDispatchSwitch() {
     String java = generated();
 
     assertThat(java)
-        .contains("private static JSON invoke(JSON parentJson, String parentName, String fnName,")
+        .contains(
+            "private static "
+                + JSON
+                + " invoke("
+                + JSON
+                + " parentJson, String parentName, String fnName,")
         .contains("if (args.length > 0 && args[0].equals(\"engine-call\")) {")
-        .contains("System.exit(ModuleDispatcher.engineCall(args, Entrypoint::invoke));");
+        .contains(
+            "System.exit(ModuleDispatcher.engineCall(args, "
+                + JSON
+                + "::from, Entrypoint::invoke));");
   }
 
   @Test
@@ -34,7 +45,7 @@ class EntrypointGenerationTest {
                 "\n",
                 "    if (parentName.equals(\"Hello\")) {",
                 "      if (fnName.equals(\"\")) {",
-                "        return JSON.from(\"{}\");",
+                "        return " + JSON + ".from(\"{}\");",
                 "      }"));
   }
 
@@ -43,11 +54,31 @@ class EntrypointGenerationTest {
     String java = generated();
 
     assertThat(java)
-        .contains(".withCachePolicy(FunctionCachePolicy.Never)")
-        .contains(".withCachePolicy(FunctionCachePolicy.PerSession)")
         .contains(
-            ".withCachePolicy(FunctionCachePolicy.Default, new"
-                + " Function.WithCachePolicyArguments().withTimeToLive(\"1h\"))");
+            ".withCachePolicy(FunctionCachePolicy."
+                + DaggerModuleAnnotationProcessor.cachePolicy("NEVER", "Never")
+                + ")")
+        .contains(
+            ".withCachePolicy(FunctionCachePolicy."
+                + DaggerModuleAnnotationProcessor.cachePolicy("PER_SESSION", "PerSession")
+                + ")")
+        .contains(
+            ".withCachePolicy(FunctionCachePolicy."
+                + DaggerModuleAnnotationProcessor.cachePolicy("DEFAULT", "Default")
+                + ", new Function.WithCachePolicyArguments().withTimeToLive(\"1h\"))");
+  }
+
+  /** The cache policy constants are the SDK's own: Java's spelling, or the schema's. */
+  @Test
+  void theCachePolicyConstantsExist() throws Exception {
+    for (String[] names :
+        new String[][] {
+          {"NEVER", "Never"}, {"PER_SESSION", "PerSession"}, {"DEFAULT", "Default"}
+        }) {
+      String constant = DaggerModuleAnnotationProcessor.cachePolicy(names[0], names[1]);
+      assertThat(io.dagger.client.modules.core.FunctionCachePolicy.class.getField(constant))
+          .isNotNull();
+    }
   }
 
   private static String generated() {
