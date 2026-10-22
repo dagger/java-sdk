@@ -1,7 +1,6 @@
 package io.dagger.client;
 
 import io.dagger.client.engineconn.Connection;
-import io.dagger.client.modules.core.JSON;
 import io.dagger.client.telemetry.Telemetry;
 import jakarta.json.Json;
 import jakarta.json.JsonException;
@@ -20,13 +19,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * Answers one call of a module's Dang entrypoint: the request on standard input, the result in a
  * file, and a failure reported on standard error.
  *
- * <p>This class is in {@code io.dagger.client} because it writes a {@link JSON} scalar's raw value,
- * which only this package can read.
+ * <p>Values travel as the core JSON scalar, whose generated class is named after the schema the SDK
+ * was generated from ({@code JSON}, or {@code Json} under engine-formatted names). This
+ * hand-written class can't name it, so it takes the class as a type parameter and its {@code from}
+ * factory from the generated entrypoint.
  */
 public final class ModuleDispatcher {
 
@@ -44,22 +46,25 @@ public final class ModuleDispatcher {
 
   private ModuleDispatcher() {}
 
-  /** The generated entrypoint's dispatch switch. */
+  /** The generated entrypoint's dispatch switch, over the core JSON scalar class {@code J}. */
   @FunctionalInterface
-  public interface Dispatch {
-    JSON call(JSON parentJson, String parentName, String fnName, Map<String, JSON> inputArgs)
+  public interface Dispatch<J extends Scalar<String>> {
+    J call(J parentJson, String parentName, String fnName, Map<String, J> inputArgs)
         throws Exception;
   }
 
   /**
    * Run the {@code engine-call} mode: {@code engine-call [--output PATH]}. Returns the process exit
    * code.
+   *
+   * @param json the JSON scalar's factory, {@code JSON::from}
    */
-  public static int engineCall(String[] args, Dispatch dispatch) {
+  public static <J extends Scalar<String>> int engineCall(
+      String[] args, Function<String, J> json, Dispatch<J> dispatch) {
     Connection.markModule();
     try (Telemetry telemetry = new Telemetry()) {
       Path output = outputPath(args);
-      String result = dispatch(System.in, dispatch);
+      String result = dispatch(System.in, json, dispatch);
       if (output == null) {
         System.out.println(result);
       } else {
@@ -75,20 +80,21 @@ public final class ModuleDispatcher {
     }
   }
 
-  static String dispatch(InputStream in, Dispatch dispatch) throws Exception {
+  static <J extends Scalar<String>> String dispatch(
+      InputStream in, Function<String, J> json, Dispatch<J> dispatch) throws Exception {
     JsonObject request = readRequest(in);
     String parentName = requiredString(request, "receiverType");
     String fnName = requiredString(request, "fnName");
-    JSON parentJson = JSON.from(jsonText(request, "receiverValue"));
+    J parentJson = json.apply(jsonText(request, "receiverValue"));
     JsonValue args = parse(jsonText(request, "fnArgs"), "fnArgs");
     if (args.getValueType() != JsonValue.ValueType.OBJECT) {
       throw new IllegalArgumentException("call request field fnArgs is not a JSON object");
     }
-    Map<String, JSON> inputArgs = new HashMap<>();
+    Map<String, J> inputArgs = new HashMap<>();
     for (Map.Entry<String, JsonValue> arg : args.asJsonObject().entrySet()) {
-      inputArgs.put(arg.getKey(), JSON.from(arg.getValue().toString()));
+      inputArgs.put(arg.getKey(), json.apply(arg.getValue().toString()));
     }
-    JSON value = dispatch.call(parentJson, parentName, fnName, inputArgs);
+    J value = dispatch.call(parentJson, parentName, fnName, inputArgs);
     return value == null ? "null" : value.convert();
   }
 
@@ -96,9 +102,11 @@ public final class ModuleDispatcher {
    * The JSON of what a function of a collection returned. When the function returned its receiver,
    * the receiver's base goes with it, so the engine computes the delta against the collection the
    * module first returned. Any other result, a new instance included, starts a base of its own.
+   *
+   * @param json the JSON scalar's factory, {@code JSON::from}
    */
-  public static JSON collectionResult(
-      JSON receiverJson, Object receiver, Object result, JSON resultJson) {
+  public static <J extends Scalar<String>> J collectionResult(
+      J receiverJson, Object receiver, Object result, J resultJson, Function<String, J> json) {
     if (result != receiver) {
       return resultJson;
     }
@@ -110,14 +118,14 @@ public final class ModuleDispatcher {
     if (base == null) {
       return resultJson;
     }
-    return JSON.from(
+    return json.apply(
         Json.createObjectBuilder(read(resultJson).asJsonObject())
             .add(COLLECTION_BASE_FIELD, base)
             .build()
             .toString());
   }
 
-  private static JsonValue read(JSON json) {
+  private static JsonValue read(Scalar<String> json) {
     try (JsonReader reader = Json.createReader(new StringReader(json.convert()))) {
       return reader.readValue();
     }
