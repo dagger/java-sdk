@@ -64,6 +64,7 @@ generates the SDK bindings in one step:
   src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java   # generated entrypoint
   src/generated/dang/entrypoint/main.dang                       # the module's types and its calls
   src/generated/dang/entrypoint/build.dang                      # the jar's Maven build
+  src/generated/dang/entrypoint/dang.toml                       # the Dang and Dagger versions
   src/generated/sha256sums                                      # every generated file, with its SHA-256
   sdk/src/main/java/...                                         # vendored SDK library
   sdk/src/processor/java/...                                    # vendored annotation processor
@@ -146,6 +147,31 @@ as `include`.
 `@Function(cache = ...)` sets a function's cache policy on either path:
 `"never"`, `"session"`, or a duration such as `"10m"` after which the result is
 computed again.
+
+### Versions
+
+The `dang.toml` next to the entrypoint holds the Dang and Dagger versions the
+engine serves the module at, in place of an `engineVersion`:
+
+```toml
+dang = "2.1"
+
+[imports.Dagger]
+dagger = "v1.0.0-beta.21"
+```
+
+A new module gets the version of the engine that generates it. Generation never
+moves an existing module: one whose entrypoint has no `dang.toml` gets
+`v1.0.0-beta.20`, the version the engine served it at, and a module that moves
+from the runtime keeps its `engineVersion`. A `dang.toml` the module has, next
+to the entrypoint or in a directory above it up to the module's, is kept as it
+is. To move the module, change the version, then run `dagger generate`: the
+Java bindings are generated against the API of that version.
+
+From `v1.0.0-beta.21`, generated Java names follow Java's conventions as the
+engine formats them: `Json`, `Id` and `Llm` for `JSON`, `ID` and `LLM`,
+`asJson()` for `asJSON`, and `PER_SESSION` for `PerSession`. Renamed methods and
+enum constants keep their old names, deprecated; renamed classes do not.
 
 ### Stale generated files
 
