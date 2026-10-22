@@ -6,7 +6,9 @@ import java.nio.charset.Charset;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
 import javax.lang.model.element.Modifier;
 
 /**
@@ -34,9 +36,10 @@ class InterfaceVisitor extends AbstractVisitor {
   @Override
   TypeSpec generateType(Type type) {
     TypeSpec.Builder interfaceBuilder =
-        TypeSpec.interfaceBuilder(Helpers.formatName(type))
+        TypeSpec.interfaceBuilder(registry().javaTypeName(type.getName()))
             .addJavadoc(Helpers.escapeJavadoc(type.getDescription()))
             .addModifiers(Modifier.PUBLIC);
+    Helpers.addGraphQLType(interfaceBuilder, registry(), type.getName());
 
     // An interface exposing an id field is IDAble like any object, so a value
     // typed by it (a Node argument, say) serializes by ID through the same
@@ -47,6 +50,8 @@ class InterfaceVisitor extends AbstractVisitor {
     }
 
     if (type.getFields() != null) {
+      Set<String> methodNames =
+          type.getFields().stream().map(Helpers::formatName).collect(Collectors.toSet());
       for (Field field : type.getFields()) {
         MethodSpec.Builder methodBuilder =
             MethodSpec.methodBuilder(Helpers.formatName(field))
@@ -92,7 +97,14 @@ class InterfaceVisitor extends AbstractVisitor {
           methodBuilder.addAnnotation(Deprecated.class);
         }
 
-        interfaceBuilder.addMethod(methodBuilder.build());
+        MethodSpec method = methodBuilder.build();
+        interfaceBuilder.addMethod(method);
+        // A method renamed by a formatted name keeps its old name as a deprecated default
+        // method, so implementations don't need to provide it.
+        String legacyName = Helpers.legacyName(field);
+        if (!legacyName.equals(method.name()) && !methodNames.contains(legacyName)) {
+          interfaceBuilder.addMethod(Helpers.deprecatedAlias(method, legacyName, Modifier.DEFAULT));
+        }
       }
     }
 
@@ -101,8 +113,8 @@ class InterfaceVisitor extends AbstractVisitor {
 
   /** Generates the FooClient class that implements the Foo interface via query building. */
   TypeSpec generateClientType(Type type) {
-    String clientName = Helpers.formatName(type) + "Client";
     ClassName interfaceName = registry().forType(type.getName());
+    String clientName = registry().forInterfaceClient(type.getName()).simpleName();
 
     TypeSpec.Builder classBuilder =
         TypeSpec.classBuilder(clientName)
@@ -113,6 +125,7 @@ class InterfaceVisitor extends AbstractVisitor {
                 FieldSpec.builder(
                         registry().runtime("QueryBuilder"), "queryBuilder", Modifier.PRIVATE)
                     .build());
+    Helpers.addGraphQLType(classBuilder, registry(), type.getName());
 
     // Constructor
     MethodSpec constructor =
