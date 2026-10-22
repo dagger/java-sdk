@@ -185,10 +185,10 @@ type JavaSdk {
   ): Workspace! {
     refuseEntrypointSettings(ws, scope, "dagger-module.toml", "runtime", clients)
     refuseEntrypointSettings(ws, scope, "dagger.json", "sdk", clients)
-    let dangToml = entrypointDangToml(ws, scope, hadManifest)
+    let daggerVersion = entrypointDaggerVersion(ws, scope, hadManifest)
     let staged = sdkHelpers.moduleManifest
       .withName(name: name)
-      .withLegacyDangRuntime(engineVersion: dangTomlDaggerVersion(dangToml))
+      .withLegacyDangRuntime(engineVersion: daggerVersion)
       .generate(ws.withWorkdir(scope), legacyJson: false)
       .withWorkdir(".")
     let generated = Mod(
@@ -197,7 +197,7 @@ type JavaSdk {
       isModule: true,
       vendorSdkJar: vendorSdkJar,
       dangEntrypoint: entrypointPath,
-      dangToml: dangToml,
+      dangToml: entrypointDangToml(ws, scope, daggerVersion),
       clients: clients,
     ).generated
     sdkHelpers.moduleManifest
@@ -213,22 +213,22 @@ type JavaSdk {
   let entrypointDefaultDaggerVersion: String! = "v1.0.0-beta.20"
 
   """
-  The dang.toml beside the generated entrypoint, which declares the Dang and
-  Dagger versions the engine serves the entrypoint at. One the module has is
-  kept as it is: the versions are the module's to move. Otherwise the Dagger
-  version is the running engine's for a new module, and the version the engine
-  already served the module at for an existing one, so generating never moves a
-  module to another API, its naming rules included: an entrypoint without a
-  dang.toml is served at v1.0.0-beta.20, and a module on the runtime at its
-  manifest's engineVersion, which the entrypoint cannot go below
+  The Dagger version the engine serves the module's entrypoint at once it is
+  generated. A dang.toml the module has decides it, the nearest one from the
+  entrypoint directory up to the module directory, as the engine looks it up.
+  Otherwise it is the running engine's version for a new module, and the version
+  the engine already served the module at for an existing one, so generating
+  never moves a module to another API, its naming rules included: an entrypoint
+  without a dang.toml is served at v1.0.0-beta.20, and a module on the runtime
+  at its manifest's engineVersion, which the entrypoint cannot go below
   v1.0.0-beta.20 of.
   """
-  let entrypointDangToml(ws: Workspace!, scope: String!, hadManifest: Boolean!): String! {
-    let path = entrypointPath + "/dang.toml"
-    if (scopeHasFile(ws, scope, path)) {
-      return ws.file(scopeRef(scope, path)).contents
+  let entrypointDaggerVersion(ws: Workspace!, scope: String!, hadManifest: Boolean!): String! {
+    let governing = governingDangToml(ws, scope)
+    if (governing != "") {
+      return dangTomlDaggerVersion(ws.file(scopeRef(scope, governing)).contents)
     }
-    let dagger = if (hadManifest == false) {
+    if (hadManifest == false) {
       engineVersion
     } else if (hasGeneratedEntrypoint(ws, scope)) {
       entrypointDefaultDaggerVersion
@@ -240,12 +240,49 @@ type JavaSdk {
         declared
       }
     }
-    "# The Dang and Dagger versions the engine serves this module's entrypoint at.\n"
-      + "# dagger generate keeps this file: change the versions here to move the module.\n"
-      + "dang = \"2.1\"\n"
-      + "\n"
-      + "[imports.Dagger]\n"
-      + "dagger = \"" + dagger + "\"\n"
+  }
+
+  """
+  The dang.toml files that may govern the generated entrypoint, nearest first:
+  the one in entrypointPath, then one in each directory above it up to the
+  module's.
+  """
+  let dangTomlCandidates: [String!]! = [
+    "src/generated/dang/entrypoint/dang.toml",
+    "src/generated/dang/dang.toml",
+    "src/generated/dang.toml",
+    "src/dang.toml",
+    "dang.toml",
+  ]
+
+  """
+  The module-relative path of the dang.toml governing the entrypoint, or the
+  empty string when there is none.
+  """
+  let governingDangToml(ws: Workspace!, scope: String!): String! {
+    dangTomlCandidates.filter { path => scopeHasFile(ws, scope, path) }[0] ?? ""
+  }
+
+  """
+  The dang.toml to write beside the generated entrypoint: the one already there,
+  kept as it is, since the versions are the module's to move; none when one
+  above it governs the entrypoint; else one that declares Dang 2.1 and the
+  given Dagger version.
+  """
+  let entrypointDangToml(ws: Workspace!, scope: String!, daggerVersion: String!): String! {
+    let governing = governingDangToml(ws, scope)
+    if (governing == entrypointPath + "/dang.toml") {
+      ws.file(scopeRef(scope, governing)).contents
+    } else if (governing != "") {
+      ""
+    } else {
+      "# The Dang and Dagger versions the engine serves this module's entrypoint at.\n"
+        + "# Change them here, then run dagger generate, to move the module.\n"
+        + "dang = \"2.1\"\n"
+        + "\n"
+        + "[imports.Dagger]\n"
+        + "dagger = \"" + daggerVersion + "\"\n"
+    }
   }
 
   """

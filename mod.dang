@@ -33,8 +33,9 @@ type Mod {
   let dangEntrypoint: String
 
   """
-  The dang.toml written beside the Dang entrypoint, or null for a module on the
-  runtime (see JavaSdk.entrypointDangToml).
+  The dang.toml written beside the Dang entrypoint (see
+  JavaSdk.entrypointDangToml): null for a module on the runtime, empty when a
+  dang.toml above the entrypoint directory governs it.
   """
   let dangToml: String
 
@@ -488,7 +489,7 @@ type Mod {
   which object is the module's.
   """
   let dangEntrypointDir(processedModule: Container!, name: String!): Directory! {
-    directory
+    let dir = directory
       .withFile("main.dang", processedModule.file("/module/target/classes/dagger/entrypoint/main.dang"))
       .withNewFile(
         "build.dang",
@@ -497,7 +498,9 @@ type Mod {
           .replace("<jre-image>", dockerfileImage("runtime/images/java/Dockerfile"))
           .replace("<module-name>", name),
       )
-      .withNewFile("dang.toml", dangToml ?? "")
+    # Empty when a dang.toml above the entrypoint directory governs it.
+    let toml = dangToml ?? ""
+    if (toml == "") { dir } else { dir.withNewFile("dang.toml", toml) }
   }
 
   """
