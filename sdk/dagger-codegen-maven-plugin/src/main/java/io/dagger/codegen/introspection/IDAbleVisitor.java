@@ -44,10 +44,14 @@ public class IDAbleVisitor extends AbstractMultiTypesVisitor {
       toJSON.addStatement(
           "return $T.from(jsonb.toJson((($T<?>) object).name()))", json, Enum.class);
     }
-    toJSON
-        .endControlFlow()
-        .addStatement("return $T.from(jsonb.toJson(object))", json)
-        .endControlFlow();
+    toJSON.endControlFlow();
+    if (enumValues) {
+      // A list's elements don't go through their enum's serializer.
+      toJSON.addStatement("return $T.from(jsonb.toJson($T.values(object)))", json, graphQLEnums);
+    } else {
+      toJSON.addStatement("return $T.from(jsonb.toJson(object))", json);
+    }
+    toJSON.endControlFlow();
 
     MethodSpec.Builder fromJSON =
         MethodSpec.methodBuilder("fromJSON")

@@ -1,5 +1,9 @@
 package io.dagger.client;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+
 /** Converts enum constants to and from the values the API knows them by. */
 public final class GraphQLEnums {
   private GraphQLEnums() {}
@@ -13,6 +17,30 @@ public final class GraphQLEnums {
       return graphQLEnum.graphQLValue();
     }
     return constant.name();
+  }
+
+  /**
+   * An object to serialize, with every enum constant replaced by its {@link #value}: the object
+   * itself, or the elements of a collection or an array, at any depth. JSON-B applies an enum's
+   * serializer to a field, but not to an element of a list it serializes.
+   */
+  public static Object values(Object object) {
+    if (object instanceof Enum<?> constant) {
+      return value(constant);
+    }
+    if (object instanceof Collection<?> collection) {
+      List<Object> values = new ArrayList<>(collection.size());
+      collection.forEach(element -> values.add(values(element)));
+      return values;
+    }
+    if (object instanceof Object[] array) {
+      List<Object> values = new ArrayList<>(array.length);
+      for (Object element : array) {
+        values.add(values(element));
+      }
+      return values;
+    }
+    return object;
   }
 
   /**
