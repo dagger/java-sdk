@@ -97,7 +97,9 @@ type Packager {
       .withWorkdir("/dagger-io")
       .withExec(["mvn", "--projects", "dagger-codegen-maven-plugin", "--also-make", "install", "-T1C", "-Dmaven.test.skip=true", "-Dfmt.skip=true", "-Dproject.build.outputTimestamp=2024-01-01T00:00:00Z", "--no-transfer-progress"])
       .withExec(["mvn", "-Ptests", "test", "-Ddaggerengine.schema=/schema.json", "-Ddaggerengine.version=" + engineVersion, "-Dfmt.skip=true", "--no-transfer-progress"])
-      .withExec(["mvn", "-Ptests", "test", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "-Ddaggerengine.schema=/schema-latest.json", "-Ddaggerengine.version=" + engineVersion, "-Dfmt.skip=true", "--no-transfer-progress"])
+      # clean: the run above generated into the same target/, and codegen
+      # leaves behind the classes a formatted schema renames (JSON.java, ...).
+      .withExec(["mvn", "-Ptests", "clean", "test", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "-Ddaggerengine.schema=/schema-latest.json", "-Ddaggerengine.version=" + engineVersion, "-Dfmt.skip=true", "--no-transfer-progress"])
       # Compile the client the gate produces from the *real* schema, pinned to the
       # version the gate opens at. The engine has since reached it, so the run
       # above already generates this shape — but pinning keeps the post-gate
