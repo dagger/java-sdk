@@ -1,8 +1,10 @@
 # Java SDK runtime (build/package-only)
 
-This is the Java module runtime. New Java modules reference it as their runtime
+This is the Java module runtime. A module generated before the Dang entrypoint,
+or with `dangEntrypoint = false`, references it as its runtime
 (`github.com/dagger/java-sdk/runtime`); the root Dang module (`main.dang`) sets it
-via `targetRuntime`.
+via `targetRuntime`. A new module runs on a Dang entrypoint generated into it
+instead, and does not use this runtime.
 
 It is written in **Dang** (`main.dang`), so the engine runs its dispatch
 (`moduleRuntime` / `codegen`) natively in-process — there is no runtime container

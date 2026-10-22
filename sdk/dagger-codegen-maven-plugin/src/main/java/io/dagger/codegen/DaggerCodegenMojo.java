@@ -4,10 +4,12 @@ import io.dagger.codegen.introspection.CodegenVisitor;
 import io.dagger.codegen.introspection.Schema;
 import io.dagger.codegen.introspection.SchemaVisitor;
 import io.dagger.codegen.introspection.Type;
+import io.dagger.codegen.introspection.TypeRegistry;
 import java.io.*;
 import java.nio.charset.Charset;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
@@ -41,6 +43,13 @@ public class DaggerCodegenMojo extends AbstractMojo {
   @Parameter(property = "dagger.introspectionJson")
   protected String introspectionJson;
 
+  /**
+   * A {@link GenerationPlan} directory. When set, every package the plan names is generated in this
+   * one invocation and {@code introspectionJson} is ignored.
+   */
+  @Parameter(property = "dagger.plan")
+  protected String plan;
+
   /** Specify output directory where the Java files are generated. */
   @Parameter(defaultValue = "${project.build.directory}/generated-sources/dagger")
   private File outputDirectory;
@@ -59,9 +68,27 @@ public class DaggerCodegenMojo extends AbstractMojo {
     }
 
     Path dest = outputDir.toPath();
+    if (plan != null && !plan.isEmpty()) {
+      try {
+        new Generator(dest, Charset.forName(outputEncoding), version)
+            .generate(GenerationPlan.read(Path.of(plan)));
+      } catch (IOException | IllegalArgumentException e) {
+        throw new MojoFailureException(e.getMessage(), e);
+      }
+      if (project != null) {
+        project.addCompileSourceRoot(getOutputDirectory().getPath());
+      }
+      return;
+    }
     try (InputStream in = getInstrospectionJson()) {
       Schema schema = Schema.initialize(in, version);
-      SchemaVisitor codegen = new CodegenVisitor(schema, dest, Charset.forName(outputEncoding));
+      SchemaVisitor codegen =
+          new CodegenVisitor(
+              schema,
+              TypeRegistry.acrossPackages(
+                  Generator.CORE_PACKAGE, Generator.RUNTIME_PACKAGE, Map.of()),
+              dest,
+              Charset.forName(outputEncoding));
       schema.visit(
           new SchemaVisitor() {
             @Override

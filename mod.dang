@@ -1,5 +1,6 @@
 """
-A Dagger module that uses the Java SDK.
+A Java scope this SDK generates: a Dagger module, or a plain Maven project
+that calls modules through their clients.
 """
 type Mod {
   """
@@ -14,9 +15,29 @@ type Mod {
   let ws: Workspace!
 
   """
+  Whether the scope is a module. A plain Maven project gets the vendored SDK,
+  core and its client packages, compiled by the SDK profile of its pom.xml,
+  and nothing the module build or the entrypoint reads.
+  """
+  let isModule: Boolean!
+
+  """
   Whether to commit the compiled SDK jar into the module (see JavaSdk.vendorSdkJar).
   """
   let vendorSdkJar: Boolean!
+
+  """
+  Module-relative directory to write the Dang entrypoint into, or null for a
+  module on the runtime.
+  """
+  let dangEntrypoint: String
+
+  """
+  The clients generated into packages of their own under clients/<name>, for a
+  module on the Dang entrypoint. A module on the runtime has none: its clients
+  are its dependencies, whose types the engine adds to its schema.
+  """
+  let clients: [ModuleSource!]!
 
   """
   The shared local Maven repository.
@@ -44,7 +65,6 @@ type Mod {
   Vendor the Java SDK as buildable source for a module:
     src/main/java        the hand-written SDK library
     src/processor/java   the annotation processor that generates the entrypoint
-    src/generated/java   the client bindings generated from the engine schema
     src/processor/resources/META-INF/services/...Processor
   The returned directory is dropped at <module>/sdk.
   """
@@ -95,9 +115,45 @@ type Mod {
   prebuilt repo. Cached across a module's own edits.
   """
   let sdkBuilt(introspectionJSON: File!, name: String!): Container! {
-    codegenBase(introspectionJSON)
+    let versioned = codegenBase(introspectionJSON)
       .withExec(["mvn", "versions:set", "-DnewVersion=" + name, "-DgenerateBackupPoms=false", "--no-transfer-progress"])
-      .withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", "-Ddaggerengine.schema=/schema.json", "-Ddaggerengine.version=" + engineVersion, "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+    let planned = if (clients.length == 0) {
+      versioned
+    } else {
+      versioned.withMountedDirectory("/plan", generationPlan(introspectionJSON))
+    }
+    let input = if (clients.length == 0) { "-Ddaggerengine.schema=/schema.json" } else { "-Ddaggerengine.plan=/plan" }
+    planned.withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", input, "-Ddaggerengine.version=" + engineVersion, "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+  }
+
+  """
+  What the codegen plugin generates for a scope with clients: core from the
+  scope's own schema, and one target per client. A client's schema is read in
+  the module's view, so it names only the core types the module's core has. A
+  plain project has no module, and reads it in the engine's view, as its core.
+  """
+  let generationPlan(introspectionJSON: File!): Directory! {
+    let view = if (isModule) { ws.moduleSource(workspaceRef(rootPath)).engineVersion } else { engineVersion }
+    clients.reduce(directory.withFile("core/schema.json", introspectionJSON)) { plan, client =>
+      let entry = "target-" + client.moduleName
+      plan
+        .withFile(entry + "/schema.json", client.withEngineVersion(view).clientSchemaIntrospectionJSON)
+        .withNewFile(entry + "/module", client.moduleName + "\n")
+        .withNewFile(entry + "/descriptor", clientDescriptor(client))
+    }
+  }
+
+  """
+  Where a client loads its target from: a git ref with the commit it resolved
+  to, or a module of the workspace by its path from the workspace root, which
+  serveModule reads in the calling module's own tree.
+  """
+  let clientDescriptor(client: ModuleSource!): String! {
+    if (client.kind == ModuleSourceKind.GIT_SOURCE) {
+      "git\n" + client.asString + "\n" + client.pin + "\n"
+    } else {
+      "local\n" + workspaceRef(client.sourceRootSubpath) + "\n"
+    }
   }
 
   """
@@ -121,14 +177,266 @@ type Mod {
         "src/processor/java",
         built.directory("/dagger-io/dagger-java-annotation-processor/src/main/java"),
       )
-      .withDirectory(
-        "src/generated/java",
-        built.directory("/dagger-io/dagger-java-sdk/target/generated-sources/dagger"),
-      )
       .withNewFile(
         "src/processor/resources/META-INF/services/javax.annotation.processing.Processor",
         "io.dagger.annotation.processor.DaggerModuleAnnotationProcessor\n",
       )
+  }
+
+  """
+  Where the engine's core API is generated, relative to the module: the source
+  root of the client package io.dagger.client.modules.core.
+  """
+  let coreClientPath: String! = "clients/core/src/main/java"
+
+  """
+  Every package the SDK generated: core, and one package per client.
+  """
+  let generatedPackages(introspectionJSON: File!, name: String!): Directory! {
+    sdkBuilt(introspectionJSON, name)
+      .directory("/dagger-io/dagger-java-sdk/target/generated-sources/dagger")
+  }
+
+  """
+  The engine's core API, generated from the module's schema with the SDK.
+  """
+  let coreClient(introspectionJSON: File!, name: String!): Directory! {
+    clients.reduce(generatedPackages(introspectionJSON, name)) { core, client =>
+      core.withoutDirectory(clientPackagePath(client))
+    }
+  }
+
+  """
+  One client's package, as the source root of clients/<name>.
+  """
+  let clientSources(introspectionJSON: File!, name: String!, client: ModuleSource!): Directory! {
+    let path = clientPackagePath(client)
+    directory.withDirectory(path, generatedPackages(introspectionJSON, name).directory(path))
+  }
+
+  """
+  The directory of a client's package: the module name lowercased and stripped
+  to ASCII letters and digits, as ModulePackage.segmentFor names the package.
+  """
+  let clientPackagePath(client: ModuleSource!): String! {
+    "io/dagger/client/modules/" + client.moduleName.toLower.replaceMatches(Regexp("[^a-z0-9]"), "")
+  }
+
+  let clientSourcePath(client: ModuleSource!): String! {
+    "clients/" + client.moduleName + "/src/main/java"
+  }
+
+  """
+  Directories under clients/ that this SDK generated for a client the module
+  no longer has. A directory holding no generated package is not the SDK's.
+  """
+  let staleClientDirs(committed: Directory!): [String!]! {
+    if (committed.exists("clients") == false) {
+      return [] :: [String!]!
+    }
+    let current = clients.map { client => client.moduleName }
+    committed.directory("clients").entries
+      .map { entry => entry.trimSuffix("/") }
+      .filter { dir =>
+        dir != "core" and current.contains(dir) == false and
+          committed.exists("clients/" + dir + "/src/main/java/io/dagger/client/modules")
+      }
+  }
+
+  """
+  The pom.xml with this SDK's clients profile, which adds each client's
+  package as a compile root. The profile is rewritten on every generation,
+  and removed with the module's last client. It is active unless
+  dagger.clients.skip is set, because a profile active by default turns off
+  when any other profile turns on, and the SDK's own profiles do.
+  """
+  let withClientsProfile(pom: String!): String! {
+    withMarkedProfile(pom, clientsProfileMarker, if (clients.length == 0) { "" } else { clientsProfile })
+  }
+
+  """
+  The pom.xml with the profile between a marker's comments replaced: the old
+  one removed, and the new one, unless it is empty, added before the pom's
+  last </profiles>, or in a <profiles> of its own when the pom has none.
+  """
+  let withMarkedProfile(pom: String!, marker: String!, profile: String!): String! {
+    let stripped = pom.replaceMatches(Regexp("(?s)\n[ \t]*<!-- " + marker + ":.*?<!-- /" + marker + " -->"), "")
+    if (profile == "") {
+      return stripped
+    }
+    if (stripped.contains("</profiles>")) {
+      stripped.replaceMatches(Regexp("(?s)^(.*)(\n[ \t]*</profiles>)"), "${1}" + profile + "${2}")
+    } else if (stripped.contains("</project>")) {
+      stripped.replaceMatches(
+        Regexp("(?s)^(.*)(\n[ \t]*</project>)"),
+        "${1}\n\n    <profiles>" + profile + "\n    </profiles>${2}",
+      )
+    } else {
+      raise "pom.xml has no </project>: it cannot hold the " + marker + " profile"
+    }
+  }
+
+  let clientsProfileMarker: String! = "dagger-java-sdk clients"
+
+  let clientsProfile: String! {
+    let sources = clients.map { client =>
+      "\n                                        <source>" + clientSourcePath(client) + "</source>"
+    }
+    "\n        <!-- " + clientsProfileMarker + ": generated from the project's clients. DO NOT EDIT. -->" +
+      "\n        <profile>" +
+      "\n            <id>dagger-clients</id>" +
+      "\n            <activation>" +
+      "\n                <property>" +
+      "\n                    <name>!dagger.clients.skip</name>" +
+      "\n                </property>" +
+      "\n            </activation>" +
+      "\n            <build>" +
+      "\n                <plugins>" +
+      "\n                    <plugin>" +
+      "\n                        <groupId>org.codehaus.mojo</groupId>" +
+      "\n                        <artifactId>build-helper-maven-plugin</artifactId>" +
+      "\n                        <executions>" +
+      "\n                            <execution>" +
+      "\n                                <id>add-dagger-client-sources</id>" +
+      "\n                                <goals>" +
+      "\n                                    <goal>add-source</goal>" +
+      "\n                                </goals>" +
+      "\n                                <configuration>" +
+      "\n                                    <sources>" +
+      sources.join("") +
+      "\n                                    </sources>" +
+      "\n                                </configuration>" +
+      "\n                            </execution>" +
+      "\n                        </executions>" +
+      "\n                    </plugin>" +
+      "\n                </plugins>" +
+      "\n            </build>" +
+      "\n        </profile>" +
+      "\n        <!-- /" + clientsProfileMarker + " -->"
+  }
+
+  """
+  The pom.xml of a plain project with this SDK's profile, which compiles the
+  vendored SDK and core with the dependencies they need, as a module's own
+  build does. It is rewritten on every generation, and active unless
+  dagger.sdk.skip is set, for the reason the clients profile is.
+  """
+  let withSdkProfile(pom: String!): String! {
+    withMarkedProfile(pom, sdkProfileMarker, sdkProfile)
+  }
+
+  let sdkProfileMarker: String! = "dagger-java-sdk sdk"
+
+  """
+  Keep its versions with the ones the module templates' pom.xml pins.
+  """
+  let sdkProfile: String! {
+    "\n        <!-- " + sdkProfileMarker + ": the Dagger Java SDK and core. DO NOT EDIT. -->" +
+      "\n        <profile>" +
+      "\n            <id>dagger-sdk</id>" +
+      "\n            <activation>" +
+      "\n                <property>" +
+      "\n                    <name>!dagger.sdk.skip</name>" +
+      "\n                </property>" +
+      "\n            </activation>" +
+      "\n            <dependencyManagement>" +
+      "\n                <dependencies>" +
+      "\n                    <dependency>" +
+      "\n                        <groupId>io.opentelemetry</groupId>" +
+      "\n                        <artifactId>opentelemetry-bom</artifactId>" +
+      "\n                        <version>1.61.0</version>" +
+      "\n                        <type>pom</type>" +
+      "\n                        <scope>import</scope>" +
+      "\n                    </dependency>" +
+      "\n                </dependencies>" +
+      "\n            </dependencyManagement>" +
+      "\n            <dependencies>" +
+      sdkDependency("jakarta.json", "jakarta.json-api", "2.1.3", "") +
+      sdkDependency("jakarta.json.bind", "jakarta.json.bind-api", "3.0.1", "") +
+      sdkDependency("org.slf4j", "slf4j-api", "2.0.17", "") +
+      sdkDependency("io.opentelemetry", "opentelemetry-api", "", "") +
+      sdkDependency("io.opentelemetry", "opentelemetry-sdk", "", "") +
+      "\n                <dependency>" +
+      "\n                    <groupId>io.opentelemetry</groupId>" +
+      "\n                    <artifactId>opentelemetry-exporter-otlp</artifactId>" +
+      "\n                    <exclusions>" +
+      "\n                        <exclusion>" +
+      "\n                            <groupId>io.opentelemetry</groupId>" +
+      "\n                            <artifactId>opentelemetry-exporter-sender-okhttp</artifactId>" +
+      "\n                        </exclusion>" +
+      "\n                    </exclusions>" +
+      "\n                </dependency>" +
+      sdkDependency("io.opentelemetry", "opentelemetry-exporter-sender-jdk", "", "runtime") +
+      sdkDependency("org.eclipse", "yasson", "3.0.4", "runtime") +
+      "\n            </dependencies>" +
+      "\n            <build>" +
+      "\n                <plugins>" +
+      "\n                    <plugin>" +
+      "\n                        <groupId>org.codehaus.mojo</groupId>" +
+      "\n                        <artifactId>build-helper-maven-plugin</artifactId>" +
+      "\n                        <version>3.3.0</version>" +
+      "\n                        <executions>" +
+      "\n                            <execution>" +
+      "\n                                <id>add-dagger-sdk-sources</id>" +
+      "\n                                <goals>" +
+      "\n                                    <goal>add-source</goal>" +
+      "\n                                </goals>" +
+      "\n                                <configuration>" +
+      "\n                                    <sources>" +
+      "\n                                        <source>sdk/src/main/java</source>" +
+      "\n                                        <source>" + coreClientPath + "</source>" +
+      "\n                                    </sources>" +
+      "\n                                </configuration>" +
+      "\n                            </execution>" +
+      "\n                        </executions>" +
+      "\n                    </plugin>" +
+      "\n                </plugins>" +
+      "\n            </build>" +
+      "\n        </profile>" +
+      "\n        <!-- /" + sdkProfileMarker + " -->"
+  }
+
+  let sdkDependency(groupId: String!, artifactId: String!, version: String!, scope: String!): String! {
+    "\n                <dependency>" +
+      "\n                    <groupId>" + groupId + "</groupId>" +
+      "\n                    <artifactId>" + artifactId + "</artifactId>" +
+      (if (version == "") { "" } else { "\n                    <version>" + version + "</version>" }) +
+      (if (scope == "") { "" } else { "\n                    <scope>" + scope + "</scope>" }) +
+      "\n                </dependency>"
+  }
+
+  """
+  Core's schema for a plain project: the client-facing one, with the host and
+  the engine API a module's schema hides. The engine serves core alone for a
+  module source with no runtime, as it installs nothing beside core.
+  """
+  let projectCoreSchema: File! {
+    directory
+      .withNewFile("dagger-module.toml", "name = \"core-schema\"\n")
+      .asModuleSource
+      .withEngineVersion(engineVersion)
+      .clientSchemaIntrospectionJSON
+  }
+
+  """
+  The Maven version a plain project's SDK is built under. One serves every
+  project: only a module's processor compile and its vendored jar read the
+  installed jars back.
+  """
+  let projectSdkVersion: String! = "plain-project"
+
+  """
+  Refuse a pom.xml that does not compile the core client. Generation compiles
+  against the prebuilt SDK jar, so a missing source root would otherwise surface
+  only when the engine builds the module to call it.
+  """
+  let requireCoreClientSource(moduleSource: Directory!): Void {
+    if (moduleSource.file("pom.xml").contents.contains("<source>" + coreClientPath + "</source>") == false) {
+      raise "pom.xml does not compile the core client: in the add-dagger-sdk-sources execution of " +
+        "build-helper-maven-plugin, replace <source>sdk/src/generated/java</source> with " +
+        "<source>" + coreClientPath + "</source>"
+    }
+    null
   }
 
   """
@@ -151,10 +459,12 @@ type Mod {
 
   """
   Compile the module with the annotation processor enabled (proc=full) so it
-  emits io.dagger.gen.entrypoint.Entrypoint, and return the generated-sources
-  directory (the entrypoint) for vendoring under <module>/src/generated/java.
+  emits io.dagger.gen.entrypoint.Entrypoint under
+  target/generated-sources/annotations, for vendoring under
+  <module>/src/generated/java, and the Dang entrypoint's main.dang under
+  target/classes/dagger/entrypoint.
   """
-  let generatedEntrypoint(moduleDir: Directory!, name: String!): Directory! {
+  let processed(moduleDir: Directory!, name: String!): Container! {
     mvn
       .withoutEntrypoint
       .withMountedCache("/root/.m2", mavenRepo, sharing: CacheSharingMode.LOCKED)
@@ -162,40 +472,151 @@ type Mod {
       .withWorkdir("/module")
       .withEnvVariable("_DAGGER_JAVA_SDK_MODULE_NAME", name)
       .withExec(["mvn", "compile", "-Ddagger.proc=full", "-Ddagger.sdk=prebuilt", "-Ddagger.sdk.version=" + name, "--no-transfer-progress"])
-      .directory("/module/target/generated-sources/annotations")
   }
 
   """
-  The workspace with this module's vendored SDK and generated entrypoint merged
-  in.
+  The Dang entrypoint: main.dang from the annotation processor, and build.dang,
+  which builds the jar with the images the runtime pins. build.dang runs the
+  processor again under the name it ran under here, because the name decides
+  which object is the module's.
+  """
+  let dangEntrypointDir(processedModule: Container!, name: String!): Directory! {
+    directory
+      .withFile("main.dang", processedModule.file("/module/target/classes/dagger/entrypoint/main.dang"))
+      .withNewFile(
+        "build.dang",
+        currentModule.source.file("entrypoint/build.dang.tmpl").contents
+          .replace("<maven-image>", dockerfileImage("runtime/images/maven/Dockerfile"))
+          .replace("<jre-image>", dockerfileImage("runtime/images/java/Dockerfile"))
+          .replace("<module-name>", name),
+      )
+  }
+
+  """
+  Where a module on the Dang entrypoint lists every file generation wrote into
+  it with its SHA-256, which build.dang checks before a call.
+  """
+  let generatedSumsPath: String! = "src/generated/sha256sums"
+
+  """
+  The list at generatedSumsPath, in the format of sha256sum: the vendored SDK,
+  core, each client and src/generated, as ws holds them.
+  """
+  let generatedSums(ws: Workspace!): String! {
+    let owned = ["sdk", "clients/core", "src/generated"] + clients.map { client => "clients/" + client.moduleName }
+    let tree = ws.directory(
+      "/",
+      include: owned.map { dir => joinPath(rootPath, dir) + "/**" },
+      exclude: [joinPath(rootPath, generatedSumsPath)],
+    )
+    let moduleTree = if (rootPath == ".") { tree } else { tree.directory(rootPath) }
+    mvn
+      .withoutEntrypoint
+      .withDirectory("/generated", moduleTree)
+      .withWorkdir("/generated")
+      .withExec(["sh", "-c", "find . -type f | LC_ALL=C sort | xargs sha256sum | sed 's|  \\./|  |'"])
+      .stdout
+  }
+
+  """
+  The image a single-FROM Dockerfile of the runtime names, which Dependabot
+  keeps up to date.
+  """
+  let dockerfileImage(path: String!): String! {
+    currentModule.source.file(path).contents.trimSpace.trimPrefix("FROM ")
+  }
+
+  """
+  The workspace with this module's vendored SDK, core client and generated
+  entrypoint merged in, or with a plain project's vendored SDK, core and
+  clients.
   """
   generated: Workspace! {
+    let committed = moduleDir(ws, rootPath)
+    if (isModule == false) {
+      let pom = withClientsProfile(withSdkProfile(committed.file("pom.xml").contents))
+      let vendored = vendoredSdk(projectCoreSchema, projectSdkVersion)
+      return withSdkAndClients(staleClientDirs(committed), vendored, projectCoreSchema, projectSdkVersion, pom)
+    }
+    requireCoreClientSource(committed)
     let modSource = ws.moduleSource(workspaceRef(rootPath))
     let name = modSource.moduleName
     let introspectionJSON = modSource.introspectionSchemaJSON
     let vendored = vendoredSdk(introspectionJSON, name)
+    let pom = withClientsProfile(committed.file("pom.xml").contents)
+    let stale = staleClientDirs(committed)
 
     # the module as committed, with the whole committed sdk/ dropped (source and
     # any previously vendored jar) and the freshly vendored SDK sources overlaid,
-    # plus any stale generated entrypoint dropped so the processor regenerates it
-    let baseDir = moduleDir(ws, rootPath)
+    # plus any stale generated entrypoint dropped so the processor regenerates it,
+    # and the fresh client packages and pom in place, so the processor compiles
+    # the clients the module will be built with
+    let withoutStale = stale.reduce(committed) { dir, stalePath => dir.withoutDirectory("clients/" + stalePath) }
+    let baseDir = clients
+      .reduce(withoutStale) { dir, client =>
+        dir
+          .withoutDirectory(clientSourcePath(client))
+          .withDirectory(clientSourcePath(client), clientSources(introspectionJSON, name, client))
+      }
+      .withNewFile("pom.xml", pom)
       .withoutDirectory("sdk")
       .withDirectory("sdk", vendored)
       .withoutDirectory("src/generated")
-    let entrypoint = generatedEntrypoint(baseDir, name)
+    let processedModule = processed(baseDir, name)
 
-    let staged = ws
-      .withNewDirectory(workspaceRef(joinPath(rootPath, "sdk")), vendored)
-      .withNewDirectory(workspaceRef(joinPath(rootPath, "src/generated/java")), entrypoint)
-
-    if (vendorSdkJar) {
-      staged.withNewDirectory(
+    let withJava = withSdkAndClients(stale, vendored, introspectionJSON, name, pom)
+      .withNewDirectory(
+        workspaceRef(joinPath(rootPath, "src/generated/java")),
+        processedModule.directory("/module/target/generated-sources/annotations"),
+      )
+    let staged = if (vendorSdkJar) {
+      withJava.withNewDirectory(
         workspaceRef(joinPath(rootPath, "sdk/repo")),
         vendoredSdkJar(introspectionJSON, name),
       )
     } else {
-      staged
+      withJava
     }
+    if (dangEntrypoint == null) {
+      return staged
+    }
+    let withEntrypoint = staged.withNewDirectory(
+      workspaceRef(joinPath(rootPath, dangEntrypoint ?? "")),
+      dangEntrypointDir(processedModule, name),
+    )
+    withEntrypoint.withNewFile(
+      workspaceRef(joinPath(rootPath, generatedSumsPath)),
+      generatedSums(withEntrypoint),
+    )
+  }
+
+  """
+  The workspace with the pom.xml, the vendored SDK, core and one package per
+  client written, and the package of each client the scope no longer has
+  removed.
+  """
+  let withSdkAndClients(
+    stale: [String!]!,
+    vendored: Directory!,
+    introspectionJSON: File!,
+    name: String!,
+    pom: String!,
+  ): Workspace! {
+    let withClients = clients.reduce(
+      stale.reduce(ws) { w, stalePath => w.withoutDirectory(workspaceRef(joinPath(rootPath, "clients/" + stalePath))) },
+    ) { w, client =>
+      w.withNewDirectory(
+        workspaceRef(joinPath(rootPath, "clients/" + client.moduleName)),
+        directory.withDirectory("src/main/java", clientSources(introspectionJSON, name, client)),
+      )
+    }
+    withClients
+      .withNewFile(workspaceRef(joinPath(rootPath, "pom.xml")), pom)
+      .withNewDirectory(workspaceRef(joinPath(rootPath, "sdk")), vendored)
+      .withNewDirectory(
+        workspaceRef(joinPath(rootPath, coreClientPath)),
+        coreClient(introspectionJSON, name),
+      )
   }
 
   """

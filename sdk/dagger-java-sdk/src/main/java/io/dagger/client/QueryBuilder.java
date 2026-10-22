@@ -1,10 +1,13 @@
 package io.dagger.client;
 
+import static io.dagger.client.exception.DaggerExceptionConstants.CODE_KEY;
+import static io.dagger.client.exception.DaggerExceptionConstants.CODE_VALIDATION_FAILED_VALUE;
 import static io.dagger.client.exception.DaggerExceptionConstants.TYPE_EXEC_ERROR_VALUE;
 import static io.dagger.client.exception.DaggerExceptionConstants.TYPE_KEY;
 
 import io.dagger.client.exception.DaggerExecException;
 import io.dagger.client.exception.DaggerQueryException;
+import io.dagger.client.exception.StaleClientException;
 import io.dagger.client.graphql.GraphQLClient;
 import io.dagger.client.graphql.GraphQLError;
 import io.dagger.client.graphql.GraphQLResponse;
@@ -20,8 +23,10 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Set;
 import java.util.Spliterators;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
@@ -29,84 +34,107 @@ import java.util.stream.StreamSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-class QueryBuilder {
+/**
+ * Builds and executes one GraphQL selection chain.
+ *
+ * <p>Public because generated clients live in packages of their own and chain through it. Not a
+ * user-facing API: user code goes through the generated types.
+ */
+public final class QueryBuilder {
 
   static final Logger LOG = LoggerFactory.getLogger(QueryBuilder.class);
 
   private final GraphQLClient client;
+  private final ModuleLoader loader;
+  private final Set<ModuleTarget> targets;
   private final Deque<QueryPart> parts;
   private final List<QueryPart> leaves;
   private final String inlineFragmentType;
 
-  QueryBuilder(GraphQLClient client) {
-    this(client, new LinkedList<>(), new ArrayList<>(), null);
-  }
-
-  private QueryBuilder(GraphQLClient client, Deque<QueryPart> parts) {
-    this(client, parts, new ArrayList<>(), null);
-  }
-
-  private QueryBuilder(GraphQLClient client, Deque<QueryPart> parts, List<String> finalFields) {
-    this(client, parts, finalFields, null);
+  public QueryBuilder(GraphQLClient client) {
+    this(client, new ModuleLoader(), Set.of(), new LinkedList<>(), new ArrayList<>(), null);
   }
 
   private QueryBuilder(
       GraphQLClient client,
+      ModuleLoader loader,
+      Set<ModuleTarget> targets,
       Deque<QueryPart> parts,
       List<String> finalFields,
       String inlineFragmentType) {
     this.client = client;
+    this.loader = loader;
+    this.targets = targets;
     this.parts = parts;
     this.leaves = finalFields.stream().map(QueryPart::new).toList();
     this.inlineFragmentType = inlineFragmentType;
   }
 
-  QueryBuilder chain(String operation) {
+  /**
+   * The same chain, reaching into {@code target}. Its queries first serve the target into the
+   * session, once per session.
+   */
+  public QueryBuilder withTarget(ModuleTarget target) {
+    Set<ModuleTarget> targets = new LinkedHashSet<>(this.targets);
+    targets.add(target);
+    return new QueryBuilder(
+        client,
+        loader,
+        targets,
+        parts,
+        leaves.stream().map(QueryPart::getOperation).toList(),
+        inlineFragmentType);
+  }
+
+  public QueryBuilder chain(String operation) {
     return chain(operation, Arguments.noArgs());
   }
 
-  QueryBuilder chain(String operation, Arguments arguments) {
+  public QueryBuilder chain(String operation, Arguments arguments) {
     if (leaves != null && !leaves.isEmpty()) {
       throw new IllegalStateException("A new field cannot be chained");
     }
     Deque<QueryPart> list = new LinkedList<>();
     list.addAll(this.parts);
     list.push(new QueryPart(operation, arguments));
-    return new QueryBuilder(client, list, new ArrayList<>(), inlineFragmentType);
+    return new QueryBuilder(client, loader, targets, list, new ArrayList<>(), inlineFragmentType);
   }
 
-  QueryBuilder chain(String operation, List<String> leaves) {
+  public QueryBuilder chain(String operation, List<String> leaves) {
     if (!this.leaves.isEmpty()) {
       throw new IllegalStateException("A new field cannot be chained");
     }
     Deque<QueryPart> list = new LinkedList<>();
     list.addAll(this.parts);
     list.push(new QueryPart(operation));
-    return new QueryBuilder(client, list, leaves, inlineFragmentType);
+    return new QueryBuilder(client, loader, targets, list, leaves, inlineFragmentType);
   }
 
-  QueryBuilder chain(List<String> leaves) {
+  public QueryBuilder chain(List<String> leaves) {
     if (!this.leaves.isEmpty()) {
       throw new IllegalStateException("A new field cannot be chained");
     }
     Deque<QueryPart> list = new LinkedList<>();
     list.addAll(this.parts);
-    return new QueryBuilder(client, list, leaves, inlineFragmentType);
+    return new QueryBuilder(client, loader, targets, list, leaves, inlineFragmentType);
   }
 
   /**
    * Create a QueryBuilder for node(id:) with an inline fragment for the given type.
    *
    * <p>This produces queries like: {@code node(id: "...") { ... on Container { field { ... } } }}
+   *
+   * <p>The node lookup starts a new query on the same session, whatever this builder's own chain
+   * is: an ID addresses an object from the root. It keeps this chain's targets, because the
+   * object's type may be one of theirs.
    */
-  QueryBuilder chainNode(String typeName, Object id) {
+  public QueryBuilder chainNode(String typeName, Object id) {
     Deque<QueryPart> list = new LinkedList<>();
-    list.addAll(this.parts);
     // Unwrap Scalar (e.g. ID) to its inner value — Scalar doesn't override toString()
     String idStr =
         (id instanceof Scalar<?>) ? ((Scalar<?>) id).convert().toString() : id.toString();
     list.push(new QueryPart("node", Arguments.newBuilder().add("id", idStr).build()));
-    return new QueryBuilder(client, list, new ArrayList<>(), typeName);
+    return new QueryBuilder(client, loader, targets, list, new ArrayList<>(), typeName);
   }
 
   private void handleErrors(GraphQLResponse response) throws DaggerQueryException {
@@ -122,6 +150,13 @@ class QueryBuilder {
     if (response.getErrors().isEmpty()) {
       throw new DaggerQueryException();
     }
+    if (!targets.isEmpty()) {
+      for (GraphQLError error : response.getErrors()) {
+        if (failedValidation(error)) {
+          throw new StaleClientException(error, targets);
+        }
+      }
+    }
 
     GraphQLError error = response.getErrors().get(0);
     String errorType = (String) error.getExtensions().getOrDefault(TYPE_KEY, null);
@@ -131,6 +166,15 @@ class QueryBuilder {
     }
 
     throw new DaggerQueryException(response.getErrors().get(0));
+  }
+
+  /**
+   * Validation fails before anything runs, so its error has no path. An error with a path comes
+   * from something that ran, such as a nested call whose own client is stale.
+   */
+  private static boolean failedValidation(GraphQLError error) {
+    return error.getPath().length == 0
+        && CODE_VALIDATION_FAILED_VALUE.equals(error.getExtensions().get(CODE_KEY));
   }
 
   String buildQuery() throws ExecutionException, InterruptedException, DaggerQueryException {
@@ -151,6 +195,10 @@ class QueryBuilder {
 
   GraphQLResponse executeQuery(String query)
       throws ExecutionException, InterruptedException, DaggerQueryException {
+    for (ModuleTarget target : targets) {
+      loader.load(
+          new QueryBuilder(client, loader, Set.of(), new LinkedList<>(), List.of(), null), target);
+    }
     LOG.debug("Executing query: {}", query);
     GraphQLResponse response = client.executeQuery(query);
     handleErrors(response);
@@ -165,11 +213,11 @@ class QueryBuilder {
    * @throws InterruptedException
    * @throws DaggerQueryException
    */
-  void executeQuery() throws ExecutionException, InterruptedException, DaggerQueryException {
+  public void executeQuery() throws ExecutionException, InterruptedException, DaggerQueryException {
     executeQuery(buildQuery());
   }
 
-  <T> T executeQuery(Class<T> klass)
+  public <T> T executeQuery(Class<T> klass)
       throws ExecutionException, InterruptedException, DaggerQueryException {
     List<String> pathElts =
         StreamSupport.stream(
@@ -214,17 +262,17 @@ class QueryBuilder {
    * this cannot stay lazy. What comes back is lazy again: the caller wraps it in a normal client
    * object.
    */
-  QueryBuilder executeNullableObjectQuery(String graphqlTypeName)
+  public QueryBuilder executeNullableObjectQuery(String graphqlTypeName)
       throws ExecutionException, InterruptedException, DaggerQueryException {
     // chain(String), not chain(List): only parts are walked when reading the response back.
     String id = chain("id").executeQuery(String.class);
     if (id == null) {
       return null;
     }
-    return new QueryBuilder(this.client).chainNode(graphqlTypeName, id);
+    return chainNode(graphqlTypeName, id);
   }
 
-  <T> List<T> executeListQuery(Class<T> klass)
+  public <T> List<T> executeListQuery(Class<T> klass)
       throws ExecutionException, InterruptedException, DaggerQueryException {
     List<String> pathElts =
         StreamSupport.stream(
@@ -268,7 +316,7 @@ class QueryBuilder {
    *
    * @param graphqlTypeName the GraphQL type name for inline fragment resolution
    */
-  List<QueryBuilder> executeObjectListQuery(String graphqlTypeName)
+  public List<QueryBuilder> executeObjectListQuery(String graphqlTypeName)
       throws ExecutionException, InterruptedException, DaggerQueryException {
     List<String> pathElts =
         StreamSupport.stream(
@@ -284,7 +332,7 @@ class QueryBuilder {
     List<QueryBuilder> rv = new ArrayList<>();
     for (int i = 0; i < array.size(); i++) {
       String id = array.getJsonObject(i).getString("id");
-      QueryBuilder qb = new QueryBuilder(this.client).chainNode(graphqlTypeName, id);
+      QueryBuilder qb = chainNode(graphqlTypeName, id);
       rv.add(qb);
     }
     return rv;

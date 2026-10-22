@@ -1,12 +1,19 @@
 """
-Checks the Java SDK against an engine built from dagger/dagger#13992 (branch
-sdk-ux-module-max), at the commit engine-dev is pinned to in dagger-module.toml.
-
-The released engine has none of that change, so every call into the java-sdk
-module fails there. These checks build the engine and run the SDK inside it.
+Checks the Java SDK on engines built from pinned dagger/dagger commits, so a run
+proves the floor whatever engine runs it. Keep each commit aligned with its
+engine-dev dependency in dagger-module.toml.
 """
 type EngineE2e {
-  let engineCommit: String! = "8fd9b22b5416f8dc7cb420ba37769adef6e874d2"
+  """
+  Commit of v1.0.0-beta.18, this SDK's floor.
+  """
+  let floorCommit: String! = "249edbd646e63c5181053c8af72623ed9bdf030d"
+
+  """
+  Commit of v1.0.0-beta.17, the last release below the floor.
+  """
+  let belowFloorCommit: String! = "0da36c8da9cb6a682c7d27eca9bd2c125de5ed09"
+
   let modulePath: String! = ".dagger/modules/sdk-smoke"
 
   let assert(condition: Boolean!, message: String!): Void {
@@ -16,44 +23,108 @@ type EngineE2e {
     null
   }
 
+  let daggerSource(commit: String!): Workspace! {
+    git("https://github.com/dagger/dagger").ref(commit).asWorkspace
+  }
+
   """
-  This checkout, mounted in an engine built from the pinned commit, as a
-  workspace the CLI inside can act on.
+  The checks need git, which the default client lacks.
   """
-  let playground(ws: Workspace!): Container! {
+  let clientBase: Container! {
+    container.from("alpine:3.22").withExec(["apk", "add", "--no-cache", "git"])
+  }
+
+  """
+  This checkout, mounted in a client of the given engine, as a workspace the CLI
+  inside can act on. Its dagger.toml is workspace.toml, which registers only the
+  e2e module and this SDK: this checkout's own also registers engine-e2e, whose
+  checks `dagger check` would then run inside the engine again.
+  """
+  let sdkClient(ws: Workspace!, engine: Container!): Container! {
     let sdkSource = ws.directory("/", exclude: [".git", "**/target/**"])
-    let engineSource = git("https://github.com/dagger/dagger")
-      .ref(engineCommit)
-      .asWorkspace
-    engineDev(ws: engineSource)
-      .playground
-      .withMountedDirectory("./java-sdk", sdkSource)
-      .withWorkdir("./java-sdk")
+      .withFile("dagger.toml", ws.file("/.dagger/modules/engine-e2e/workspace.toml"))
+    engine
+      .withMountedDirectory("/work/java-sdk", sdkSource)
+      .withWorkdir("/work/java-sdk")
       # .git is left out of the mount; workspace detection walks up to a .git to
       # find the workspace root, and without one there is no workspace at all.
       .withExec(["git", "init", "--quiet"])
   }
 
+  let floorClient(ws: Workspace!): Container! {
+    sdkClient(ws, engineDev(ws: daggerSource(floorCommit)).installClient(client: clientBase))
+  }
+
   """
-  The module-max engine should list this checkout as the java SDK, initialize a
-  Java module from it, and run the module.
+  The outer engine hands each exec a session of its own, which a client prefers
+  over the engine installClient configures, and it sets it when the process
+  starts, so only the process can drop it.
+  """
+  let withoutOuterSession(args: [String!]!): [String!]! {
+    ["env", "-u", "DAGGER_SESSION_PORT", "-u", "DAGGER_SESSION_TOKEN", "dagger"] + args
+  }
+
+  """
+  Every e2e check, on the floor release's engine, which they first confirm is
+  the one they reach.
+  """
+  pub floorCheck(ws: Workspace!): Void @check {
+    floorClient(ws)
+      .withExec(withoutOuterSession(["call", "-m", ".dagger/modules/e2e", "assert-floor-engine"]))
+      .withExec(withoutOuterSession(["check", "-m", ".dagger/modules/e2e"]))
+      .sync
+
+    null
+  }
+
+  """
+  The release below the floor is refused: on its engine, generation and
+  `dagger module init` name the floor.
+  """
+  pub belowFloorCheck(ws: Workspace!): Void @check {
+    let client = sdkClient(ws, belowFloorEngineDev(ws: daggerSource(belowFloorCommit)).installClient(client: clientBase))
+    let checked = client
+      .withExec(withoutOuterSession(["check", "-m", ".dagger/modules/e2e", "engine-floor-refusal-check"]))
+    # A pattern that matches no check passes too.
+    let said = checked.stdout + checked.stderr
+    assert(said.contains("1 passed"), "engine-floor-refusal-check did not run on the engine below the floor:\n" + said)
+
+    let initialized = client.withExec(
+      withoutOuterSession(["--auto-apply", "module", "init", "java", "--name", "sdk-smoke", "--path", modulePath]),
+      expect: ReturnType.FAILURE,
+    )
+    let refusal = initialized.stdout + initialized.stderr
+    assert(
+      refusal.contains("needs Dagger engine v1.0.0-beta.18 or later"),
+      "dagger module init on the engine below the floor did not name the floor:\n" + refusal,
+    )
+
+    null
+  }
+
+  """
+  The floor engine should list this checkout as the java SDK, initialize a Java
+  module on the Dang entrypoint from it, and run the module.
   """
   pub devSdkCheck(ws: Workspace!): Void @check {
-    let listed = playground(ws).withExec(["dagger", "sdk", "list"])
+    let listed = floorClient(ws).withExec(withoutOuterSession(["sdk", "list"]))
     assert(listed.stdout.contains("java"), "the development Java SDK was not listed")
 
     let initialized = listed
-      .withExec(["dagger", "--auto-apply", "module", "init", "java", "--name", "sdk-smoke", "--path", modulePath])
+      .withExec(withoutOuterSession(["--auto-apply", "module", "init", "java", "--name", "sdk-smoke", "--path", modulePath]))
       .withExec(["test", "-f", modulePath + "/dagger-module.toml"])
       .withExec(["test", "!", "-e", modulePath + "/dagger.json"])
       .withExec(["test", "-f", modulePath + "/pom.xml"])
       .withExec(["test", "-f", modulePath + "/src/main/java/io/dagger/modules/sdksmoke/SdkSmoke.java"])
       .withExec(["test", "-f", modulePath + "/sdk/src/main/java/io/dagger/client/Dagger.java"])
+      .withExec(["test", "-f", modulePath + "/clients/core/src/main/java/io/dagger/client/modules/core/Core.java"])
+      .withExec(["test", "!", "-e", modulePath + "/sdk/src/generated"])
       .withExec(["test", "-f", modulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"])
-      .withExec(["grep", "-q", "github.com/dagger/java-sdk/runtime", modulePath + "/dagger-module.toml"])
+      .withExec(["test", "-f", modulePath + "/src/generated/dang/entrypoint/main.dang"])
+      .withExec(["grep", "-q", "^\\[entrypoint\\]$", modulePath + "/dagger-module.toml"])
 
     let release = initialized
-      .withExec(["dagger", "-m", modulePath, "call", "container", "file", "--path", "/etc/alpine-release", "contents"])
+      .withExec(withoutOuterSession(["-m", modulePath, "call", "container", "file", "--path", "/etc/alpine-release", "contents"]))
       .stdout
     assert(release.trimSpace != "", "the generated module did not run")
 
@@ -61,15 +132,169 @@ type EngineE2e {
   }
 
   """
-  Run the e2e checks that call the java-sdk module. The module is not installed
-  in dagger.toml, because on a released engine every one of those calls fails,
-  so `-m` loads it by path here instead.
+  Results of a module on the Dang entrypoint follow their cache policy across
+  sessions of the floor engine: a default result is reused, a per-session or a
+  never result is not. Each CLI call here is a session of its own, which the
+  e2e checks cannot show: their CLI calls share the session that runs them.
   """
-  pub sdkContractCheck(ws: Workspace!): Void @check {
-    playground(ws)
-      .withExec(["dagger", "-m", ".dagger/modules/e2e", "check"])
-      .sync
+  pub cachePolicySessionsCheck(ws: Workspace!): Void @check {
+    let appPath = ".dagger/modules/entry-app"
+    let generated = floorClient(ws)
+      .withExec(withoutOuterSession(["--auto-apply", "module", "init", "java", "--name", "entry-app", "--path", appPath]))
+      .withExec(["cp", "-R", ".dagger/modules/e2e/fixtures/entrypoint/src", appPath + "/"])
+      .withWorkdir(appPath)
+      .withExec(withoutOuterSession(["--auto-apply", "generate"]))
+    let script = "set -e\n" +
+      "c() { env -u DAGGER_SESSION_PORT -u DAGGER_SESSION_TOKEN dagger -m . call \"$1\"; }\n" +
+      "echo $(c cached) $(c cached) $(c per-session) $(c per-session) $(c fresh) $(c fresh)\n"
+    let results = generated.withExec(["sh", "-c", script]).stdout.trimSpace
+    let calls = results.split(" ")
+    assert(calls.length == 6 and calls[0] == calls[1], "a default result was not reused in another session: " + results)
+    assert(calls[2] != calls[3], "a per-session result was reused in another session: " + results)
+    assert(calls[4] != calls[5], "a never-cached result was reused: " + results)
 
     null
+  }
+
+  """
+  A git client of a module on the Dang entrypoint stays on the commit it was
+  generated against after a newer tag matches its ref (dagger/dagger#14284).
+  The client is added at @v1 when only v1.0.0 exists, and v1.0.1 is pushed
+  after. The workspace lock records what @v1 resolved to, so its entries for
+  the repository are dropped, and the next call resolves @v1 again, to
+  v1.0.1. Each CLI call is a session of its own, because a session keeps
+  what @v1 resolved to in it; the e2e checks, whose calls share one session,
+  cannot show this.
+
+  The address names the git server by its IP, because the engine refuses a
+  git host without a dot, and one script does everything, because the
+  server's IP and the tag pushed to it last only as long as the exec that
+  holds the server.
+  """
+  pub pinnedGitClientCheck(ws: Workspace!): Void @check {
+    let appPath = ".dagger/modules/pin-app"
+    let server = gitServer
+    let host = server.hostname
+    let initialized = floorClient(ws)
+      .withServiceBinding(host, server)
+      .withExec(withoutOuterSession(["--auto-apply", "module", "init", "java", "--name", "pin-app", "--path", appPath]))
+      .withNewFile(appPath + "/src/main/java/io/dagger/modules/pinapp/PinApp.java", pinAppSource)
+      .withWorkdir(appPath)
+    let script = "set -e\n" +
+      "d() { env -u DAGGER_SESSION_PORT -u DAGGER_SESSION_TOKEN dagger \"$@\"; }\n" +
+      "result() { r=$(d \"$@\"); echo \"$r\"; }\n" +
+      "address=git://$(getent hosts " + host + " | cut -d ' ' -f 1)/pinned.git@v1\n" +
+      "d --auto-apply module client add \"$address\" --sdk java >&2\n" +
+      "result -m . call message\n" +
+      "git clone -q git://" + host + "/pinned.git /tmp/pinned\n" +
+      "(cd /tmp/pinned && sed -i 's/v1.0.0/v1.0.1/' main.dang &&\n" +
+      "  git -c user.name=e2e -c user.email=e2e@example.com commit -q -am v1.0.1 &&\n" +
+      "  git tag v1.0.1 && git push -q origin main v1.0.1)\n" +
+      "grep -v '/pinned\"' /work/java-sdk/dagger.lock > /tmp/dagger.lock\n" +
+      "cp /tmp/dagger.lock /work/java-sdk/dagger.lock\n" +
+      "result -m \"$address\" call message\n" +
+      "result -m . call message\n"
+    let ran = initialized.withExec(["sh", "-c", script], expect: ReturnType.ANY)
+    let said = ran.stdout + ran.stderr
+    assert(ran.exitCode == 0, "the calls of the git client failed:\n" + said)
+    let results = ran.stdout.trimSpace.split("\n")
+    assert((results[0] ?? "") == "pinned: v1.0.0", "the module did not call its git client: " + JSON.encode(results) + "\n" + said)
+    assert((results[1] ?? "") == "v1.0.1", "@v1 did not resolve to the newer tag: " + JSON.encode(results) + "\n" + said)
+    assert(
+      (results[2] ?? "") == "pinned: v1.0.0",
+      "the git client left its pinned commit for the newer tag: " + JSON.encode(results) + "\n" + said,
+    )
+
+    null
+  }
+
+  """
+  A plain Maven project calls a module through a client the CLI added to it,
+  from a program run with java -jar that holds no connection code. With no
+  session in its environment, the program starts `dagger session` on its
+  first call and stops it before the JVM exits, so no session process
+  outlives the program. The project builds with mvn package in a container
+  with no engine and no dagger CLI.
+  """
+  pub standaloneClientCheck(ws: Workspace!): Void @check {
+    let appPath = "standalone-app"
+    let javaClient = container.from(runtimeImage(ws, "java")).withExec(["apk", "add", "--no-cache", "git"])
+    let added = sdkClient(ws, engineDev(ws: daggerSource(floorCommit)).installClient(client: javaClient))
+      .withExec(["cp", "-R", ".dagger/modules/e2e/fixtures/standalone/app", appPath])
+      .withWorkdir(appPath)
+      .withExec(withoutOuterSession([
+        "--auto-apply", "module", "client", "add", "../.dagger/modules/e2e/fixtures/clients/dep", "--sdk", "java",
+      ]))
+    let jar = container
+      .from(runtimeImage(ws, "maven"))
+      .withoutEntrypoint
+      .withMountedCache("/root/.m2", cacheVolume("engine-e2e-maven-m2"))
+      .withDirectory("/app", added.directory("."))
+      .withWorkdir("/app")
+      .withExec(["mvn", "package", "--no-transfer-progress"])
+      .file("/app/target/app.jar")
+    # CLISession runs the CLI installClient mounts at /.dagger-cli.
+    let script = "set -e\n" +
+      "env -u DAGGER_SESSION_PORT -u DAGGER_SESSION_TOKEN java -jar app.jar\n" +
+      "if ps -o args | grep -qE '[d]agger[^ ]* session'; then ps -o pid,args >&2; exit 1; fi\n"
+    let ran = added.withFile("app.jar", jar).withExec(["sh", "-c", script], expect: ReturnType.ANY)
+    let said = ran.stdout + ran.stderr
+    assert(ran.exitCode == 0, "the program failed, or left its dagger session running:\n" + said)
+    assert(ran.stdout.trimSpace == "hello from the client dependency", "the program did not call its client:\n" + said)
+
+    null
+  }
+
+  """
+  The image a single-FROM Dockerfile under runtime/images names.
+  """
+  let runtimeImage(ws: Workspace!, name: String!): String! {
+    ws.file("/runtime/images/" + name + "/Dockerfile").contents.trimSpace.trimPrefix("FROM ")
+  }
+
+  """
+  A git server for one repository, pinned.git, that a push can add to. Its
+  first commit, tagged v1.0.0, is a module whose message is its version.
+  """
+  let gitServer: Service! {
+    container
+      .from("alpine:3.22")
+      .withoutEntrypoint
+      .withExec(["apk", "add", "--no-cache", "git", "git-daemon"])
+      .withNewFile("/src/dagger-module.toml", "name = \"pinned\"\nengineVersion = \"v1.0.0-0\"\n\n[runtime]\n  source = \"dang\"\n")
+      .withNewFile("/src/main.dang", "type Pinned {\n  pub message: String! { \"v1.0.0\" }\n}\n")
+      .withWorkdir("/src")
+      .withExec(["git", "init", "-q", "-b", "main"])
+      .withExec(["git", "add", "-A"])
+      .withExec(["git", "-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "commit", "-q", "-m", "v1.0.0"])
+      .withExec(["git", "tag", "v1.0.0"])
+      .withExec(["git", "clone", "-q", "--bare", ".", "/srv/pinned.git"])
+      .withExposedPort(9418)
+      .withDefaultArgs(["git", "daemon", "--export-all", "--enable=receive-pack", "--base-path=/srv", "/srv"])
+      .asService
+  }
+
+  """
+  A module whose call of its git client is never cached, so a call in a later
+  session loads the client again.
+  """
+  let pinAppSource: String! {
+    "package io.dagger.modules.pinapp;\n"
+      + "\n"
+      + "import static io.dagger.client.modules.pinned.Pinned.pinned;\n"
+      + "\n"
+      + "import io.dagger.client.exception.DaggerQueryException;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "import java.util.concurrent.ExecutionException;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class PinApp {\n"
+      + "  @Function(cache = \"never\")\n"
+      + "  public String message()\n"
+      + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
+      + "    return \"pinned: \" + pinned().message();\n"
+      + "  }\n"
+      + "}\n"
   }
 }

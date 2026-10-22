@@ -6,8 +6,10 @@ public class DaggerExceptionConstants {
   public static final String STDOUT_KEY = "stdout";
   public static final String STDERR_KEY = "stderr";
   public static final String TYPE_KEY = "_type";
+  public static final String CODE_KEY = "code";
 
   public static final String TYPE_EXEC_ERROR_VALUE = "EXEC_ERROR";
+  public static final String CODE_VALIDATION_FAILED_VALUE = "GRAPHQL_VALIDATION_FAILED";
 
   protected static final String SIMPLE_MESSAGE = "Message: [%s]\nPath: [%s]\nType Code: [%s]\n";
   protected static final String ENHANCED_MESSAGE =

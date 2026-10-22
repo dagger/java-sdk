@@ -8,4 +8,5 @@ public record ObjectInfo(
     String description,
     FieldInfo[] fields,
     FunctionInfo[] functions,
-    Optional<FunctionInfo> constructor) {}
+    Optional<FunctionInfo> constructor,
+    boolean isCollection) {}

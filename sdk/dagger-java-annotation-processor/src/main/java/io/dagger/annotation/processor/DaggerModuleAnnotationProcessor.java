@@ -12,22 +12,29 @@ import com.palantir.javapoet.MethodSpec;
 import com.palantir.javapoet.ParameterizedTypeName;
 import com.palantir.javapoet.TypeSpec;
 import io.dagger.client.Dagger;
-import io.dagger.client.FunctionCall;
-import io.dagger.client.FunctionCallArgValue;
-import io.dagger.client.ID;
-import io.dagger.client.JSON;
-import io.dagger.client.JsonConverter;
-import io.dagger.client.TypeDef;
+import io.dagger.client.ModuleDispatcher;
 import io.dagger.client.exception.DaggerExecException;
 import io.dagger.client.exception.DaggerQueryException;
+import io.dagger.client.modules.core.Core;
+import io.dagger.client.modules.core.FunctionCachePolicy;
+import io.dagger.client.modules.core.FunctionCall;
+import io.dagger.client.modules.core.FunctionCallArgValue;
+import io.dagger.client.modules.core.ID;
+import io.dagger.client.modules.core.JSON;
+import io.dagger.client.modules.core.JsonConverter;
+import io.dagger.client.modules.core.TypeDef;
 import io.dagger.client.telemetry.Telemetry;
 import io.dagger.module.annotation.Check;
+import io.dagger.module.annotation.Collection;
 import io.dagger.module.annotation.Default;
 import io.dagger.module.annotation.DefaultPath;
+import io.dagger.module.annotation.Delta;
 import io.dagger.module.annotation.Enum;
 import io.dagger.module.annotation.Function;
 import io.dagger.module.annotation.Generate;
+import io.dagger.module.annotation.Get;
 import io.dagger.module.annotation.Ignore;
+import io.dagger.module.annotation.Keys;
 import io.dagger.module.annotation.Module;
 import io.dagger.module.annotation.Object;
 import io.dagger.module.annotation.Up;
@@ -40,8 +47,10 @@ import io.dagger.module.info.ObjectInfo;
 import io.dagger.module.info.ParameterInfo;
 import io.dagger.module.info.TypeInfo;
 import java.io.IOException;
+import java.io.Writer;
 import java.lang.reflect.InvocationTargetException;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -68,6 +77,8 @@ import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
+import javax.tools.FileObject;
+import javax.tools.StandardLocation;
 
 @SupportedAnnotationTypes({
   "io.dagger.module.annotation.Module",
@@ -140,6 +151,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
             }
 
             boolean mainObject = areSimilar(name, moduleName);
+            boolean collection = typeElement.getAnnotation(Collection.class) != null;
 
             if (!element.getModifiers().contains(Modifier.PUBLIC)) {
               throw new RuntimeException(
@@ -176,13 +188,15 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                             "<init>",
                             "",
                             parseFunctionDescription(elt),
+                            "",
                             new TypeInfo(
                                 ((ExecutableElement) elt).getReturnType().toString(),
                                 ((ExecutableElement) elt).getReturnType().getKind().name()),
                             parseParameters((ExecutableElement) elt).toArray(new ParameterInfo[0]),
                             false, // constructors are never checks
                             false, // constructors are never generators
-                            false)); // constructors are never up services
+                            false, // constructors are never up services
+                            false)); // constructors are never collection lookups
               } else if (constructorDefs.size() > 1) {
                 // There's more than one non-empty constructor, but Dagger only supports to expose a
                 // single one
@@ -200,7 +214,9 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                     .filter(
                         elt ->
                             elt.getModifiers().contains(Modifier.PUBLIC)
-                                || elt.getAnnotation(Function.class) != null)
+                                || elt.getAnnotation(Function.class) != null
+                                || elt.getAnnotation(Keys.class) != null
+                                || elt.getAnnotation(Delta.class) != null)
                     .map(
                         elt -> {
                           String fieldName = elt.getSimpleName().toString();
@@ -210,7 +226,9 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                               new FieldInfo(
                                   fieldName,
                                   parseSimpleDescription(elt),
-                                  new TypeInfo(tm.toString(), tk.name()));
+                                  new TypeInfo(tm.toString(), tk.name()),
+                                  collection && elt.getAnnotation(Keys.class) != null,
+                                  collection && elt.getAnnotation(Delta.class) != null);
                           return f;
                         })
                     .toList();
@@ -240,19 +258,35 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                           boolean isCheck = elt.getAnnotation(Check.class) != null;
                           boolean isGenerate = elt.getAnnotation(Generate.class) != null;
                           boolean isUp = elt.getAnnotation(Up.class) != null;
+                          boolean isGet = collection && elt.getAnnotation(Get.class) != null;
                           FunctionInfo functionInfo =
                               new FunctionInfo(
                                   fName,
                                   fqName,
                                   parseFunctionDescription(elt),
+                                  moduleFunction.cache(),
                                   new TypeInfo(tm.toString(), tk.name()),
                                   parameterInfos.toArray(new ParameterInfo[parameterInfos.size()]),
                                   isCheck,
                                   isGenerate,
-                                  isUp);
+                                  isUp,
+                                  isGet);
                           return functionInfo;
                         })
                     .toList();
+            // A collection without a get function fails to load, and the engine's error names
+            // neither the method marked @Get nor the missing @Function.
+            if (collection
+                && functionInfos.stream().noneMatch(f -> f.isGet() || f.name().equals("get"))) {
+              for (Element elt : typeElement.getEnclosedElements()) {
+                if (elt.getKind() == ElementKind.METHOD && elt.getAnnotation(Get.class) != null) {
+                  throw new RuntimeException(
+                      ("Method '%s' of '%s' is marked @Get but not @Function. Add @Function: a"
+                              + " collection's get function must be exposed.")
+                          .formatted(elt.getSimpleName(), name));
+                }
+              }
+            }
             annotatedObjects.add(
                 new ObjectInfo(
                     name,
@@ -260,7 +294,8 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                     parseObjectDescription(typeElement),
                     fieldInfoInfos.toArray(new FieldInfo[fieldInfoInfos.size()]),
                     functionInfos.toArray(new FunctionInfo[functionInfos.size()]),
-                    constructorInfo));
+                    constructorInfo,
+                    collection));
           }
         }
       }
@@ -278,15 +313,18 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
       enumSimpleNames.add(simpleName);
     }
 
+    // ObjectInfo hashes its arrays by identity, so the set's order changes from run to run.
     return new ModuleInfo(
         moduleDescription,
-        annotatedObjects.toArray(new ObjectInfo[annotatedObjects.size()]),
+        annotatedObjects.stream()
+            .sorted(Comparator.comparing(ObjectInfo::qualifiedName))
+            .toArray(ObjectInfo[]::new),
         enumInfos);
   }
 
   private List<ParameterInfo> parseParameters(ExecutableElement elt) {
     return elt.getParameters().stream()
-        .filter(param -> !param.asType().toString().equals("io.dagger.client.Client"))
+        .filter(param -> !param.asType().toString().equals("io.dagger.client.modules.core.Core"))
         .map(
             param -> {
               TypeMirror tm = param.asType();
@@ -311,10 +349,10 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
 
               if (hasDefaultPathAnnotation
                   && !Set.of(
-                          "io.dagger.client.Directory",
-                          "io.dagger.client.File",
-                          "io.dagger.client.GitRepository",
-                          "io.dagger.client.GitRef")
+                          "io.dagger.client.modules.core.Directory",
+                          "io.dagger.client.modules.core.File",
+                          "io.dagger.client.modules.core.GitRepository",
+                          "io.dagger.client.modules.core.GitRef")
                       .contains(tm.toString())) {
                 throw new IllegalArgumentException(
                     "Parameter "
@@ -338,7 +376,8 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
 
               Ignore ignoreAnnotation = param.getAnnotation(Ignore.class);
               var hasIgnoreAnnotation = ignoreAnnotation != null;
-              if (hasIgnoreAnnotation && !tm.toString().equals("io.dagger.client.Directory")) {
+              if (hasIgnoreAnnotation
+                  && !tm.toString().equals("io.dagger.client.modules.core.Directory")) {
                 throw new IllegalArgumentException(
                     "Parameter "
                         + param.getSimpleName()
@@ -383,20 +422,38 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
               .addException(DaggerQueryException.class)
               .addException(InterruptedException.class)
               .addCode(
-                  "$T module = $T.dag().module()", io.dagger.client.Module.class, Dagger.class);
+                  "$T module = $T.core().module()",
+                  io.dagger.client.modules.core.Module.class,
+                  Core.class);
       if (isNotBlank(moduleInfo.description())) {
         rm.addCode("\n    .withDescription($S)", moduleInfo.description());
       }
       for (var objectInfo : moduleInfo.objects()) {
         rm.addCode("\n    .withObject(")
-            .addCode("\n        $T.dag().typeDef().withObject($S", Dagger.class, objectInfo.name());
+            .addCode("\n        $T.core().typeDef().withObject($S", Core.class, objectInfo.name());
         if (isNotBlank(objectInfo.description())) {
           rm.addCode(
               ", new $T.WithObjectArguments().withDescription($S)",
               TypeDef.class,
               objectInfo.description());
         }
-        rm.addCode(")"); // end of dag().TypeDef().withObject(
+        rm.addCode(")"); // end of core().TypeDef().withObject(
+        if (objectInfo.isCollection()) {
+          rm.addCode("\n            .withCollection()");
+        }
+        for (var fieldInfo : objectInfo.fields()) {
+          if (fieldInfo.isKeys()) {
+            rm.addCode("\n            .withCollectionKeys($S)", fieldInfo.name());
+          }
+          if (fieldInfo.isDelta()) {
+            rm.addCode("\n            .withCollectionDelta($S)", fieldInfo.name());
+          }
+        }
+        for (var fnInfo : objectInfo.functions()) {
+          if (fnInfo.isGet()) {
+            rm.addCode("\n            .withCollectionGet($S)", fnInfo.name());
+          }
+        }
         for (var fnInfo : objectInfo.functions()) {
           rm.addCode("\n            .withFunction(")
               .addCode(withFunction(moduleInfo.enumInfos().keySet(), objectInfo, fnInfo))
@@ -407,7 +464,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
               .addCode("$S, ", fieldInfo.name())
               .addCode(DaggerType.of(fieldInfo.type()).toDaggerTypeDef());
           if (isNotBlank(fieldInfo.description())) {
-            rm.addCode(", new $T.WithFieldArguments()", io.dagger.client.TypeDef.class)
+            rm.addCode(", new $T.WithFieldArguments()", TypeDef.class)
                 .addCode(".withDescription($S)", fieldInfo.description());
           }
           rm.addCode(")");
@@ -423,20 +480,20 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
       }
       for (var enumInfo : moduleInfo.enumInfos().values()) {
         rm.addCode("\n    .withEnum(")
-            .addCode("\n        $T.dag().typeDef().withEnum($S", Dagger.class, enumInfo.name());
+            .addCode("\n        $T.core().typeDef().withEnum($S", Core.class, enumInfo.name());
         if (isNotBlank(enumInfo.description())) {
           rm.addCode(
               ", new $T.WithEnumArguments().withDescription($S)",
               TypeDef.class,
               enumInfo.description());
         }
-        rm.addCode(")"); // end of dag().TypeDef().withEnum(
+        rm.addCode(")"); // end of core().TypeDef().withEnum(
         for (var enumValue : enumInfo.values()) {
           rm.addCode("\n            .withEnumValue($S", enumValue.value());
           if (isNotBlank(enumValue.description())) {
             rm.addCode(
                 ", new $T.WithEnumValueArguments().withDescription($S)",
-                io.dagger.client.TypeDef.class,
+                TypeDef.class,
                 enumValue.description());
           }
           rm.addCode(")"); // end of .withEnumValue(
@@ -448,7 +505,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
 
       var im =
           MethodSpec.methodBuilder("invoke")
-              .addModifiers(Modifier.PRIVATE)
+              .addModifiers(Modifier.PRIVATE, Modifier.STATIC)
               .returns(JSON.class)
               .addException(Exception.class)
               .addParameter(JSON.class, "parentJson")
@@ -469,6 +526,11 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
         // But if there's a constructor we want to inline it under the function branch.
         if (objectInfo.constructor().isEmpty()) {
           ClassName objName = ClassName.bestGuess(objectInfo.qualifiedName());
+          // The Dang entrypoint declares a constructor for the entry object, which the legacy
+          // runtime constructs itself from its empty state.
+          im.beginControlFlow("if (fnName.equals(\"\"))")
+              .addStatement("return $T.from($S)", JSON.class, "{}")
+              .endControlFlow();
           im.addStatement("$T clazz = Class.forName($S)", Class.class, objectInfo.qualifiedName())
               .addStatement(
                   "$T obj = ($T) $T.fromJSON(parentJson, clazz)",
@@ -520,10 +582,17 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                               .returns(void.class)
                               .addParameter(String[].class, "args")
                               .beginControlFlow(
+                                  "if (args.length > 0 && args[0].equals($S))", "engine-call")
+                              .addStatement(
+                                  "$T.exit($T.engineCall(args, Entrypoint::invoke))",
+                                  System.class,
+                                  ModuleDispatcher.class)
+                              .endControlFlow()
+                              .beginControlFlow(
                                   "try ($T telemetry = new $T())", Telemetry.class, Telemetry.class)
                               .addStatement(
-                                  "new Entrypoint().dispatch($T.dag().currentFunctionCall())",
-                                  Dagger.class)
+                                  "new Entrypoint().dispatch($T.core().currentFunctionCall())",
+                                  Core.class)
                               .nextControlFlow("finally")
                               .addStatement("$T.dag().close()", Dagger.class)
                               .endControlFlow()
@@ -564,18 +633,18 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                               .addStatement("return null")
                               .nextControlFlow("catch ($T e)", InvocationTargetException.class)
                               .addStatement(
-                                  "fnCall.returnError($T.dag().error(e.getTargetException().getMessage()))",
-                                  Dagger.class)
+                                  "fnCall.returnError($T.core().error(e.getTargetException().getMessage()))",
+                                  Core.class)
                               .addStatement("throw e")
                               .nextControlFlow("catch ($T e)", DaggerExecException.class)
                               .addStatement(
-                                  "fnCall.returnError($T.dag().error(e.getMessage())"
+                                  "fnCall.returnError($T.core().error(e.getMessage())"
                                       + ".withValue(\"stdout\", $T.toJSON(e.getStdOut()))"
                                       + ".withValue(\"stderr\", $T.toJSON(e.getStdErr()))"
                                       + ".withValue(\"cmd\", $T.toJSON(e.getCmd()))"
                                       + ".withValue(\"exitCode\", $T.toJSON(e.getExitCode()))"
                                       + ".withValue(\"path\", $T.toJSON(e.getPath())))",
-                                  Dagger.class,
+                                  Core.class,
                                   JsonConverter.class,
                                   JsonConverter.class,
                                   JsonConverter.class,
@@ -584,8 +653,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                               .addStatement("throw e")
                               .nextControlFlow("catch ($T e)", Exception.class)
                               .addStatement(
-                                  "fnCall.returnError($T.dag().error(e.getMessage()))",
-                                  Dagger.class)
+                                  "fnCall.returnError($T.core().error(e.getMessage()))", Core.class)
                               .addStatement("throw e")
                               .endControlFlow()
                               .build())
@@ -594,6 +662,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
                       .build())
               .addFileComment("This class has been generated by dagger-java-sdk. DO NOT EDIT.")
               .indent("  ")
+              .addStaticImport(Core.class, "core")
               .addStaticImport(Dagger.class, "dag")
               .build();
 
@@ -694,6 +763,14 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
         .add(");\n");
     if (returnsVoid && !isConstructor) {
       code.addStatement("return $T.toJSON(null)", JsonConverter.class);
+    } else if (objectInfo.isCollection() && !isConstructor) {
+      CodeBlock value = returnType.valueForSerialization("res");
+      code.addStatement(
+          "return $T.collectionResult(parentJson, obj, $L, $T.toJSON($L))",
+          ModuleDispatcher.class,
+          value,
+          JsonConverter.class,
+          value);
     } else {
       code.addStatement(
           "return $T.toJSON($L)", JsonConverter.class, returnType.valueForSerialization("res"));
@@ -708,8 +785,8 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
     CodeBlock.Builder code =
         CodeBlock.builder()
             .add(
-                "\n                $T.dag().function($S,",
-                Dagger.class,
+                "\n                $T.core().function($S,",
+                Core.class,
                 isConstructor ? "" : fnInfo.name())
             .add("\n                    ")
             .add(
@@ -719,6 +796,20 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
             .add(")");
     if (isNotBlank(fnInfo.description())) {
       code.add("\n                    .withDescription($S)", fnInfo.description());
+    }
+    switch (fnInfo.cache()) {
+      case "" -> {}
+      case "never" ->
+          code.add("\n                    .withCachePolicy($T.Never)", FunctionCachePolicy.class);
+      case "session" ->
+          code.add(
+              "\n                    .withCachePolicy($T.PerSession)", FunctionCachePolicy.class);
+      default ->
+          code.add(
+              "\n                    .withCachePolicy($T.Default, new $T.WithCachePolicyArguments().withTimeToLive($S))",
+              FunctionCachePolicy.class,
+              io.dagger.client.modules.core.Function.class,
+              fnInfo.cache());
     }
     if (fnInfo.isCheck()) {
       code.add("\n                    .withCheck()");
@@ -740,7 +831,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
       boolean hasDefaultPath = parameterInfo.defaultPath().isPresent();
       boolean hasIgnore = parameterInfo.ignore().isPresent();
       if (hasDescription || hasDefaultValue || hasDefaultPath || hasIgnore) {
-        code.add(", new $T.WithArgArguments()", io.dagger.client.Function.class);
+        code.add(", new $T.WithArgArguments()", io.dagger.client.modules.core.Function.class);
         if (hasDescription) {
           code.add(".withDescription($S)", parameterInfo.description());
         }
@@ -783,11 +874,27 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
       JavaFile f = generate(moduleInfo);
 
       f.writeTo(processingEnv.getFiler());
+      writeDangEntrypoint(moduleInfo);
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
 
     return true;
+  }
+
+  /**
+   * Written beside the compiled classes rather than with the generated sources, which generation
+   * vendors as the module's Java sources.
+   */
+  private void writeDangEntrypoint(ModuleInfo moduleInfo) throws IOException {
+    FileObject file =
+        processingEnv
+            .getFiler()
+            .createResource(StandardLocation.CLASS_OUTPUT, "", "dagger/entrypoint/main.dang");
+    try (Writer writer = file.openWriter()) {
+      writer.write(
+          DangEntrypointRenderer.render(moduleInfo, System.getenv("_DAGGER_JAVA_SDK_MODULE_NAME")));
+    }
   }
 
   private static Boolean isNotBlank(String str) {
@@ -856,7 +963,7 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
         .build();
   }
 
-  private static boolean areSimilar(String str1, String str2) {
+  static boolean areSimilar(String str1, String str2) {
     return normalize(str1).equals(normalize(str2));
   }
 

@@ -15,6 +15,10 @@ public class Schema {
   private static final ComparableVersion NULLABLE_OBJECTS_VERSION =
       new ComparableVersion("1.0.0-beta.10");
 
+  /** Scalars the generator never emits, because Java already has them. */
+  static final List<String> BUILTIN_SCALARS =
+      List.of("Boolean", "String", "Float", "Int", "DateTime");
+
   public static class SchemaContainer {
 
     @JsonbProperty("__schema")
@@ -73,6 +77,12 @@ public class Schema {
     return version;
   }
 
+  /** Returns true if the named type is a GraphQL INTERFACE. */
+  public boolean isInterface(String typeName) {
+    return types != null
+        && types.stream().anyMatch(t -> typeName.equals(t.getName()) && t.isInterface());
+  }
+
   /**
    * Whether the engine resolves nullable object and interface fields, which lets generated methods
    * return {@code Optional}. Before v1.0.0-beta.10 the old lazy shape is generated instead.
@@ -105,8 +115,7 @@ public class Schema {
 
     filteredTypes.stream()
         .filter(t -> t.getKind() == TypeKind.SCALAR)
-        .filter(
-            t -> !List.of("Boolean", "String", "Float", "Int", "DateTime").contains(t.getName()))
+        .filter(t -> !BUILTIN_SCALARS.contains(t.getName()))
         .forEach(visitor::visitScalar);
 
     filteredTypes.stream()

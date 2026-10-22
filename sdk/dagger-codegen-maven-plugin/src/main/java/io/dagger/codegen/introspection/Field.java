@@ -81,6 +81,17 @@ public class Field {
     this.parentObject = parentObject;
   }
 
+  /** The module that contributes this field, or null when the engine core owns it. */
+  @JsonbTransient
+  public String getOwningModule() {
+    return Directive.getSourceMapModule(directives);
+  }
+
+  @JsonbTransient
+  public boolean isCheck() {
+    return directives != null && directives.stream().anyMatch(d -> "check".equals(d.getName()));
+  }
+
   public List<Directive> getDirectives() {
     return directives;
   }

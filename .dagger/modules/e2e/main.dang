@@ -1,11 +1,11 @@
 """
 End-to-end checks for the Java SDK helper module.
 
-Every check here calls the java-sdk module, which needs an engine with
-dagger/dagger#13992. The module is deliberately not installed in dagger.toml, so
-a released-engine `dagger check` never reaches it; `engine-e-2-e:dev-sdk-check`
-runs `dagger -m .dagger/modules/e2e check` inside an engine built from that
-change.
+Every check here calls the java-sdk module, which needs an engine at its floor,
+v1.0.0-beta.18, or later. dagger.toml does not install this module, so
+`dagger check` runs these checks only through `engine-e2e:floor-check`, on an
+engine built from the floor's commit. AGENTS.md has the commands that run them
+on the local engine.
 """
 type E2e {
   let fixtureRoot: String! = ".dagger/modules/e2e/fixtures"
@@ -14,21 +14,26 @@ type E2e {
   # config-only stub.
   let outputRoot: String! = ".dagger/modules/e2e/out"
 
-  # The Java identifiers in nullableReturnSource — package
-  # io.dagger.modules.newapp, class NewApp — are derived from this name by hand
-  # and have to be changed with it. Checks that just need *a* module reuse the
+  # The Java identifiers in nullableReturnSource, coreClientSource and
+  # dagSource — package io.dagger.modules.newapp, class NewApp — and
+  # newModuleSourcePath are derived from this name by hand and have to be
+  # changed with it. Checks that just need *a* module reuse the
   # name so they share one vendored SDK build: the SDK jars are installed under
   # a per-module Maven version, so a second name costs a second build.
   let newModuleName: String! = "new-app"
   let newModulePath: String! = outputRoot + "/" + newModuleName
+  let newModuleSourcePath: String! = "src/main/java/io/dagger/modules/newapp/NewApp.java"
+  # The Java identifiers in clientAppSource are derived from this name by hand.
   let clientAppName: String! = "client-app"
   let clientAppPath: String! = outputRoot + "/" + clientAppName
+  let clientAppSourcePath: String! = "src/main/java/io/dagger/modules/clientapp/ClientApp.java"
 
   let lookupModulePath: String! = fixtureRoot + "/lookup/app"
   let lookupNestedPath: String! = lookupModulePath + "/nested"
   # A module using a different SDK, with no pom.xml: never a Java client root.
   let nonJavaModulePath: String! = fixtureRoot + "/lookup/not-java"
   let clientDepPath: String! = fixtureRoot + "/clients/dep"
+  let clientDepPackagePath: String! = "clients/client-dep/src/main/java/io/dagger/client/modules/clientdep"
 
   # A git client, because a local module source carries no commit and so can
   # never show a pin, at an immutable tag so the commit asserted on cannot move.
@@ -50,7 +55,48 @@ type E2e {
   let defaultsAppPath: String! = outputRoot + "/" + defaultsAppName
 
   let vendoredBindings: String! = "sdk/src/main/java/io/dagger/client/Dagger.java"
+  let corePackagePath: String! = "clients/core/src/main/java/io/dagger/client/modules/core"
   let entrypointPath: String! = "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"
+  let dangEntrypointPath: String! = "src/generated/dang/entrypoint"
+
+  """
+  The manifest of a module with the Dang entrypoint: its name and the
+  entrypoint only.
+  """
+  let entrypointManifest(name: String!): String! {
+    "name = \"" + name + "\"\n\n[entrypoint]\n  kind = \"dang\"\n  source = \"./" + dangEntrypointPath + "\"\n"
+  }
+
+  let floorVersion: String! = "v1.0.0-beta.18"
+
+  """
+  Checks of a module generated with the Dang entrypoint, through the CLI.
+  """
+  entrypoint: EntrypointChecks! {
+    EntrypointChecks()
+  }
+
+  """
+  Checks of a module whose objects are collections, through the CLI.
+  """
+  collections: CollectionChecks! {
+    CollectionChecks()
+  }
+
+  """
+  Checks of modules that call other modules through their clients, through
+  the CLI.
+  """
+  clients: ClientChecks! {
+    ClientChecks()
+  }
+
+  """
+  Checks of clients generated into a plain Maven project.
+  """
+  standalone: StandaloneChecks! {
+    StandaloneChecks()
+  }
 
   """
   Fail the current check when a condition is false.
@@ -135,12 +181,13 @@ type E2e {
 
   """
   generateScope initializes a scope that has no config: the template, a
-  dagger-module.toml from the manifest builder naming this repository's runtime,
-  and the generated bindings and entrypoint, all under the scope, with the
-  workspace cwd and the files already there untouched.
+  dagger-module.toml that names the Dang entrypoint and nothing else, the
+  generated bindings, and both entrypoints, the Java one and the Dang one, all
+  under the scope, with the workspace cwd and the files already there untouched.
 
   Generating the result again changes nothing, so generation is reproducible and
-  a manifest that already says the right thing is not rewritten.
+  a manifest that already says the right thing is not rewritten. A deleted
+  generated entrypoint is generated again.
   """
   generateScopeInitCheck(ws: Workspace!): Void @check {
     let scoped = ws
@@ -159,7 +206,10 @@ type E2e {
     assertAdded(changes, newModulePath + "/pom.xml")
     assertAdded(changes, newModulePath + "/src/main/java/io/dagger/modules/newapp/NewApp.java")
     assertAdded(changes, newModulePath + "/" + vendoredBindings)
+    assertAdded(changes, newModulePath + "/" + corePackagePath + "/Core.java")
     assertAdded(changes, newModulePath + "/" + entrypointPath)
+    assertAdded(changes, newModulePath + "/" + dangEntrypointPath + "/main.dang")
+    assertAdded(changes, newModulePath + "/" + dangEntrypointPath + "/build.dang")
     assert(
       changes.modifiedPaths.length == 0,
       "initializing a scope modified existing files: " + changes.modifiedPaths.join(", "),
@@ -169,11 +219,12 @@ type E2e {
       "initializing a scope removed existing files: " + changes.removedPaths.join(", "),
     )
 
-    assertContainsAll(changes.after.file(newModulePath + "/dagger-module.toml").contents, [
-      "name = \"" + newModuleName + "\"",
-      "engineVersion = \"",
-      "[runtime]",
-      "source = \"github.com/dagger/java-sdk/runtime\"",
+    let manifest = changes.after.file(newModulePath + "/dagger-module.toml").contents
+    assert(manifest == entrypointManifest(newModuleName), "the manifest is not the entrypoint manifest:\n" + manifest)
+    assertContainsAll(changes.after.file(newModulePath + "/" + dangEntrypointPath + "/build.dang").contents, [
+      "type JavaModuleBuild",
+      "maven:3.9.9-eclipse-temurin-21-alpine@sha256:",
+      "eclipse-temurin:21-jre-alpine-3.21@sha256:",
     ])
     assertContainsAll(changes.after.file(newModulePath + "/pom.xml").contents, [
       "<dagger.proc>none</dagger.proc>",
@@ -185,6 +236,78 @@ type E2e {
       .withWorkdir(".")
       .changes(generated.withWorkdir("."))
     assert(again.isEmpty, "regenerating an unchanged module should change nothing")
+
+    let recovered = javaSdk
+      .generateScope(
+        generated.withoutFile("/" + newModulePath + "/" + dangEntrypointPath + "/main.dang"),
+        isModule: true,
+        name: newModuleName,
+        clients: [],
+      )
+      .withWorkdir(".")
+      .changes(generated.withWorkdir("."))
+    assert(recovered.isEmpty, "regenerating should restore a deleted generated entrypoint")
+
+    null
+  }
+
+  """
+  With dangEntrypoint = false, a new module names this repository's runtime and
+  gets no Dang entrypoint.
+  """
+  generateScopeRuntimeCheck(ws: Workspace!): Void @check {
+    let generated = javaSdk(dangEntrypoint: false)
+      .generateScope(ws.withWorkdir(newModulePath), isModule: true, name: newModuleName, clients: [])
+    assertContainsAll(generated.file("/" + newModulePath + "/dagger-module.toml").contents, [
+      "name = \"" + newModuleName + "\"",
+      "engineVersion = \"",
+      "[runtime]",
+      "source = \"github.com/dagger/java-sdk/runtime\"",
+    ])
+    assertNotContains(generated.file("/" + newModulePath + "/dagger-module.toml").contents, "[entrypoint]", "a module on the runtime got an entrypoint")
+    assert(
+      generated.directory("/" + newModulePath).exists(dangEntrypointPath) == false,
+      "a module on the runtime got a Dang entrypoint",
+    )
+    null
+  }
+
+  """
+  An existing module keeps the runtime it has until dangEntrypoint = true
+  migrates it; a module on the entrypoint keeps it, and dangEntrypoint = false
+  is refused for it rather than leaving a manifest that names a stale
+  entrypoint. A module with the entrypoint refuses the manifest settings its
+  manifest has no place for.
+  """
+  entrypointSelectionCheck(ws: Workspace!): Void @check {
+    let manifestPath = "/" + newModulePath + "/dagger-module.toml"
+    let onRuntime = javaSdk(dangEntrypoint: false)
+      .generateScope(ws.withWorkdir(newModulePath), isModule: true, name: newModuleName, clients: [])
+    let kept = javaSdk.generateScope(onRuntime, isModule: true, name: newModuleName, clients: [])
+    assertContains(kept.file(manifestPath).contents, "[runtime]", "an existing module left its runtime without dangEntrypoint = true")
+
+    let migrated = javaSdk(dangEntrypoint: true)
+      .generateScope(onRuntime, isModule: true, name: newModuleName, clients: [])
+    assert(
+      migrated.file(manifestPath).contents == entrypointManifest(newModuleName),
+      "dangEntrypoint = true did not migrate the module:\n" + migrated.file(manifestPath).contents,
+    )
+    let regenerated = javaSdk.generateScope(migrated, isModule: true, name: newModuleName, clients: [])
+    assert(
+      regenerated.withWorkdir(".").changes(migrated.withWorkdir(".")).isEmpty,
+      "a module on the entrypoint did not stay on it",
+    )
+
+    let refused = javaSdk(dangEntrypoint: false)
+      .generateScope(migrated, isModule: true, name: newModuleName, clients: [])
+      .cwd rescue { err: Error => err.message }
+    assertContains(refused, "set dangEntrypoint = true", "moving a module off its entrypoint was not refused: " + refused)
+
+    let included = onRuntime.withNewFile(manifestPath, onRuntime.file(manifestPath).contents.replace("[runtime]", "include = [\"../shared\"]\n\n[runtime]"))
+    let withInclude = javaSdk(dangEntrypoint: true)
+      .generateScope(included, isModule: true, name: newModuleName, clients: [])
+      .cwd rescue { err: Error => err.message }
+    assertContains(withInclude, "cannot carry (include)", "an include the entrypoint manifest drops was not refused: " + withInclude)
 
     null
   }
@@ -238,14 +361,13 @@ type E2e {
   In a module scope the client set becomes the module's dependency set: the
   client is recorded in the manifest and its types reach the generated bindings,
   and a client that is no longer requested is dropped from both. A scope without
-  a module is left alone, and standalone clients are refused rather than
-  silently skipped.
+  a module and without clients is left alone.
   """
   generateScopeClientsCheck(ws: Workspace!): Void @check {
     let root = ws.withWorkdir(".")
     let scoped = ws.withWorkdir(clientAppPath)
     let manifestPath = clientAppPath + "/dagger-module.toml"
-    let bindingsDir = clientAppPath + "/sdk/src/generated/java/io/dagger/client"
+    let bindingsDir = clientAppPath + "/" + corePackagePath
     let client = ws.moduleSource("/" + clientDepPath)
 
     let untouched = javaSdk
@@ -254,12 +376,7 @@ type E2e {
       .changes(root)
     assert(untouched.isEmpty, "a scope without a module should not be generated")
 
-    let refused = javaSdk
-      .generateScope(scoped, isModule: false, name: clientAppName, clients: [client])
-      .cwd rescue "raised"
-    assert(refused == "raised", "generateScope should refuse standalone clients")
-
-    let withClient = javaSdk.generateScope(scoped, isModule: true, name: clientAppName, clients: [client])
+    let withClient = javaSdk(dangEntrypoint: false).generateScope(scoped, isModule: true, name: clientAppName, clients: [client])
     assertContainsAll(withClient.file("/" + manifestPath).contents, [
       "[[dependencies]]",
       "name = \"client-dep\"",
@@ -281,7 +398,7 @@ type E2e {
       "no ClientDep binding under " + bindingsDir + ", only: " + bindings.join(", "),
     )
 
-    let withoutClient = javaSdk.generateScope(withClient, isModule: true, name: clientAppName, clients: [])
+    let withoutClient = javaSdk(dangEntrypoint: false).generateScope(withClient, isModule: true, name: clientAppName, clients: [])
     assertNotContains(
       withoutClient.file("/" + manifestPath).contents,
       "client-dep",
@@ -297,6 +414,89 @@ type E2e {
   }
 
   """
+  A module on the Dang entrypoint gets one package per client under
+  clients/<name>, which its code calls, and a manifest with no dependencies.
+  The client loads its target by its path from the workspace root, and core
+  holds none of its types. The pom's clients profile compiles the package, so
+  a plain Maven build of the module compiles too. Dropping the client drops
+  its package and the profile, which leaves the pom as it was.
+  """
+  entrypointClientsCheck(ws: Workspace!): Void @check {
+    let client = ws.moduleSource("/" + clientDepPath)
+    let appRoot = "/" + clientAppPath
+    let scaffolded = javaSdk.generateScope(ws.withWorkdir(clientAppPath), isModule: true, name: clientAppName, clients: [])
+    let generated = javaSdk.generateScope(
+      scaffolded.withNewFile(appRoot + "/" + clientAppSourcePath, clientAppSource),
+      isModule: true,
+      name: clientAppName,
+      clients: [client],
+    )
+    let module = generated.directory(appRoot)
+    assert(
+      module.file("dagger-module.toml").contents == entrypointManifest(clientAppName),
+      "the manifest of a module with a client is not its name and entrypoint:\n" + module.file("dagger-module.toml").contents,
+    )
+    assertContains(
+      module.file(clientDepPackagePath + "/ClientDep.java").contents,
+      "ModuleTarget.local(\"/" + clientDepPath + "\")",
+      "the client does not load its target by its path from the workspace root",
+    )
+    assert(module.exists(corePackagePath + "/ClientDep.java") == false, "core holds a type of the client")
+    assertNotContains(module.file(corePackagePath + "/Core.java").contents, "clientDep", "core enters the client")
+    assertContains(
+      module.file("pom.xml").contents,
+      "<source>clients/client-dep/src/main/java</source>",
+      "the pom does not compile the client's package",
+    )
+    let built = mavenCompile(module)
+    assert(built.exitCode == 0, "the module did not compile against its client:\n" + built.stdout)
+
+    let dropped = javaSdk.generateScope(
+      generated.withNewFile(appRoot + "/" + clientAppSourcePath, scaffolded.file(appRoot + "/" + clientAppSourcePath).contents),
+      isModule: true,
+      name: clientAppName,
+      clients: [],
+    )
+    assert(dropped.directory(appRoot).exists("clients/client-dep") == false, "a dropped client kept its package")
+    assert(
+      dropped.file(appRoot + "/pom.xml").contents == scaffolded.file(appRoot + "/pom.xml").contents,
+      "dropping the last client did not leave the pom as it was:\n" + dropped.file(appRoot + "/pom.xml").contents,
+    )
+    null
+  }
+
+  """
+  A module on the runtime moves to the Dang entrypoint with its clients: each
+  dependency a client covers leaves the manifest, and a dependency no client
+  covers is refused by name, before anything is written.
+  """
+  entrypointMigrationCheck(ws: Workspace!): Void @check {
+    let client = ws.moduleSource("/" + clientDepPath)
+    let appRoot = "/" + clientAppPath
+    let scaffolded = javaSdk(dangEntrypoint: false)
+      .generateScope(ws.withWorkdir(clientAppPath), isModule: true, name: clientAppName, clients: [client])
+    assertContains(scaffolded.file(appRoot + "/dagger-module.toml").contents, "name = \"client-dep\"", "the module on the runtime has no dependency to migrate")
+
+    let migrated = javaSdk(dangEntrypoint: true)
+      .generateScope(scaffolded, isModule: true, name: clientAppName, clients: [client])
+    assert(
+      migrated.file(appRoot + "/dagger-module.toml").contents == entrypointManifest(clientAppName),
+      "a dependency covered by a client stayed in the manifest:\n" + migrated.file(appRoot + "/dagger-module.toml").contents,
+    )
+    assert(migrated.directory(appRoot).exists(clientDepPackagePath + "/ClientDep.java"), "the migrated module has no package for its client")
+
+    let refused = javaSdk(dangEntrypoint: true)
+      .generateScope(scaffolded, isModule: true, name: clientAppName, clients: [])
+      .cwd rescue { err: Error => err.message }
+    assertContains(
+      refused,
+      "dagger-module.toml depends on client-dep, which the scope has no client for",
+      "a dependency no client covers was not refused by name: " + refused,
+    )
+    null
+  }
+
+  """
   A client constructor argument a caller may omit — non-null with a default the
   engine fills in, or nullable — is bound as an optional argument, not as a
   parameter. The module source constructs the client with none of them and with
@@ -305,7 +505,7 @@ type E2e {
   """
   clientOptionalArgsCheck(ws: Workspace!): Void @check {
     let client = ws.moduleSource("/" + clientDefaultsPath)
-    let scaffolded = javaSdk.generateScope(
+    let scaffolded = javaSdk(dangEntrypoint: false).generateScope(
       ws.withWorkdir(defaultsAppPath),
       isModule: true,
       name: defaultsAppName,
@@ -315,9 +515,9 @@ type E2e {
       "/" + defaultsAppPath + "/src/main/java/io/dagger/modules/defaultsapp/DefaultsApp.java",
       clientOptionalArgsSource,
     )
-    let bindings = javaSdk
+    let bindings = javaSdk(dangEntrypoint: false)
       .generateScope(withSource, isModule: true, name: defaultsAppName, clients: [client])
-      .file("/" + defaultsAppPath + "/sdk/src/generated/java/io/dagger/client/Client.java")
+      .file("/" + defaultsAppPath + "/" + corePackagePath + "/Core.java")
       .contents
 
     assertContainsAll(bindings, [
@@ -344,7 +544,7 @@ type E2e {
     let scoped = ws.withWorkdir(gitAppPath)
     let manifestPath = "/" + gitAppPath + "/dagger-module.toml"
 
-    let unlocked = javaSdk.generateScope(scoped, isModule: true, name: gitAppName, clients: [client])
+    let unlocked = javaSdk(dangEntrypoint: false).generateScope(scoped, isModule: true, name: gitAppName, clients: [client])
     assertContainsAll(unlocked.file(manifestPath).contents, [
       "name = \"" + gitClientName + "\"",
       "source = \"" + gitClientRef + "\"",
@@ -355,7 +555,7 @@ type E2e {
       "an unlocked generation should not pin a client",
     )
 
-    let locked = javaSdk(lock: true)
+    let locked = javaSdk(lock: true, dangEntrypoint: false)
       .generateScope(unlocked, isModule: true, name: gitAppName, clients: [client])
     assertContains(
       locked.file(manifestPath).contents,
@@ -363,7 +563,7 @@ type E2e {
       "a locked generation should record the commit the client resolved to",
     )
 
-    let unlockedAgain = javaSdk.generateScope(locked, isModule: true, name: gitAppName, clients: [client])
+    let unlockedAgain = javaSdk(dangEntrypoint: false).generateScope(locked, isModule: true, name: gitAppName, clients: [client])
     assertNotContains(
       unlockedAgain.file(manifestPath).contents,
       "pin =",
@@ -407,13 +607,213 @@ type E2e {
     null
   }
 
-  """A module whose only function returns a nullable object."""
-  let nullableReturnSource: String! {
+  """
+  A module compiles against the core client package: core() over the session
+  Dagger.dag() holds, core(session) over a session it names, and core types
+  imported from io.dagger.client.modules.core. Generation writes core under
+  clients/core and nothing under sdk/src/generated, the entrypoint the
+  annotation processor writes enters core by name, and a plain Maven build of
+  the module compiles. A pom.xml that still compiles sdk/src/generated/java is
+  refused by name.
+  """
+  coreClientCheck(ws: Workspace!): Void @check {
+    let scaffolded = javaSdk.generateScope(ws.withWorkdir(newModulePath), isModule: true, name: newModuleName, clients: [])
+    let generated = javaSdk.generateScope(
+      scaffolded.withNewFile("/" + newModulePath + "/" + newModuleSourcePath, coreClientSource),
+      isModule: true,
+      name: newModuleName,
+      clients: [],
+    )
+    let module = generated.directory("/" + newModulePath)
+    assert(module.exists(corePackagePath + "/Core.java"), "core was not generated under " + corePackagePath)
+    assert(module.exists("sdk/src/generated") == false, "core was generated under sdk/src/generated too")
+    assertContainsAll(module.file(entrypointPath).contents, [
+      "import static io.dagger.client.modules.core.Core.core;",
+      "core().module()",
+    ])
+    let built = mavenCompile(module)
+    assert(built.exitCode == 0, "the module did not compile against the core client:\n" + built.stdout)
+
+    let pomPath = "/" + newModulePath + "/pom.xml"
+    let oldPom = generated.withNewFile(
+      pomPath,
+      generated.file(pomPath).contents.replace(
+        "<source>clients/core/src/main/java</source>",
+        "<source>sdk/src/generated/java</source>",
+      ),
+    )
+    let refused = javaSdk
+      .generateScope(oldPom, isModule: true, name: newModuleName, clients: [])
+      .cwd rescue { err: Error => err.message }
+    assertContains(
+      refused,
+      "pom.xml does not compile the core client",
+      "a pom.xml without the core client source root was not refused: " + refused,
+    )
+    null
+  }
+
+  """
+  Module code written against dag() as the core API does not compile, so the
+  break shows when the module is built, not when a function runs:
+  Dagger.dag() returns the Session, which has no container(), and the core
+  types left io.dagger.client. Generation refuses the module, and a plain
+  Maven build fails in the compiler with errors that name the missing method
+  on the Session and the missing class.
+  """
+  dagRemovedCheck(ws: Workspace!): Void @check {
+    let generated = javaSdk.generateScope(ws.withWorkdir(newModulePath), isModule: true, name: newModuleName, clients: [])
+    let withDag = generated.withNewFile("/" + newModulePath + "/" + newModuleSourcePath, dagSource)
+    let refused = javaSdk
+      .generateScope(withDag, isModule: true, name: newModuleName, clients: [])
+      .cwd rescue { err: Error => "refused: " + err.message }
+    assert(refused.hasPrefix("refused: "), "generation accepted module code written against dag()")
+
+    let built = mavenCompile(withDag.directory("/" + newModulePath))
+    assert(built.exitCode != 0, "module code written against dag() compiled")
+    assertContainsAll(built.stdout, [
+      "COMPILATION ERROR",
+      "cannot find symbol",
+      "symbol:   method container()",
+      "location: class io.dagger.client.Session",
+      "symbol:   class Container",
+      "location: package io.dagger.client",
+    ])
+    null
+  }
+
+  """
+  A plain Maven compile of a generated module, as an IDE and the engine's
+  build run it: the vendored SDK, the core client and the module's own code
+  from source.
+  """
+  let mavenCompile(module: Directory!): Container! {
+    container
+      .from("maven:3.9.9-eclipse-temurin-21-alpine@sha256:4cbb8bf76c46b97e028998f2486ed014759a8e932480431039bdb93dffe6813e")
+      .withoutEntrypoint
+      .withMountedCache("/root/.m2", cacheVolume("e2e-maven-m2"))
+      .withDirectory("/module", module, exclude: ["**/target/**"])
+      .withWorkdir("/module")
+      .withExec(["mvn", "compile", "--no-transfer-progress"], expect: ReturnType.ANY)
+  }
+
+  """
+  floorCheck's precondition, not a check of its own: the engine running these
+  checks is the floor release, by the version it reports itself. A release
+  reports its build after a "+", which is not part of the version; a dev or
+  later build is refused. engine-e2e's floorCheck calls it before the checks, so
+  that check cannot pass on another engine.
+  """
+  assertFloorEngine: Void {
+    if ((version.split("+")[0] ?? "") != floorVersion) {
+      raise "the floor is " + floorVersion + " and the engine running these checks is " + version +
+        ": a pass would not prove the floor. Run `dagger check engine-e2e:floor-check`, which provisions its engine"
+    }
+    null
+  }
+
+  """
+  The SDK refuses an engine release older than its floor before it generates
+  anything, and names the floor and the version it found. Every other version
+  passes, a development build and one it cannot read among them, so an
+  unexpected format never blocks a user. On an engine the SDK refuses,
+  generation itself refuses; engine-e2e's belowFloorCheck runs this check on
+  one.
+  """
+  engineFloorRefusalCheck(ws: Workspace!): Void @check {
+    let refused = [
+      "v1.0.0-beta.17", "v1.0.0-beta.17+0da36c8d", "v1.0.0-beta.11", "v1.0.0-beta.9",
+      "v1.0.0-alpha.20", "v0.21.9",
+    ]
+    let accepted = [
+      "v1.0.0-beta.18", "v1.0.0-beta.18+249edbd6", "v1.0.0-beta.19", "v1.0.0-rc.1", "v1.0.0",
+      "v1.0.1", "v2.0.0-beta.1", "v0.21.1-20260529020034-dev-b2f595b50044", "v1.0.0-dev.3", "devel", "",
+    ]
+    refused.each { engine =>
+      let refusal = javaSdk.engineRefusal(engine)
+      let wants = ["needs Dagger engine " + floorVersion + " or later", "this engine is " + engine + ".", "Upgrade the engine"]
+      wants.each { want =>
+        assertContains(refusal, want, "engine \"" + engine + "\": the refusal does not say \"" + want + "\": " + refusal)
+      }
+    }
+    accepted.each { engine =>
+      let refusal = javaSdk.engineRefusal(engine)
+      assert(refusal == "", "the SDK refused engine \"" + engine + "\": " + refusal)
+    }
+    let refusal = javaSdk.engineRefusal(version)
+    if (refusal != "") {
+      let said = javaSdk
+        .generateScope(ws.withWorkdir(newModulePath), isModule: true, name: newModuleName, clients: [])
+        .cwd rescue {
+          err: Error => err.message
+        }
+      assert(said.contains(refusal), "generation on engine " + version + ", which the SDK refuses, said: " + said)
+    }
+    null
+  }
+
+  """
+  A module that reaches core over the session Dagger.dag() holds and over a
+  session it names, with a core type in its signature.
+  """
+  let coreClientSource: String! {
+    "package io.dagger.modules.newapp;\n"
+      + "\n"
+      + "import static io.dagger.client.modules.core.Core.core;\n"
+      + "\n"
+      + "import io.dagger.client.Dagger;\n"
+      + "import io.dagger.client.exception.DaggerQueryException;\n"
+      + "import io.dagger.client.modules.core.Container;\n"
+      + "import io.dagger.client.modules.core.Core;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "import java.util.concurrent.ExecutionException;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class NewApp {\n"
+      + "  @Function\n"
+      + "  public Container base() {\n"
+      + "    return core().container().from(\"alpine:3.22\");\n"
+      + "  }\n"
+      + "\n"
+      + "  @Function\n"
+      + "  public String release()\n"
+      + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
+      + "    Core api = Core.core(Dagger.dag());\n"
+      + "    return api.container().from(\"alpine:3.22\").file(\"/etc/alpine-release\").contents();\n"
+      + "  }\n"
+      + "}\n"
+  }
+
+  """
+  A module written against dag() as the core API, with a core type imported
+  from the package it left.
+  """
+  let dagSource: String! {
     "package io.dagger.modules.newapp;\n"
       + "\n"
       + "import static io.dagger.client.Dagger.dag;\n"
       + "\n"
-      + "import io.dagger.client.Directory;\n"
+      + "import io.dagger.client.Container;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class NewApp {\n"
+      + "  @Function\n"
+      + "  public Container base() {\n"
+      + "    return dag().container().from(\"alpine:3.22\");\n"
+      + "  }\n"
+      + "}\n"
+  }
+
+  """A module whose only function returns a nullable object."""
+  let nullableReturnSource: String! {
+    "package io.dagger.modules.newapp;\n"
+      + "\n"
+      + "import static io.dagger.client.modules.core.Core.core;\n"
+      + "\n"
+      + "import io.dagger.client.modules.core.Directory;\n"
       + "import io.dagger.module.annotation.Function;\n"
       + "import io.dagger.module.annotation.Object;\n"
       + "import java.util.Optional;\n"
@@ -425,7 +825,30 @@ type E2e {
       + "    if (!found) {\n"
       + "      return Optional.empty();\n"
       + "    }\n"
-      + "    return Optional.of(dag().directory().withNewFile(\"found\", \"\"));\n"
+      + "    return Optional.of(core().directory().withNewFile(\"found\", \"\"));\n"
+      + "  }\n"
+      + "}\n"
+  }
+
+  """
+  A module that calls its client.
+  """
+  let clientAppSource: String! {
+    "package io.dagger.modules.clientapp;\n"
+      + "\n"
+      + "import static io.dagger.client.modules.clientdep.ClientDep.clientDep;\n"
+      + "\n"
+      + "import io.dagger.client.exception.DaggerQueryException;\n"
+      + "import io.dagger.module.annotation.Function;\n"
+      + "import io.dagger.module.annotation.Object;\n"
+      + "import java.util.concurrent.ExecutionException;\n"
+      + "\n"
+      + "@Object\n"
+      + "public class ClientApp {\n"
+      + "  @Function\n"
+      + "  public String greeting()\n"
+      + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
+      + "    return clientDep().greeting();\n"
       + "  }\n"
       + "}\n"
   }
@@ -437,10 +860,10 @@ type E2e {
   let clientOptionalArgsSource: String! {
     "package io.dagger.modules.defaultsapp;\n"
       + "\n"
-      + "import static io.dagger.client.Dagger.dag;\n"
+      + "import static io.dagger.client.modules.core.Core.core;\n"
       + "\n"
-      + "import io.dagger.client.Client;\n"
       + "import io.dagger.client.exception.DaggerQueryException;\n"
+      + "import io.dagger.client.modules.core.Core;\n"
       + "import io.dagger.module.annotation.Function;\n"
       + "import io.dagger.module.annotation.Object;\n"
       + "import java.util.concurrent.ExecutionException;\n"
@@ -450,15 +873,15 @@ type E2e {
       + "  @Function\n"
       + "  public String defaults()\n"
       + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
-      + "    return dag().clientDefaults().greeting();\n"
+      + "    return core().clientDefaults().greeting();\n"
       + "  }\n"
       + "\n"
       + "  @Function\n"
       + "  public String overridden()\n"
       + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
-      + "    return dag()\n"
+      + "    return core()\n"
       + "        .clientDefaults(\n"
-      + "            new Client.ClientDefaultsArguments().withName(\"java\").withTimes(2).withSuffix(\"!\"))\n"
+      + "            new Core.ClientDefaultsArguments().withName(\"java\").withTimes(2).withSuffix(\"!\"))\n"
       + "        .greeting();\n"
       + "  }\n"
       + "}\n"

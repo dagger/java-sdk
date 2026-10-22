@@ -11,7 +11,11 @@ public class DaggerQueryException extends Exception {
   }
 
   public DaggerQueryException(GraphQLError error) {
-    super(error.getMessage());
+    this(error.getMessage(), error);
+  }
+
+  protected DaggerQueryException(String message, GraphQLError error) {
+    super(message);
     this.error = error;
   }
 

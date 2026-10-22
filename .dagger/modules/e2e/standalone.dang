@@ -1,0 +1,125 @@
+"""
+Checks of clients generated into a plain Maven project, a scope with a pom.xml
+and no module. engine-e2e's standalone-client-check runs the project's program
+with java -jar, which takes a session of its own.
+"""
+type StandaloneChecks {
+  let appPath: String! = ".dagger/modules/e2e/fixtures/standalone/app"
+  let clientDepPath: String! = ".dagger/modules/e2e/fixtures/clients/dep"
+  let clientDepDir: String! = "clients/client-dep"
+  let moduleAppPath: String! = ".dagger/modules/e2e/out/client-app"
+
+  let assert(condition: Boolean!, message: String!): Void {
+    if (condition == false) { raise message }
+    null
+  }
+
+  """
+  The plain project generated with the client-dep client, as the engine asks
+  for a scope with no module.
+  """
+  let generated(ws: Workspace!): Workspace! {
+    javaSdk.generateScope(
+      ws.withWorkdir(appPath),
+      isModule: false,
+      name: "",
+      clients: [ws.moduleSource("/" + clientDepPath)],
+    )
+  }
+
+  """
+  A plain project with a client gets the tree a module gets, sdk/, core and
+  the client's package, and no module config, Java entrypoint or Dang
+  entrypoint. Its pom.xml gains the SDK and clients profiles, and nothing else
+  changes. Core is the client-facing one, so a program reaches the host.
+  Generating again changes nothing. A scope without a pom.xml is refused, and
+  one without clients is left alone.
+  """
+  pub generateCheck(ws: Workspace!): Void @check {
+    let root = ws.withWorkdir(".")
+    let result = generated(ws)
+    assert(result.cwd == ws.withWorkdir(appPath).cwd, "generateScope must not change the workspace cwd")
+    let changes = result.withWorkdir(".").changes(root)
+    let app = result.directory("/" + appPath)
+    [
+      "sdk/src/main/java/io/dagger/client/Dagger.java",
+      "clients/core/src/main/java/io/dagger/client/modules/core/Core.java",
+      "clients/core/src/main/java/io/dagger/client/modules/core/Host.java",
+      clientDepDir + "/src/main/java/io/dagger/client/modules/clientdep/ClientDep.java",
+    ].each { path => assert(app.exists(path), "the plain project has no " + path) }
+    ["dagger-module.toml", "dagger.json", "src/generated"].each { path =>
+      assert(app.exists(path) == false, "the plain project got " + path + ", which only a module has")
+    }
+    assert(
+      changes.modifiedPaths.length == 1 and (changes.modifiedPaths[0] ?? "") == appPath + "/pom.xml",
+      "generation modified more than the pom.xml: " + changes.modifiedPaths.join(", "),
+    )
+    assert(changes.removedPaths.length == 0, "generation removed files: " + changes.removedPaths.join(", "))
+    let pom = app.file("pom.xml").contents
+    [
+      "<id>dagger-sdk</id>",
+      "<source>sdk/src/main/java</source>",
+      "<source>clients/core/src/main/java</source>",
+      "<id>dagger-clients</id>",
+      "<source>" + clientDepDir + "/src/main/java</source>",
+    ].each { want => assert(pom.contains(want), "the pom.xml does not say " + want + ":\n" + pom) }
+
+    let again = generated(result.withWorkdir(appPath)).withWorkdir(".").changes(result.withWorkdir("."))
+    assert(again.isEmpty, "regenerating an unchanged plain project changed: " + (again.modifiedPaths + again.addedPaths + again.removedPaths).join(", "))
+
+    let bare = ws.withNewDirectory("/" + moduleAppPath, directory).withWorkdir(moduleAppPath)
+    let refused = javaSdk
+      .generateScope(bare, isModule: false, name: "", clients: [ws.moduleSource("/" + clientDepPath)])
+      .cwd rescue { err: Error => err.message }
+    assert(refused.contains("has no pom.xml"), "a scope without a pom.xml was not refused: " + refused)
+
+    let untouched = javaSdk
+      .generateScope(ws.withWorkdir(appPath), isModule: false, name: "", clients: [])
+      .withWorkdir(".")
+      .changes(root)
+    assert(untouched.isEmpty, "a plain project without clients was generated")
+    null
+  }
+
+  """
+  A client package is the same whether a plain project or a module holds it,
+  and so is the vendored SDK: neither depends on the scope it is generated in.
+  """
+  pub sameClientCheck(ws: Workspace!): Void @check {
+    let plain = generated(ws).directory("/" + appPath)
+    let module = javaSdk
+      .generateScope(
+        ws.withWorkdir(moduleAppPath),
+        isModule: true,
+        name: "client-app",
+        clients: [ws.moduleSource("/" + clientDepPath)],
+      )
+      .directory("/" + moduleAppPath)
+    assert(
+      plain.directory(clientDepDir).digest == module.directory(clientDepDir).digest,
+      "the client package differs between a plain project and a module",
+    )
+    assert(
+      plain.directory("sdk").digest == module.directory("sdk").digest,
+      "the vendored SDK differs between a plain project and a module",
+    )
+    null
+  }
+
+  """
+  The generated project builds with mvn package in a container with no
+  engine and no dagger CLI, into the runnable jar its pom.xml asks for.
+  """
+  pub mavenPackageCheck(ws: Workspace!): Void @check {
+    let built = container
+      .from("maven:3.9.9-eclipse-temurin-21-alpine@sha256:4cbb8bf76c46b97e028998f2486ed014759a8e932480431039bdb93dffe6813e")
+      .withoutEntrypoint
+      .withMountedCache("/root/.m2", cacheVolume("e2e-maven-m2"))
+      .withDirectory("/app", generated(ws).directory("/" + appPath), exclude: ["**/target/**"])
+      .withWorkdir("/app")
+      .withExec(["mvn", "package", "--no-transfer-progress"], expect: ReturnType.ANY)
+    assert(built.exitCode == 0, "mvn package failed on the plain project:\n" + built.stdout)
+    assert(built.directory("/app/target").exists("app.jar"), "mvn package did not build target/app.jar")
+    null
+  }
+}

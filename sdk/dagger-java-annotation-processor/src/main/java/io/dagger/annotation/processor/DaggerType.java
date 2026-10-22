@@ -3,8 +3,8 @@ package io.dagger.annotation.processor;
 import com.palantir.javapoet.ClassName;
 import com.palantir.javapoet.CodeBlock;
 import com.palantir.javapoet.ParameterizedTypeName;
-import io.dagger.client.Dagger;
-import io.dagger.client.TypeDefKind;
+import io.dagger.client.modules.core.Core;
+import io.dagger.client.modules.core.TypeDefKind;
 import io.dagger.module.info.TypeInfo;
 import java.util.Set;
 import javax.lang.model.type.TypeKind;
@@ -17,6 +17,9 @@ public abstract class DaggerType {
   }
 
   abstract CodeBlock toDaggerTypeDef();
+
+  /** The type definition of {@link #toDaggerTypeDef()}, as Dang source for the entrypoint. */
+  abstract String toDangTypeDef();
 
   abstract CodeBlock toJavaType();
 
@@ -126,7 +129,12 @@ public abstract class DaggerType {
 
     @Override
     CodeBlock toDaggerTypeDef() {
-      return CodeBlock.of("$T.dag().typeDef().withEnum($S)", Dagger.class, simpleName);
+      return CodeBlock.of("$T.core().typeDef().withEnum($S)", Core.class, simpleName);
+    }
+
+    @Override
+    String toDangTypeDef() {
+      return "typeDef.withEnum(" + Dang.quote(simpleName) + ")";
     }
 
     @Override
@@ -144,25 +152,32 @@ public abstract class DaggerType {
       this.isOptional = isOptional;
     }
 
-    @Override
-    CodeBlock toDaggerTypeDef() {
+    private String kindName() {
       String name =
           switch (simpleName) {
             case "byte", "short", "int", "long", "char" -> "integer";
             case "float", "double" -> "float";
             default -> simpleName;
           };
+      return "%s_KIND".formatted(name.toUpperCase());
+    }
+
+    @Override
+    CodeBlock toDaggerTypeDef() {
       CodeBlock.Builder cb =
           CodeBlock.builder()
               .add(
-                  "$T.dag().typeDef().withKind($T.$L)",
-                  Dagger.class,
-                  TypeDefKind.class,
-                  "%s_KIND".formatted(name.toUpperCase()));
+                  "$T.core().typeDef().withKind($T.$L)", Core.class, TypeDefKind.class, kindName());
       if (isOptional) {
         cb.add(".withOptional(true)");
       }
       return cb.build();
+    }
+
+    @Override
+    String toDangTypeDef() {
+      String def = "typeDef.withKind(TypeDefKind." + kindName() + ")";
+      return isOptional ? def + ".withOptional(true)" : def;
     }
 
     @Override
@@ -202,7 +217,12 @@ public abstract class DaggerType {
 
     @Override
     CodeBlock toDaggerTypeDef() {
-      return CodeBlock.of("$T.dag().typeDef().withScalar($S)", Dagger.class, simpleName);
+      return CodeBlock.of("$T.core().typeDef().withScalar($S)", Core.class, simpleName);
+    }
+
+    @Override
+    String toDangTypeDef() {
+      return "typeDef.withScalar(" + Dang.quote(simpleName) + ")";
     }
 
     @Override
@@ -221,6 +241,11 @@ public abstract class DaggerType {
     @Override
     CodeBlock toDaggerTypeDef() {
       return CodeBlock.builder().add(inner.toDaggerTypeDef()).add(".withOptional(true)").build();
+    }
+
+    @Override
+    String toDangTypeDef() {
+      return inner.toDangTypeDef() + ".withOptional(true)";
     }
 
     @Override
@@ -245,7 +270,12 @@ public abstract class DaggerType {
 
     @Override
     CodeBlock toDaggerTypeDef() {
-      return CodeBlock.of("$T.dag().typeDef().withObject($S)", Dagger.class, simpleName);
+      return CodeBlock.of("$T.core().typeDef().withObject($S)", Core.class, simpleName);
+    }
+
+    @Override
+    String toDangTypeDef() {
+      return "typeDef.withObject(" + Dang.quote(simpleName) + ")";
     }
 
     @Override
@@ -265,10 +295,15 @@ public abstract class DaggerType {
     CodeBlock toDaggerTypeDef() {
       CodeBlock.Builder cb =
           CodeBlock.builder()
-              .add("$T.dag().typeDef().withListOf(", Dagger.class)
+              .add("$T.core().typeDef().withListOf(", Core.class)
               .add(of(innerName).toDaggerTypeDef())
               .add(")");
       return cb.build();
+    }
+
+    @Override
+    String toDangTypeDef() {
+      return "typeDef.withListOf(" + of(innerName).toDangTypeDef() + ")";
     }
 
     @Override
@@ -301,10 +336,15 @@ public abstract class DaggerType {
     CodeBlock toDaggerTypeDef() {
       CodeBlock.Builder cb =
           CodeBlock.builder()
-              .add("$T.dag().typeDef().withListOf(", Dagger.class)
+              .add("$T.core().typeDef().withListOf(", Core.class)
               .add(of(innerName).toDaggerTypeDef())
               .add(")");
       return cb.build();
+    }
+
+    @Override
+    String toDangTypeDef() {
+      return "typeDef.withListOf(" + of(innerName).toDangTypeDef() + ")";
     }
 
     @Override
