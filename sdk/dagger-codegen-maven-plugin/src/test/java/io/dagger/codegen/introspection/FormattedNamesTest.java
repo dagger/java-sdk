@@ -117,6 +117,27 @@ class FormattedNamesTest {
     assertThat(names).isNull();
   }
 
+  /** The engine names by its rules from v1.0.0-beta.21, and so does a development build. */
+  @Test
+  void appliesFromTheNamingCut() throws Exception {
+    assertThat(FormattedNames.engineNamesFrom("v1.0.0-beta.20")).isFalse();
+    assertThat(FormattedNames.engineNamesFrom("v1.0.0-beta.18")).isFalse();
+    assertThat(FormattedNames.engineNamesFrom("v0.19.11")).isFalse();
+    assertThat(FormattedNames.engineNamesFrom("1.0.0-beta.20")).isFalse();
+    assertThat(FormattedNames.engineNamesFrom("v1.0.0-beta.21")).isTrue();
+    assertThat(FormattedNames.engineNamesFrom("v1.0.0-beta.21+abc")).isTrue();
+    assertThat(FormattedNames.engineNamesFrom("v1.0.0-beta.102")).isTrue();
+    assertThat(FormattedNames.engineNamesFrom("v1.0.0-rc.1")).isTrue();
+    assertThat(FormattedNames.engineNamesFrom("v1.0.0")).isTrue();
+    assertThat(FormattedNames.engineNamesFrom("v1.0.0-dev-0123abcd")).isTrue();
+    assertThat(FormattedNames.engineNamesFrom("")).isTrue();
+    assertThat(FormattedNames.engineNamesFrom(null)).isTrue();
+
+    assertThat(FormattedNames.applies(schema(true, "v1.0.0"), "v1.0.0-beta.20")).isFalse();
+    assertThat(FormattedNames.applies(schema(true, "v1.0.0-beta.21"), "v1.0.0-beta.21")).isTrue();
+    assertThat(FormattedNames.applies(schema(false, "v1.0.0-beta.20"), "v1.0.0-beta.21")).isFalse();
+  }
+
   @Test
   void batchesNames() throws Exception {
     StringBuilder fields = new StringBuilder();

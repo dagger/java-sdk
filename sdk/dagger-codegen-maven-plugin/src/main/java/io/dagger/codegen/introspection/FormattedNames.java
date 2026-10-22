@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.regex.Pattern;
+import org.apache.maven.artifact.versioning.ComparableVersion;
 
 /**
  * Schema names formatted by the engine, for Java identifiers in Java's own conventions: members,
@@ -31,10 +32,18 @@ import java.util.regex.Pattern;
  *
  * <p>The gate is the schema being generated: without {@code Query.formatIdentifiers} (views before
  * v1.0.0-beta.21), nothing is formatted, and codegen keeps the schema's names, generating the same
- * code as before. With it, the names have to be formatted: a failure fails codegen rather than
- * falling back to the schema's names, which would generate a different API.
+ * code as before. Engines before v1.0.0-beta.21 serve the field to every v1 view, before naming
+ * moved to the engine's rules, so a schema they serve keeps its names too (see {@link #applies}).
+ * With the gate on, the names have to be formatted: a failure fails codegen rather than falling
+ * back to the schema's names, which would generate a different API.
  */
 public final class FormattedNames {
+
+  /**
+   * The first engine release whose views gate {@code Query.formatIdentifiers} on the naming cut, so
+   * that a schema with it is one whose names follow the engine's rules.
+   */
+  static final ComparableVersion NAMING_CUT = new ComparableVersion("1.0.0-beta.21");
 
   /** The key of the member names (methods, parameters, accessors) in a names file. */
   public static final String MEMBERS = "CAMEL:CAPITALIZED";
@@ -87,9 +96,34 @@ public final class FormattedNames {
     InputStream query(String query, String variables) throws IOException, InterruptedException;
   }
 
-  /** Whether a schema has {@code Query.formatIdentifiers}: the gate for formatted names. */
+  /** Whether a schema has {@code Query.formatIdentifiers}. */
   public static boolean hasFormatIdentifiers(byte[] schemaJson) throws IOException {
     return hasFormatIdentifiers(read(schemaJson, "the introspection JSON"));
+  }
+
+  /**
+   * The gate for formatted names: the schema has {@code Query.formatIdentifiers}, and the engine
+   * that served it (codegen's {@code daggerengine.version}) is v1.0.0-beta.21 or later, or a
+   * development build. Earlier engines have the field in every v1 view: they keep the names they
+   * always had.
+   */
+  public static boolean applies(byte[] schemaJson, String engineVersion) throws IOException {
+    return hasFormatIdentifiers(schemaJson) && engineNamesFrom(engineVersion);
+  }
+
+  /**
+   * Whether an engine version is at or after the naming cut. A version that is absent or not a
+   * release version (a development build) is.
+   */
+  static boolean engineNamesFrom(String engineVersion) {
+    if (engineVersion == null
+        || engineVersion.isBlank()
+        || engineVersion.contains("dev")
+        || !engineVersion.matches("^v?\\d+\\.\\d+\\.\\d+.*$")) {
+      return true;
+    }
+    String normalized = engineVersion.startsWith("v") ? engineVersion.substring(1) : engineVersion;
+    return new ComparableVersion(normalized.split("\\+")[0]).compareTo(NAMING_CUT) >= 0;
   }
 
   /**

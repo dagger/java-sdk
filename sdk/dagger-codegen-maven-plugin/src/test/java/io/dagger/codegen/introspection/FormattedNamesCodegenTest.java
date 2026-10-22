@@ -179,6 +179,24 @@ class FormattedNamesCodegenTest {
     assertSchemaNames();
   }
 
+  /**
+   * An engine before the naming cut serves formatIdentifiers to every v1 view, with names still
+   * named the old way: its schemas keep their names, and the engine is never asked.
+   */
+  @Test
+  void keepsSchemaNamesOnAnEngineBeforeTheNamingCut() throws Exception {
+    new Generator(
+            output,
+            StandardCharsets.UTF_8,
+            "v1.0.0-beta.20",
+            (query, variables) -> {
+              throw new AssertionError("asked an engine before the naming cut");
+            })
+        .generate(GenerationPlan.read(plan(schema(true))));
+
+    assertSchemaNames();
+  }
+
   /** A names file beside a schema without formatIdentifiers is not read either. */
   @Test
   void ignoresANamesFileWithoutFormatIdentifiers() throws Exception {

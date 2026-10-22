@@ -211,7 +211,7 @@ public final class Generator {
 
   private Map<String, Map<String, String>> formattedNames(byte[] schemaJson, Path namesFile)
       throws IOException {
-    if (!FormattedNames.hasFormatIdentifiers(schemaJson)) {
+    if (!FormattedNames.applies(schemaJson, engineVersion)) {
       return null;
     }
     if (Files.isRegularFile(namesFile)) {

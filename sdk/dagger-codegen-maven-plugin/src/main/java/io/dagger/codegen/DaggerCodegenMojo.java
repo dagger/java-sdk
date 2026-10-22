@@ -170,7 +170,7 @@ public class DaggerCodegenMojo extends AbstractMojo {
       if (f.exists()) {
         byte[] schemaJson = Files.readAllBytes(f.toPath());
         Schema schema = Schema.initialize(new ByteArrayInputStream(schemaJson), version);
-        if (FormattedNames.hasFormatIdentifiers(schemaJson)) {
+        if (FormattedNames.applies(schemaJson, version)) {
           schema.setFormattedNames(namesFor(schemaJson));
         }
         return schema;
@@ -185,14 +185,16 @@ public class DaggerCodegenMojo extends AbstractMojo {
         DaggerCLIUtils.query(DaggerCLIUtils.introspectionQuery(getClass()), this.bin)
             .readAllBytes();
     Schema schema = Schema.initialize(new ByteArrayInputStream(schemaJson), this.version);
-    schema.setFormattedNames(
-        FormattedNames.fetch(
-            schemaJson,
-            (query, variables) ->
-                DaggerCLIUtils.query(
-                    new ByteArrayInputStream(query.getBytes(StandardCharsets.UTF_8)),
-                    this.bin,
-                    variables)));
+    if (FormattedNames.applies(schemaJson, this.version)) {
+      schema.setFormattedNames(
+          FormattedNames.fetch(
+              schemaJson,
+              (query, variables) ->
+                  DaggerCLIUtils.query(
+                      new ByteArrayInputStream(query.getBytes(StandardCharsets.UTF_8)),
+                      this.bin,
+                      variables)));
+    }
     return schema;
   }
 
