@@ -3,6 +3,7 @@ package io.dagger.codegen;
 import io.dagger.codegen.introspection.ClientEntryPoint;
 import io.dagger.codegen.introspection.CodegenVisitor;
 import io.dagger.codegen.introspection.Field;
+import io.dagger.codegen.introspection.FormattedNames;
 import io.dagger.codegen.introspection.Schema;
 import io.dagger.codegen.introspection.SchemaPartition;
 import io.dagger.codegen.introspection.TargetDescriptor;
@@ -10,11 +11,13 @@ import io.dagger.codegen.introspection.Type;
 import io.dagger.codegen.introspection.TypeKind;
 import io.dagger.codegen.introspection.TypeRef;
 import io.dagger.codegen.introspection.TypeRegistry;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,11 +33,33 @@ public final class Generator {
   private final Path outputDirectory;
   private final Charset encoding;
   private final String engineVersion;
+  private final FormattedNames.QueryRunner engine;
 
+  /**
+   * A generator asking the engine of this environment to format names, when a schema needs them
+   * (see {@link EngineQueries#fromEnvironment}).
+   */
   public Generator(Path outputDirectory, Charset encoding, String engineVersion) {
+    this(
+        outputDirectory,
+        encoding,
+        engineVersion,
+        EngineQueries.fromEnvironment(System.getenv(), null));
+  }
+
+  /**
+   * @param engine where a schema with {@code Query.formatIdentifiers} gets its names formatted,
+   *     unless its plan entry carries a names file
+   */
+  public Generator(
+      Path outputDirectory,
+      Charset encoding,
+      String engineVersion,
+      FormattedNames.QueryRunner engine) {
     this.outputDirectory = outputDirectory;
     this.encoding = encoding;
     this.engineVersion = engineVersion;
+    this.engine = engine;
   }
 
   public void generate(GenerationPlan plan) throws IOException {
@@ -47,9 +72,11 @@ public final class Generator {
     Map<String, String> packageByTypeName = new LinkedHashMap<>();
     Map<String, String> targetByTypeName = new LinkedHashMap<>();
     Map<String, SchemaPartition> clients = new LinkedHashMap<>();
+    Map<String, String> javaTypeNames = new HashMap<>();
     for (GenerationPlan.Target target : plan.targets()) {
-      SchemaPartition client =
-          SchemaPartition.client(typeChecksAsCheck(read(target.schema())), target.module());
+      Schema schema = read(target.schema());
+      javaTypeNames.putAll(schema.javaTypeNames());
+      SchemaPartition client = SchemaPartition.client(typeChecksAsCheck(schema), target.module());
       clients.put(target.module(), client);
       for (String owned : client.typeNames()) {
         requireUnclaimed(targetByTypeName, owned, target.module());
@@ -58,11 +85,13 @@ public final class Generator {
     }
 
     Schema coreSchema = read(plan.coreSchema());
+    javaTypeNames.putAll(coreSchema.javaTypeNames());
     requireEveryOwnedModulePlanned(coreSchema, packages.keySet());
     requireNoTargetShadowsCore(coreSchema, targetByTypeName);
 
     TypeRegistry registry =
-        TypeRegistry.acrossPackages(CORE_PACKAGE, RUNTIME_PACKAGE, packageByTypeName);
+        TypeRegistry.acrossPackages(CORE_PACKAGE, RUNTIME_PACKAGE, packageByTypeName)
+            .withJavaTypeNames(javaTypeNames);
     emit(SchemaPartition.core(coreSchema), registry, null, null);
     for (GenerationPlan.Target target : plan.targets()) {
       SchemaPartition client = clients.get(target.module());
@@ -166,9 +195,35 @@ public final class Generator {
             partition.schema(), registry, entryPoint, descriptor, outputDirectory, encoding));
   }
 
+  /**
+   * A plan's schema, with the Java names the engine formatted for it when it has {@code
+   * Query.formatIdentifiers}: from the {@code names.json} beside it, else from the engine.
+   */
   private Schema read(Path schemaFile) throws IOException {
-    try (InputStream in = Files.newInputStream(schemaFile)) {
-      return Schema.initialize(in, engineVersion);
+    byte[] schemaJson = Files.readAllBytes(schemaFile);
+    Schema schema = Schema.initialize(new ByteArrayInputStream(schemaJson), engineVersion);
+    schema.setFormattedNames(formattedNames(schemaJson, schemaFile.resolveSibling(NAMES_FILE)));
+    return schema;
+  }
+
+  /** The names file a plan entry may carry beside its schema, as {@link FormattedNames#read}. */
+  static final String NAMES_FILE = "names.json";
+
+  private Map<String, Map<String, String>> formattedNames(byte[] schemaJson, Path namesFile)
+      throws IOException {
+    if (!FormattedNames.applies(schemaJson, engineVersion)) {
+      return null;
+    }
+    if (Files.isRegularFile(namesFile)) {
+      try (InputStream in = Files.newInputStream(namesFile)) {
+        return FormattedNames.read(in);
+      }
+    }
+    try {
+      return FormattedNames.fetch(schemaJson, engine);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IOException("interrupted while formatting names", e);
     }
   }
 }

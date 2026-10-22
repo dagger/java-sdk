@@ -248,6 +248,12 @@ public final class QueryBuilder {
     if (klass == String.class && value instanceof JsonString js) {
       return klass.cast(js.getString());
     }
+    if (klass.isEnum()
+        && GraphQLEnum.class.isAssignableFrom(klass)
+        && value instanceof JsonString js) {
+      // Constants named apart from their schema values are looked up by value.
+      return GraphQLEnums.valueOf(klass, js.getString());
+    }
     JsonbConfig config =
         new JsonbConfig().withPropertyVisibilityStrategy(new PrivateVisibilityStrategy());
     Jsonb jsonb = JsonbBuilder.newBuilder().withConfig(config).build();

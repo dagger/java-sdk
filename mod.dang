@@ -33,6 +33,13 @@ type Mod {
   let dangEntrypoint: String
 
   """
+  The dang.toml written beside the Dang entrypoint (see
+  JavaSdk.entrypointDangToml): null for a module on the runtime, empty when a
+  dang.toml above the entrypoint directory governs it.
+  """
+  let dangToml: String
+
+  """
   The clients generated into packages of their own under clients/<name>, for a
   module on the Dang entrypoint. A module on the runtime has none: its clients
   are its dependencies, whose types the engine adds to its schema.
@@ -475,13 +482,14 @@ type Mod {
   }
 
   """
-  The Dang entrypoint: main.dang from the annotation processor, and build.dang,
-  which builds the jar with the images the runtime pins. build.dang runs the
+  The Dang entrypoint: main.dang from the annotation processor, build.dang,
+  which builds the jar with the images the runtime pins, and dang.toml, which
+  declares the versions the engine serves the entrypoint at. build.dang runs the
   processor again under the name it ran under here, because the name decides
   which object is the module's.
   """
   let dangEntrypointDir(processedModule: Container!, name: String!): Directory! {
-    directory
+    let dir = directory
       .withFile("main.dang", processedModule.file("/module/target/classes/dagger/entrypoint/main.dang"))
       .withNewFile(
         "build.dang",
@@ -490,6 +498,9 @@ type Mod {
           .replace("<jre-image>", dockerfileImage("runtime/images/java/Dockerfile"))
           .replace("<module-name>", name),
       )
+    # Empty when a dang.toml above the entrypoint directory governs it.
+    let toml = dangToml ?? ""
+    if (toml == "") { dir } else { dir.withNewFile("dang.toml", toml) }
   }
 
   """

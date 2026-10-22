@@ -330,18 +330,25 @@ class CollectionProcessingTest {
 
     process(Map.of("Item", ITEM, "Items", items, "Main", main));
 
+    String json = DaggerType.JSON_CLASS.simpleName();
     assertThat(entrypoint())
         .contains(
             "Item res = obj.lookup(name);\n"
                 + "        return ModuleDispatcher.collectionResult(parentJson, obj, res,"
-                + " JsonConverter.toJSON(res));")
+                + " JsonConverter.toJSON(res), "
+                + json
+                + "::from);")
         .contains(
             "Items res = obj.change(names);\n"
                 + "        return ModuleDispatcher.collectionResult(parentJson, obj, res,"
-                + " JsonConverter.toJSON(res));")
+                + " JsonConverter.toJSON(res), "
+                + json
+                + "::from);")
         .contains(
             "return ModuleDispatcher.collectionResult(parentJson, obj, res.orElse(null),"
-                + " JsonConverter.toJSON(res.orElse(null)));")
+                + " JsonConverter.toJSON(res.orElse(null)), "
+                + json
+                + "::from);")
         .contains("obj.nothing();\n        return JsonConverter.toJSON(null);")
         .contains("Items res = obj.items();\n        return JsonConverter.toJSON(res);");
   }

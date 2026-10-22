@@ -210,6 +210,7 @@ type E2e {
     assertAdded(changes, newModulePath + "/" + entrypointPath)
     assertAdded(changes, newModulePath + "/" + dangEntrypointPath + "/main.dang")
     assertAdded(changes, newModulePath + "/" + dangEntrypointPath + "/build.dang")
+    assertAdded(changes, newModulePath + "/" + dangEntrypointPath + "/dang.toml")
     assert(
       changes.modifiedPaths.length == 0,
       "initializing a scope modified existing files: " + changes.modifiedPaths.join(", "),
@@ -248,6 +249,71 @@ type E2e {
       .changes(generated.withWorkdir("."))
     assert(recovered.isEmpty, "regenerating should restore a deleted generated entrypoint")
 
+    null
+  }
+
+  """
+  The dang.toml beside the generated entrypoint declares the Dagger version the
+  engine serves the entrypoint at, which decides its API and its naming rules.
+  A new module gets the running engine's version. Generating an existing module
+  never moves it: an entrypoint without a dang.toml gets v1.0.0-beta.20, what
+  the engine already served it at, a module migrated from the runtime keeps its
+  engineVersion (at least v1.0.0-beta.20), and a dang.toml the module has is
+  kept as it is, beside the entrypoint or above it, where none is written beside
+  the entrypoint.
+  """
+  entrypointDangTomlCheck(ws: Workspace!): Void @check {
+    let modulePath = "/" + newModulePath
+    let dangTomlPath = modulePath + "/" + dangEntrypointPath + "/dang.toml"
+    let engine = version.split("+")[0] ?? version
+    let generated = javaSdk.generateScope(ws.withWorkdir(newModulePath), isModule: true, name: newModuleName, clients: [])
+    assertContainsAll(generated.file(dangTomlPath).contents, [
+      "dang = \"2.1\"",
+      "[imports.Dagger]",
+      "dagger = \"" + engine + "\"",
+    ])
+
+    let withoutToml = javaSdk.generateScope(
+      generated.withoutFile(dangTomlPath),
+      isModule: true,
+      name: newModuleName,
+      clients: [],
+    )
+    assertContains(
+      withoutToml.file(dangTomlPath).contents,
+      "dagger = \"v1.0.0-beta.20\"",
+      "an existing entrypoint without a dang.toml did not stay at v1.0.0-beta.20:\n" + withoutToml.file(dangTomlPath).contents,
+    )
+
+    let own = "# mine\ndang = \"2.1\"\n\n[imports.Dagger]\ndagger = \"v1.0.0-beta.19\"\n"
+    let withOwn = generated.withNewFile(dangTomlPath, own)
+    let kept = javaSdk.generateScope(withOwn, isModule: true, name: newModuleName, clients: [])
+    assert(kept.file(dangTomlPath).contents == own, "the module's own dang.toml was not kept:\n" + kept.file(dangTomlPath).contents)
+
+    # A dang.toml at the module root governs the entrypoint too, so none is
+    # written beside it.
+    let rootTomlPath = modulePath + "/dang.toml"
+    let withRoot = generated.withoutFile(dangTomlPath).withNewFile(rootTomlPath, own)
+    let rooted = javaSdk.generateScope(withRoot, isModule: true, name: newModuleName, clients: [])
+    assert(rooted.file(rootTomlPath).contents == own, "the module's root dang.toml was not kept")
+    assert(
+      rooted.directory(modulePath).exists(dangEntrypointPath + "/dang.toml") == false,
+      "a dang.toml was written beside the entrypoint of a module whose root dang.toml governs it",
+    )
+
+    let manifestPath = modulePath + "/dagger-module.toml"
+    let onRuntime = javaSdk(dangEntrypoint: false)
+      .generateScope(ws.withWorkdir(newModulePath), isModule: true, name: newModuleName, clients: [])
+    let old = onRuntime.withNewFile(
+      manifestPath,
+      onRuntime.file(manifestPath).contents.replaceMatches(Regexp("engineVersion = \"[^\"]*\""), "engineVersion = \"v1.0.0-beta.9\""),
+    )
+    let migrated = javaSdk(dangEntrypoint: true).generateScope(old, isModule: true, name: newModuleName, clients: [])
+    assertContains(
+      migrated.file(dangTomlPath).contents,
+      "dagger = \"v1.0.0-beta.20\"",
+      "a module migrated from v1.0.0-beta.9 did not get v1.0.0-beta.20:\n" + migrated.file(dangTomlPath).contents,
+    )
     null
   }
 
