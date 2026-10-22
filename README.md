@@ -159,6 +159,11 @@ comments, and refuses settings it would break. Those files are listed in
 `src/generated/sha256sums`, so after editing one, run `dagger generate`. The
 `targetVersion` scope setting accepts only that release.
 
+Generated Java names follow Java's conventions as the engine formats them:
+`Json`, `Id` and `Llm` for `JSON`, `ID` and `LLM`, `asJson()` for `asJSON`, and
+`PER_SESSION` for `PerSession`. A method or enum constant the engine renames
+keeps its schema name as a deprecated alias; a renamed class has no alias.
+
 ### Stale generated files
 
 A call refuses a module on the entrypoint whose generated files are stale, and
