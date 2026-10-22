@@ -44,6 +44,15 @@ public class DaggerCLIUtils {
 
   public static InputStream query(InputStream query, String binPath)
       throws IOException, InterruptedException {
+    return query(query, binPath, null);
+  }
+
+  /**
+   * Runs a GraphQL query with {@code dagger query}, with its variables as JSON (or null), and
+   * returns the response data as JSON.
+   */
+  public static InputStream query(InputStream query, String binPath, String variables)
+      throws IOException, InterruptedException {
     if (query == null) {
       throw new IOException("missing introspection query resource");
     }
@@ -60,7 +69,7 @@ public class DaggerCLIUtils {
     envVars.remove("OTEL_EXPORTER_OTLP_ENDPOINT");
     envVars.remove("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT");
 
-    ProcessBuilder builder = new ProcessBuilder(binPath, "query", "-s", "-M");
+    ProcessBuilder builder = new ProcessBuilder(queryCommand(binPath, variables));
     builder.environment().clear();
     builder.environment().putAll(envVars);
 
@@ -107,6 +116,16 @@ public class DaggerCLIUtils {
     waitForCopies(stdin);
 
     return new ByteArrayInputStream(out.toByteArray());
+  }
+
+  /** The {@code dagger query} command line, passing variables (when not null) as JSON. */
+  static List<String> queryCommand(String binPath, String variables) {
+    List<String> command = new ArrayList<>(List.of(binPath, "query", "-s", "-M"));
+    if (variables != null) {
+      command.add("--var-json");
+      command.add(variables);
+    }
+    return command;
   }
 
   public static InputStream introspectionQuery(Class<?> anchorClass) throws IOException {

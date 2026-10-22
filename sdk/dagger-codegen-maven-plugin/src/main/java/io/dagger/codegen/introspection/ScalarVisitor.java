@@ -16,7 +16,7 @@ class ScalarVisitor extends AbstractVisitor {
   @Override
   TypeSpec generateType(Type type) {
     TypeSpec.Builder classBuilder =
-        TypeSpec.classBuilder(Helpers.formatName(type))
+        TypeSpec.classBuilder(registry().javaTypeName(type.getName()))
             .addJavadoc(type.getDescription() != null ? type.getDescription() : "")
             .addModifiers(Modifier.PUBLIC)
             .superclass(
@@ -30,6 +30,7 @@ class ScalarVisitor extends AbstractVisitor {
                 AnnotationSpec.builder(JsonbTypeDeserializer.class)
                     .addMember("value", "$T.class", registry().runtime("ScalarStringDeserializer"))
                     .build());
+    Helpers.addGraphQLType(classBuilder, registry(), type.getName());
 
     MethodSpec constructor =
         MethodSpec.constructorBuilder()

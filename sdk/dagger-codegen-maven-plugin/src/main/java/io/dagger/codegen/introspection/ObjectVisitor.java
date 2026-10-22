@@ -1,9 +1,9 @@
 package io.dagger.codegen.introspection;
 
-import static org.apache.commons.lang3.StringUtils.capitalize;
 import static org.apache.commons.lang3.StringUtils.uncapitalize;
 
 import com.palantir.javapoet.*;
+import jakarta.json.bind.annotation.JsonbProperty;
 import jakarta.json.bind.annotation.JsonbTypeDeserializer;
 import jakarta.json.bind.annotation.JsonbTypeSerializer;
 import jakarta.json.bind.serializer.DeserializationContext;
@@ -11,10 +11,14 @@ import jakarta.json.bind.serializer.JsonbDeserializer;
 import jakarta.json.stream.JsonParser;
 import java.nio.charset.Charset;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.function.UnaryOperator;
+import java.util.stream.Collectors;
 import javax.lang.model.element.Modifier;
 
 class ObjectVisitor extends AbstractVisitor {
@@ -50,18 +54,22 @@ class ObjectVisitor extends AbstractVisitor {
    *
    * @param receiverType the core type the field was reached through, or null on {@code Query},
    *     whose receiver is the session
+   * @param receiverTypeName that type's GraphQL name, or null on {@code Query}
    */
-  private record Entry(ClassName receiverType, String receiverName) {
+  private record Entry(ClassName receiverType, String receiverTypeName, String receiverName) {
 
-    static final Entry ON_QUERY = new Entry(null, "session");
+    static final Entry ON_QUERY = new Entry(null, null, "session");
 
     boolean onQuery() {
       return receiverType == null;
     }
 
-    /** Every entry lands in one class, so two fields of the same name need telling apart. */
+    /**
+     * Every entry lands in one class, so two fields of the same name need telling apart. Named
+     * after the GraphQL type, like the arguments class itself, so formatted names don't rename it.
+     */
     String argumentsPrefix() {
-      return onQuery() ? "" : receiverType.simpleName();
+      return onQuery() ? "" : Helpers.formatName(receiverTypeName);
     }
 
     /** The chain the entry selects from: the receiver's, carrying the target to serve. */
@@ -74,13 +82,14 @@ class ObjectVisitor extends AbstractVisitor {
   TypeSpec generateType(Type type) {
     ClassName thisType = registry().forType(type.getName());
     TypeSpec.Builder classBuilder =
-        TypeSpec.classBuilder(Helpers.formatName(type))
+        TypeSpec.classBuilder(thisType.simpleName())
             .addJavadoc(Helpers.escapeJavadoc(type.getDescription()))
             .addModifiers(Modifier.PUBLIC)
             .addField(
                 FieldSpec.builder(
                         registry().runtime("QueryBuilder"), "queryBuilder", Modifier.PRIVATE)
                     .build());
+    Helpers.addGraphQLType(classBuilder, registry(), type.getName());
 
     // Add implements for any interfaces this object implements
     for (String ifaceName : type.getImplementedInterfaceNames()) {
@@ -91,27 +100,7 @@ class ObjectVisitor extends AbstractVisitor {
       buildCoreEntryPoint(classBuilder, thisType);
 
       // loadObjectFromID: load any object by its ID using node(id:) + inline fragment
-      classBuilder.addMethod(
-          MethodSpec.methodBuilder("loadObjectFromID")
-              .addModifiers(Modifier.PUBLIC)
-              .addTypeVariable(TypeVariableName.get("T"))
-              .returns(TypeVariableName.get("T"))
-              .addParameter(
-                  ParameterizedTypeName.get(ClassName.get(Class.class), TypeVariableName.get("T")),
-                  "clazz")
-              .addParameter(registry().forType("ID"), "id")
-              .addJavadoc("Load any object by its ID using node(id:) with an inline fragment.\n")
-              .beginControlFlow("try")
-              .addStatement(
-                  "$T qb = this.queryBuilder.chainNode(clazz.getSimpleName(), id)",
-                  registry().runtime("QueryBuilder"))
-              .addStatement(
-                  "return clazz.getDeclaredConstructor($T.class).newInstance(qb)",
-                  registry().runtime("QueryBuilder"))
-              .nextControlFlow("catch (Exception e)")
-              .addStatement("throw new RuntimeException(\"Failed to load object from ID\", e)")
-              .endControlFlow()
-              .build());
+      classBuilder.addMethod(loadObjectFromID());
 
       // nodeQueryBuilder: create a QueryBuilder for node(id:) + inline fragment
       classBuilder.addMethod(
@@ -175,10 +164,19 @@ class ObjectVisitor extends AbstractVisitor {
 
       for (Field scalarField :
           type.getFields().stream().filter(f -> f.getTypeRef().isScalar()).toList()) {
-        classBuilder.addField(
-            scalarField.getTypeRef().formatOutput(registry()),
-            Helpers.formatName(scalarField),
-            Modifier.PRIVATE);
+        FieldSpec.Builder cached =
+            FieldSpec.builder(
+                scalarField.getTypeRef().formatOutput(registry()),
+                Helpers.formatName(scalarField),
+                Modifier.PRIVATE);
+        if (!Helpers.formatName(scalarField).equals(Helpers.legacyName(scalarField))) {
+          // JSON-B reads a field by its Java name: keep the schema's.
+          cached.addAnnotation(
+              AnnotationSpec.builder(JsonbProperty.class)
+                  .addMember("value", "$S", scalarField.getName())
+                  .build());
+        }
+        classBuilder.addField(cached.build());
       }
     }
 
@@ -201,17 +199,18 @@ class ObjectVisitor extends AbstractVisitor {
             .addStatement("return this.queryBuilder")
             .build());
 
+    Set<String> methodNames = methodNames(type);
     for (Field field : type.getFields()) {
       if (field.hasOptionalArgs()) {
         buildFieldArgumentsHelpers(classBuilder, field, type, null);
-        buildFieldMethod(classBuilder, field, true, null);
+        buildFieldMethod(classBuilder, field, true, null, methodNames);
       }
 
-      buildFieldMethod(classBuilder, field, false, null);
+      buildFieldMethod(classBuilder, field, false, null, methodNames);
     }
 
     if (entryPoint != null && entryPoint.rootTypeName().equals(type.getName())) {
-      buildEntryPoints(classBuilder, type);
+      buildEntryPoints(classBuilder, type, methodNames);
     }
 
     if (List.of("Container", "Directory").contains(type.getName())) {
@@ -252,15 +251,16 @@ class ObjectVisitor extends AbstractVisitor {
    * The way into this client package: the module's {@code Query} field, and every field it
    * contributes to another core type.
    */
-  private void buildEntryPoints(TypeSpec.Builder classBuilder, Type type) {
+  private void buildEntryPoints(TypeSpec.Builder classBuilder, Type type, Set<String> methodNames) {
     classBuilder.addField(targetConstant());
-    buildEntry(classBuilder, entryPoint.entryField(), type, Entry.ON_QUERY);
+    buildEntry(classBuilder, entryPoint.entryField(), type, Entry.ON_QUERY, methodNames);
     entryPoint
         .shims()
         .forEach(
             (typeName, fields) -> {
-              Entry shim = new Entry(registry().forType(typeName), uncapitalize(typeName));
-              fields.forEach(field -> buildEntry(classBuilder, field, type, shim));
+              Entry shim =
+                  new Entry(registry().forType(typeName), typeName, uncapitalize(typeName));
+              fields.forEach(field -> buildEntry(classBuilder, field, type, shim, methodNames));
             });
   }
 
@@ -269,18 +269,93 @@ class ObjectVisitor extends AbstractVisitor {
    * holds. A field on any other core type reads the session off its receiver, so there is no
    * session left for a caller to choose.
    */
-  private void buildEntry(TypeSpec.Builder classBuilder, Field field, Type type, Entry entry) {
+  private void buildEntry(
+      TypeSpec.Builder classBuilder, Field field, Type type, Entry entry, Set<String> methodNames) {
     if (field.hasOptionalArgs()) {
       buildFieldArgumentsHelpers(classBuilder, field, type, entry);
-      MethodSpec withOptArgs = buildFieldMethod(classBuilder, field, true, entry);
+      MethodSpec withOptArgs = buildFieldMethod(classBuilder, field, true, entry, methodNames);
       if (entry.onQuery()) {
-        classBuilder.addMethod(ambient(withOptArgs, Helpers.escapeJavadoc(field.getDescription())));
+        MethodSpec ambient = ambient(withOptArgs, Helpers.escapeJavadoc(field.getDescription()));
+        classBuilder.addMethod(ambient);
+        addLegacyAlias(classBuilder, ambient, field, methodNames, Modifier.STATIC);
       }
     }
-    MethodSpec method = buildFieldMethod(classBuilder, field, false, entry);
+    MethodSpec method = buildFieldMethod(classBuilder, field, false, entry, methodNames);
     if (entry.onQuery()) {
-      classBuilder.addMethod(ambient(method, Helpers.escapeJavadoc(field.getDescription())));
+      MethodSpec ambient = ambient(method, Helpers.escapeJavadoc(field.getDescription()));
+      classBuilder.addMethod(ambient);
+      addLegacyAlias(classBuilder, ambient, field, methodNames, Modifier.STATIC);
     }
+  }
+
+  /**
+   * The names of the methods generated for a type's fields, and for the entry points it carries: an
+   * old name a formatted name freed is only kept as an alias when no method took it.
+   */
+  private Set<String> methodNames(Type type) {
+    Set<String> names = new HashSet<>();
+    type.getFields().forEach(field -> names.add(Helpers.formatName(field)));
+    if (entryPoint != null && entryPoint.rootTypeName().equals(type.getName())) {
+      names.add(Helpers.formatName(entryPoint.entryField()));
+      entryPoint
+          .shims()
+          .values()
+          .forEach(fields -> fields.forEach(field -> names.add(Helpers.formatName(field))));
+    }
+    return names;
+  }
+
+  /**
+   * When a formatted name renamed a field's method, its old name as a deprecated alias, unless
+   * another method now has that name.
+   */
+  private static void addLegacyAlias(
+      TypeSpec.Builder classBuilder,
+      MethodSpec method,
+      Field field,
+      Set<String> methodNames,
+      Modifier... modifiers) {
+    String legacyName = Helpers.legacyName(field);
+    if (!legacyName.equals(method.name()) && !methodNames.contains(legacyName)) {
+      classBuilder.addMethod(Helpers.deprecatedAlias(method, legacyName, modifiers));
+    }
+  }
+
+  /**
+   * Core.loadObjectFromID: loads any object by its ID with node(id:) and an inline fragment on the
+   * class's GraphQL type. Classes named apart from their type carry it in {@code @GraphQLType}.
+   */
+  private MethodSpec loadObjectFromID() {
+    ClassName queryBuilder = registry().runtime("QueryBuilder");
+    MethodSpec.Builder builder =
+        MethodSpec.methodBuilder("loadObjectFromID")
+            .addModifiers(Modifier.PUBLIC)
+            .addTypeVariable(TypeVariableName.get("T"))
+            .returns(TypeVariableName.get("T"))
+            .addParameter(
+                ParameterizedTypeName.get(ClassName.get(Class.class), TypeVariableName.get("T")),
+                "clazz")
+            .addParameter(registry().forType("ID"), "id")
+            .addJavadoc("Load any object by its ID using node(id:) with an inline fragment.\n")
+            .beginControlFlow("try");
+    if (registry().formatsTypeNames()) {
+      ClassName graphQLType = registry().runtime("GraphQLType");
+      builder
+          .addStatement("$T graphQLType = clazz.getAnnotation($T.class)", graphQLType, graphQLType)
+          .addStatement(
+              "$T typeName = graphQLType != null ? graphQLType.value() : clazz.getSimpleName()",
+              String.class)
+          .addStatement("$T qb = this.queryBuilder.chainNode(typeName, id)", queryBuilder);
+    } else {
+      builder.addStatement(
+          "$T qb = this.queryBuilder.chainNode(clazz.getSimpleName(), id)", queryBuilder);
+    }
+    return builder
+        .addStatement("return clazz.getDeclaredConstructor($T.class).newInstance(qb)", queryBuilder)
+        .nextControlFlow("catch (Exception e)")
+        .addStatement("throw new RuntimeException(\"Failed to load object from ID\", e)")
+        .endControlFlow()
+        .build();
   }
 
   private FieldSpec targetConstant() {
@@ -336,7 +411,11 @@ class ObjectVisitor extends AbstractVisitor {
   }
 
   private MethodSpec buildFieldMethod(
-      TypeSpec.Builder classBuilder, Field field, boolean withOptionalArgs, Entry entry) {
+      TypeSpec.Builder classBuilder,
+      Field field,
+      boolean withOptionalArgs,
+      Entry entry,
+      Set<String> methodNames) {
     MethodSpec.Builder fieldMethodBuilder =
         MethodSpec.methodBuilder(Helpers.formatName(field)).addModifiers(Modifier.PUBLIC);
     String chainFrom = "this.queryBuilder";
@@ -517,6 +596,11 @@ class ObjectVisitor extends AbstractVisitor {
 
     MethodSpec method = fieldMethodBuilder.build();
     classBuilder.addMethod(method);
+    if (entry == null) {
+      addLegacyAlias(classBuilder, method, field, methodNames);
+    } else {
+      addLegacyAlias(classBuilder, method, field, methodNames, Modifier.STATIC);
+    }
     return method;
   }
 
@@ -545,16 +629,20 @@ class ObjectVisitor extends AbstractVisitor {
             .toList();
     fieldArgumentsClassBuilder.addFields(optionalArgFields);
 
-    List<MethodSpec> optionalArgFieldWithMethods =
-        field.getOptionalArgs().stream()
-            .map(
-                arg ->
-                    Helpers.withSetter(
-                        arg,
-                        resolveArgType(arg, field),
-                        fieldArgumentsClassName,
-                        arg.getDescription()))
-            .toList();
+    List<MethodSpec> optionalArgFieldWithMethods = new ArrayList<>();
+    Set<String> withSetterNames =
+        field.getOptionalArgs().stream().map(Helpers::withSetterName).collect(Collectors.toSet());
+    for (InputObject arg : field.getOptionalArgs()) {
+      MethodSpec withSetter =
+          Helpers.withSetter(
+              arg, resolveArgType(arg, field), fieldArgumentsClassName, arg.getDescription());
+      optionalArgFieldWithMethods.add(withSetter);
+      // A setter renamed by a formatted name keeps its old name as a deprecated alias.
+      String legacyName = Helpers.legacyWithSetterName(arg);
+      if (!legacyName.equals(withSetter.name()) && !withSetterNames.contains(legacyName)) {
+        optionalArgFieldWithMethods.add(Helpers.deprecatedAlias(withSetter, legacyName));
+      }
+    }
     fieldArgumentsClassBuilder.addMethods(optionalArgFieldWithMethods);
 
     List<CodeBlock> blocks =
@@ -583,9 +671,13 @@ class ObjectVisitor extends AbstractVisitor {
     classBuilder.addType(fieldArgumentsClassBuilder.build());
   }
 
-  /** The nested class holding a field's optional arguments, as the enclosing class names it. */
+  /**
+   * The nested class holding a field's optional arguments, as the enclosing class names it. Named
+   * after the schema names, so formatted names don't rename it (see {@link
+   * Helpers#argumentsClassName}).
+   */
   private ClassName argumentsClass(Field field, Entry entry) {
     String prefix = entry == null ? "" : entry.argumentsPrefix();
-    return ClassName.bestGuess(prefix + capitalize(Helpers.formatName(field)) + "Arguments");
+    return ClassName.bestGuess(prefix + Helpers.argumentsClassName(field));
   }
 }
