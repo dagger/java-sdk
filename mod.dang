@@ -33,6 +33,12 @@ type Mod {
   let dangEntrypoint: String
 
   """
+  The dang.toml written beside the Dang entrypoint, or null for a module on the
+  runtime (see JavaSdk.entrypointDangToml).
+  """
+  let dangToml: String
+
+  """
   The clients generated into packages of their own under clients/<name>, for a
   module on the Dang entrypoint. A module on the runtime has none: its clients
   are its dependencies, whose types the engine adds to its schema.
@@ -475,8 +481,9 @@ type Mod {
   }
 
   """
-  The Dang entrypoint: main.dang from the annotation processor, and build.dang,
-  which builds the jar with the images the runtime pins. build.dang runs the
+  The Dang entrypoint: main.dang from the annotation processor, build.dang,
+  which builds the jar with the images the runtime pins, and dang.toml, which
+  declares the versions the engine serves the entrypoint at. build.dang runs the
   processor again under the name it ran under here, because the name decides
   which object is the module's.
   """
@@ -490,6 +497,7 @@ type Mod {
           .replace("<jre-image>", dockerfileImage("runtime/images/java/Dockerfile"))
           .replace("<module-name>", name),
       )
+      .withNewFile("dang.toml", dangToml ?? "")
   }
 
   """

@@ -111,6 +111,7 @@ type JavaSdk {
         isModule: false,
         vendorSdkJar: false,
         dangEntrypoint: null,
+        dangToml: null,
         clients: clients,
       ).generated
     } else {
@@ -129,7 +130,7 @@ type JavaSdk {
         rooted.withDirectory(scopeRef(scope), moduleTemplate(name))
       }
       if (usesEntrypoint(initialized, scope, hadManifest)) {
-        entrypointModule(initialized, scope, name, clients)
+        entrypointModule(initialized, scope, name, clients, hadManifest)
       } else {
         if (hasGeneratedEntrypoint(initialized, scope)) {
           raise "this module runs on its generated Dang entrypoint: set dangEntrypoint = true, " +
@@ -142,6 +143,7 @@ type JavaSdk {
           isModule: true,
           vendorSdkJar: vendorSdkJar,
           dangEntrypoint: null,
+          dangToml: null,
           clients: [],
         ).generated.withWorkdir(scope)
       }
@@ -168,20 +170,25 @@ type JavaSdk {
   loads a module with an entrypoint through that entrypoint, which may not be
   generated yet, and the builtin runtime resolves nothing remote. The staged
   manifest has no dependencies, so the schema is core alone, and each client
-  is generated from its own schema. The manifest builder then writes the
-  manifest that names the entrypoint.
+  is generated from its own schema. It declares the Dagger version of the
+  entrypoint's dang.toml, so the code is generated against the API the engine
+  serves the entrypoint at: names included, which follow the engine's naming
+  rules from v1.0.0-beta.21 on. The manifest builder then writes the manifest
+  that names the entrypoint.
   """
   let entrypointModule(
     ws: Workspace!,
     scope: String!,
     name: String!,
     clients: [ModuleSource!]!,
+    hadManifest: Boolean!,
   ): Workspace! {
     refuseEntrypointSettings(ws, scope, "dagger-module.toml", "runtime", clients)
     refuseEntrypointSettings(ws, scope, "dagger.json", "sdk", clients)
+    let dangToml = entrypointDangToml(ws, scope, hadManifest)
     let staged = sdkHelpers.moduleManifest
       .withName(name: name)
-      .withLegacyDangRuntime
+      .withLegacyDangRuntime(engineVersion: dangTomlDaggerVersion(dangToml))
       .generate(ws.withWorkdir(scope), legacyJson: false)
       .withWorkdir(".")
     let generated = Mod(
@@ -190,12 +197,82 @@ type JavaSdk {
       isModule: true,
       vendorSdkJar: vendorSdkJar,
       dangEntrypoint: entrypointPath,
+      dangToml: dangToml,
       clients: clients,
     ).generated
     sdkHelpers.moduleManifest
       .withName(name: name)
       .withDangEntrypoint(source: "./" + entrypointPath)
       .generate(generated.withWorkdir(scope), legacyJson: false)
+  }
+
+  """
+  The Dagger version an entrypoint's dang.toml leaves an entrypoint at when it
+  declares none (dagger/dagger#14812): the last release before the naming cut.
+  """
+  let entrypointDefaultDaggerVersion: String! = "v1.0.0-beta.20"
+
+  """
+  The dang.toml beside the generated entrypoint, which declares the Dang and
+  Dagger versions the engine serves the entrypoint at. One the module has is
+  kept as it is: the versions are the module's to move. Otherwise the Dagger
+  version is the running engine's for a new module, and the version the engine
+  already served the module at for an existing one, so generating never moves a
+  module to another API, its naming rules included: an entrypoint without a
+  dang.toml is served at v1.0.0-beta.20, and a module on the runtime at its
+  manifest's engineVersion, which the entrypoint cannot go below
+  v1.0.0-beta.20 of.
+  """
+  let entrypointDangToml(ws: Workspace!, scope: String!, hadManifest: Boolean!): String! {
+    let path = entrypointPath + "/dang.toml"
+    if (scopeHasFile(ws, scope, path)) {
+      return ws.file(scopeRef(scope, path)).contents
+    }
+    let dagger = if (hadManifest == false) {
+      engineVersion
+    } else if (hasGeneratedEntrypoint(ws, scope)) {
+      entrypointDefaultDaggerVersion
+    } else {
+      let declared = manifestEngineVersion(ws, scope)
+      if (declared == "" or releasePrecedes(declared, entrypointDefaultDaggerVersion)) {
+        entrypointDefaultDaggerVersion
+      } else {
+        declared
+      }
+    }
+    "# The Dang and Dagger versions the engine serves this module's entrypoint at.\n"
+      + "# dagger generate keeps this file: change the versions here to move the module.\n"
+      + "dang = \"2.1\"\n"
+      + "\n"
+      + "[imports.Dagger]\n"
+      + "dagger = \"" + dagger + "\"\n"
+  }
+
+  """
+  The Dagger version a dang.toml declares, or the one the engine serves an
+  entrypoint at when it declares none (`dagger = true` included).
+  """
+  let dangTomlDaggerVersion(contents: String!): String! {
+    let decoded = json.withContents((JSON.encode(TOML.decode(contents)) :: Dagger.JSON!))
+    let declared = (decoded.field(["imports", "Dagger", "dagger"]).asString) rescue ""
+    if (declared == "") { entrypointDefaultDaggerVersion } else { declared }
+  }
+
+  """
+  The engineVersion of the module's manifest, dagger-module.toml or the pre-1.0
+  dagger.json, or the empty string when it has none.
+  """
+  let manifestEngineVersion(ws: Workspace!, scope: String!): String! {
+    if (scopeHasFile(ws, scope, "dagger-module.toml")) {
+      let toml = ws.file(scopeRef(scope, "dagger-module.toml")).contents
+      let manifest = json.withContents((JSON.encode(TOML.decode(toml)) :: Dagger.JSON!))
+      (manifest.field(["engineVersion"]).asString) rescue ""
+    } else if (scopeHasFile(ws, scope, "dagger.json")) {
+      let manifest = json.withContents((ws.file(scopeRef(scope, "dagger.json")).contents :: Dagger.JSON!))
+      (manifest.field(["engineVersion"]).asString) rescue ""
+    } else {
+      ""
+    }
   }
 
   """
