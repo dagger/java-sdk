@@ -234,9 +234,11 @@ String greeting = clientDep().greeting();
 
 A client loads its target with `serveModule` when the module first calls it. A
 local target is named by its path from the workspace root, and the engine
-resolves that path in the calling module's own tree. A git target is loaded at
-the commit its ref resolved to when the client was generated, even after a newer
-tag matches the ref; `dagger generate` moves the client to the newer commit.
+resolves that path in the calling module's own tree. A client declared by a
+path within the workspace keeps that binding when the workspace is opened from
+Git. A git target is loaded at the commit its ref resolved to when the client
+was generated, even after a newer tag matches the ref; `dagger generate` moves
+the client to the newer commit.
 
 A client types each check of its target as the core object `Check`, whatever
 type the check's author wrote and whatever engine version the target declares.
@@ -293,7 +295,8 @@ dependency set instead. Each client is recorded in the manifest the module has â
 `dagger-module.toml`, or the `dagger.json` of a pre-1.0 module â€” and its types
 are generated into the core package, so module code reaches it through
 `core()`, as `core().clientDep()`. A client that is removed is dropped from
-both.
+both. A client declared by a path within the workspace keeps that binding when
+the workspace is opened from Git.
 
 > [!WARNING]
 > On the runtime, the client set is the *whole* dependency set. A module that
