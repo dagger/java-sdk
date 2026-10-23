@@ -283,6 +283,50 @@ type JavaSdk {
   }
 
   """
+  Whether a Git client is a module of the Git workspace, at the workspace
+  commit. Both ref formats are read: the workspace address keeps
+  <clone>/<path>@<version>, while from engine v1.0.0-beta.20 a module of the
+  workspace prints <clone>#<version>[:<subpath>]. URL schemes are ignored,
+  because a GitHub address has none while its clone ref has https://.
+  Selectors are compared as written, so an alias such as HEAD for main keeps
+  the Git binding.
+  """
+  workspaceRefMatches(address: String!, commit: String!, cloneRef: String!, ref: String!, pin: String!): Boolean! {
+    if (cloneRef == "" or pin == "" or pin != commit) {
+      false
+    } else {
+      let workspaceSelector = gitSelector(address, cloneRef)
+      let moduleSelector = gitSelector(ref, cloneRef)
+      if (workspaceSelector == null or moduleSelector == null) {
+        false
+      } else {
+        workspaceSelector == "" or workspaceSelector == moduleSelector
+      }
+    }
+  }
+
+  """
+  The selector of a ref of the repository at cloneRef, empty when the ref
+  names none, or null for a ref of another repository.
+  """
+  let gitSelector(ref: String!, cloneRef: String!): String {
+    let repo = withoutURLScheme(cloneRef)
+    let path = withoutURLScheme(ref)
+    let rest = path.trimPrefix(repo)
+    if (path.hasPrefix(repo) == false or (rest != "" and rest.hasPrefix("/") == false and rest.hasPrefix("@") == false and rest.hasPrefix("#") == false)) {
+      null
+    } else if (rest.hasPrefix("#")) {
+      rest.trimPrefix("#").split(":", limit: 2)[0] ?? ""
+    } else {
+      rest.split("@", limit: 2)[1] ?? ""
+    }
+  }
+
+  let withoutURLScheme(ref: String!): String! {
+    ref.split("://", limit: 2)[1] ?? ref
+  }
+
+  """
   Whether the module's manifest names the entrypoint this SDK generates, at the
   path it generates it to. A main.dang there without the generated header is the
   user's own; a missing one is regenerated.

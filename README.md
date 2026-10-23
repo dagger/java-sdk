@@ -26,7 +26,7 @@ generated when the engine loads the module**. The module builds with a plain
 > [`github.com/dagger/sdk-helpers`](https://github.com/dagger/sdk-helpers), the
 > manifest builder that
 > [dagger/dagger#13992](https://github.com/dagger/dagger/pull/13992) moved out of
-> the engine, pinned at its `v1.0.2` tag.
+> the engine, pinned at its `v1.0.5` tag.
 
 ## Install
 

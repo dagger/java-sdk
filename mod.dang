@@ -146,14 +146,26 @@ type Mod {
   """
   Where a client loads its target from: a git ref with the commit it resolved
   to, or a module of the workspace by its path from the workspace root, which
-  serveModule reads in the calling module's own tree.
+  serveModule reads in the calling module's own tree, even when the workspace
+  is loaded from Git.
   """
   let clientDescriptor(client: ModuleSource!): String! {
-    if (client.kind == ModuleSourceKind.GIT_SOURCE) {
+    if (client.kind == ModuleSourceKind.GIT_SOURCE and inWorkspace(client) == false) {
       "git\n" + client.asString + "\n" + client.pin + "\n"
     } else {
       "local\n" + workspaceRef(client.sourceRootSubpath) + "\n"
     }
+  }
+
+  """
+  A workspace loaded from Git resolves its own modules as Git sources at its
+  commit. Bound by that ref, a client would change with every commit and never
+  match what the checkout generates. An unknown workspace commit matches no
+  client, so the client keeps its Git binding and its pin.
+  """
+  let inWorkspace(client: ModuleSource!): Boolean! {
+    let commit = ws.git.head.commit rescue { err: Error => "" }
+    JavaSdk().workspaceRefMatches(ws.address, commit, client.cloneRef, client.asString, client.pin)
   }
 
   """
