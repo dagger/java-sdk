@@ -753,6 +753,43 @@ type E2e {
   }
 
   """
+  A Git client is a module of the Git workspace that generates it when it is
+  in the workspace's repository, at its commit, and at its selector or in a
+  workspace that names none. The cases follow the Go SDK's TestWorkspaceModule
+  and TestWorkspaceModuleExplicitGitURL (dagger/go-sdk#73, #78 and #79).
+  """
+  workspaceRefMatchCheck: Void @check {
+    let sha = "419c4afea78603265c40e273c455623a0291922e"
+    let other = "0000000000000000000000000000000000000000"
+    let clone = "http://h/r.git"
+    let github = "https://github.com/o/r"
+    [
+      ["the workspace at the commit", clone + "@" + sha, sha, clone, clone + "/app@" + sha, sha, "true"],
+      ["a workspace without a selector", clone, sha, clone, clone + "/app@main", sha, "true"],
+      ["a workspace in a subdirectory", clone + "/ci@main", sha, clone, clone + "/app@main", sha, "true"],
+      ["another selector at the same commit", clone + "@main", sha, clone, clone + "/app@release", sha, "false"],
+      ["another commit", clone + "@main", other, clone, clone + "/app@main", sha, "false"],
+      ["another repository", clone + "-fork@" + sha, sha, clone, clone + "/app@" + sha, sha, "false"],
+      ["an unknown workspace commit", clone + "@" + sha, "", clone, clone + "/app@" + sha, sha, "false"],
+      ["a module without a pin", clone + "@" + sha, sha, clone, clone + "/app@" + sha, "", "false"],
+      ["a GitHub address without a scheme", "github.com/o/r@" + sha, sha, github, github + "/app@" + sha, sha, "true"],
+      ["another host without a scheme", "gitlab.com/o/r@" + sha, sha, github, github + "/app@" + sha, sha, "false"],
+      ["a repository the clone ref is a prefix of", "github.com/o/r2@" + sha, sha, github, github + "2/app@" + sha, sha, "false"],
+      ["the explicit Git URL form at the commit", clone + "@" + sha, sha, clone, clone + "#" + sha + ":app", sha, "true"],
+      ["the explicit Git URL form on GitHub", "github.com/o/r@" + sha, sha, github, github + "#" + sha + ":app", sha, "true"],
+      ["the explicit Git URL form at the repository root", "github.com/o/r@" + sha, sha, github, github + "#" + sha, sha, "true"],
+      ["the explicit Git URL form at a branch", clone + "@main", sha, clone, clone + "#main:app", sha, "true"],
+      ["the explicit Git URL form at another selector", clone + "@main", sha, clone, clone + "#release:app", sha, "false"],
+      ["the explicit Git URL form in another repository", "github.com/o/r@" + sha, sha, github + "-fork", github + "-fork#" + sha + ":app", sha, "false"],
+    ].each { row =>
+      let name = row[0] ?? ""
+      let got = javaSdk.workspaceRefMatches(row[1] ?? "", row[2] ?? "", row[3] ?? "", row[4] ?? "", row[5] ?? "")
+      assert(got == (row[6] == "true"), name + ": want " + (row[6] ?? ""))
+    }
+    null
+  }
+
+  """
   A module that reaches core over the session Dagger.dag() holds and over a
   session it names, with a core type in its signature.
   """
