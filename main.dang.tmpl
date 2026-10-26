@@ -112,6 +112,7 @@ type JavaSdk {
         vendorSdkJar: false,
         dangEntrypoint: null,
         clients: clients,
+        clientVersion: engineTarget,
       ).generated
     } else {
       let scope = normalizePath(ws.cwd)
@@ -143,6 +144,7 @@ type JavaSdk {
           vendorSdkJar: vendorSdkJar,
           dangEntrypoint: null,
           clients: [],
+          clientVersion: engineTarget,
         ).generated.withWorkdir(scope)
       }
     }
@@ -164,12 +166,12 @@ type JavaSdk {
 
   """
   Generate a module on the Dang entrypoint. The module's schema is read through
-  a staged manifest on the engine's builtin dang runtime, because the engine
-  loads a module with an entrypoint through that entrypoint, which may not be
-  generated yet, and the builtin runtime resolves nothing remote. The staged
-  manifest has no dependencies, so the schema is core alone, and each client
-  is generated from its own schema. The manifest builder then writes the
-  manifest that names the entrypoint.
+  a staged manifest on the engine's builtin dang runtime, at the release this
+  SDK generates for, because the engine loads a module with an entrypoint
+  through that entrypoint, which may not be generated yet, and the builtin
+  runtime resolves nothing remote. The staged manifest has no dependencies, so
+  the schema is core alone, and each client is generated from its own schema.
+  The manifest builder then writes the manifest that names the entrypoint.
   """
   let entrypointModule(
     ws: Workspace!,
@@ -181,7 +183,7 @@ type JavaSdk {
     refuseEntrypointSettings(ws, scope, "dagger.json", "sdk", clients)
     let staged = sdkHelpers.moduleManifest
       .withName(name: name)
-      .withLegacyDangRuntime(engineVersion: entrypointTarget)
+      .withLegacyDangRuntime(engineVersion: engineTarget)
       .generate(ws.withWorkdir(scope), legacyJson: false)
       .withWorkdir(".")
     let generated = Mod(
@@ -191,6 +193,7 @@ type JavaSdk {
       vendorSdkJar: vendorSdkJar,
       dangEntrypoint: entrypointPath,
       clients: clients,
+      clientVersion: engineTarget,
     ).generated
     sdkHelpers.moduleManifest
       .withName(name: name)
@@ -366,16 +369,19 @@ type JavaSdk {
   let engineVersion: String! { version.split("+")[0] ?? version }
 
   """
-  The engine release a module on the entrypoint is staged at, so its bindings
-  are generated from the API view the engine serves the module: an entrypoint
-  module carries no engine version, and the engine serves it a release before
-  the identifier-casing cut of v1.0.0-beta.22. Pre-cut until the Java codegen
-  is ported to the beta.22 naming rules.
+  The engine release this SDK generates for: what core declares in
+  Version.VERSION, and the view the module's schema is read in. It stays before
+  the identifier-casing cut of v1.0.0-beta.22 until the Java codegen is ported
+  to the beta.22 naming rules. Core and the clients are still generated from
+  the running engine, so an engine update can still change them: a published
+  Java library for this release will fix core, while the clients keep reading
+  their modules from the running engine.
   """
-  let entrypointTarget: String! = "v1.0.0-beta.21"
+  let engineTarget: String! = "v1.0.0-beta.21"
 
   """
-  The first engine release this SDK runs on.
+  The first engine release this SDK runs on: the generated entrypoint's shape
+  loads on no older engine.
   """
   let engineFloor: String! = "v1.0.0-beta.18"
 
