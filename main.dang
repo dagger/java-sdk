@@ -112,6 +112,7 @@ type JavaSdk {
         vendorSdkJar: false,
         dangEntrypoint: null,
         clients: clients,
+        coreVersion: engineFloor,
       ).generated
     } else {
       let scope = normalizePath(ws.cwd)
@@ -143,6 +144,7 @@ type JavaSdk {
           vendorSdkJar: vendorSdkJar,
           dangEntrypoint: null,
           clients: [],
+          coreVersion: engineFloor,
         ).generated.withWorkdir(scope)
       }
     }
@@ -191,6 +193,7 @@ type JavaSdk {
       vendorSdkJar: vendorSdkJar,
       dangEntrypoint: entrypointPath,
       clients: clients,
+      coreVersion: engineFloor,
     ).generated
     sdkHelpers.moduleManifest
       .withName(name: name)
@@ -366,7 +369,10 @@ type JavaSdk {
   let engineVersion: String! { version.split("+")[0] ?? version }
 
   """
-  The first engine release this SDK runs on.
+  The first engine release this SDK runs on, and what generated core declares as
+  its version (Mod.coreVersion): the engine serves one schema view to every 1.0
+  prerelease, so declaring the floor costs nothing on a later engine, and an
+  engine version change no longer changes Version.VERSION.
   """
   let engineFloor: String! = "v1.0.0-beta.18"
 

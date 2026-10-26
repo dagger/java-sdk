@@ -40,6 +40,14 @@ type Mod {
   let clients: [ModuleSource!]!
 
   """
+  The engine release generated core declares in Version.VERSION, which a
+  standalone client passes to `dagger session --version`. Handed in rather than
+  read off the live engine, so an engine version change no longer changes
+  Version.VERSION.
+  """
+  let coreVersion: String!
+
+  """
   The shared local Maven repository.
 
   Mounted LOCKED, not shared: seeding it from the committed prebuilt repository
@@ -123,7 +131,7 @@ type Mod {
       versioned.withMountedDirectory("/plan", generationPlan(introspectionJSON))
     }
     let input = if (clients.length == 0) { "-Ddaggerengine.schema=/schema.json" } else { "-Ddaggerengine.plan=/plan" }
-    planned.withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", input, "-Ddaggerengine.version=" + engineVersion, "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+    planned.withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", input, "-Ddaggerengine.version=" + coreVersion, "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
   }
 
   """
@@ -157,15 +165,8 @@ type Mod {
   }
 
   """
-  The live engine version, without build metadata.
-
-  Codegen only reads the engine version off the CLI when it has to query the
-  schema itself. Here the schema is handed to it, so without this the version
-  stays whatever the pom happens to say, and generation cannot tell which shapes
-  the engine on the other end actually supports.
-
-  The `+<commit>` suffix is dropped: it changes on every engine build and would
-  make every module's SDK rebuild for no reason.
+  The live engine version, without build metadata: the view a plain project's
+  core and client schemas are read in, as it has no module to take one from.
   """
   let engineVersion: String! { version.split("+")[0] ?? version }
 
