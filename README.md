@@ -22,6 +22,10 @@ generated when the engine loads the module**. The module builds with a plain
 > `dagger module init` and `dagger generate` stop before they write anything,
 > with a message that names the floor and the engine's version.
 >
+> Each release of this SDK generates for one engine release, which the
+> generated code declares to the engine. See
+> [The engine release a module targets](#the-engine-release-a-module-targets).
+>
 > It writes module manifests through
 > [`github.com/dagger/sdk-helpers`](https://github.com/dagger/sdk-helpers), the
 > manifest builder that
@@ -62,7 +66,7 @@ generates the SDK bindings in one step:
   src/main/java/io/dagger/modules/<pkg>/<Module>.java
   src/main/java/io/dagger/modules/<pkg>/package-info.java
   src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java   # generated entrypoint
-  src/generated/dang/entrypoint/main.dang                       # the module's types and its calls
+  src/generated/dang/entrypoint/main.dang                       # the module's types and its calls, which declare the release it targets
   src/generated/dang/entrypoint/build.dang                      # the jar's Maven build
   src/generated/sha256sums                                      # every generated file, with its SHA-256
   sdk/src/main/java/...                                         # vendored SDK library
@@ -79,11 +83,13 @@ dagger module init java --name my-module --template empty
 ```
 
 `--template` picks a starter under `templates/`: `default` (a small working
-module), `empty` (a bare object class), or `legacy`. `--lock` records, for a
-module on the runtime, the commit each git client resolved to as a pin in its
-manifest; without it a client added at a branch or tag keeps following it. A
-client of a module on the entrypoint always loads the commit it was generated
-against.
+module), `empty` (a bare object class), or `legacy`. `--target-version` pins
+the engine release the module targets, as
+[The engine release a module targets](#the-engine-release-a-module-targets)
+describes. `--lock` records, for a module on the runtime, the commit each git
+client resolved to as a pin in its manifest; without it a client added at a
+branch or tag keeps following it. A client of a module on the entrypoint always
+loads the commit it was generated against.
 
 Because everything is committed and the pom defaults `dagger.proc=none`, a
 plain `mvn package` runs no annotation processor: it compiles the committed
@@ -146,6 +152,51 @@ as `include`.
 `@Function(cache = ...)` sets a function's cache policy on either path:
 `"never"`, `"session"`, or a duration such as `"10m"` after which the result is
 computed again.
+
+### The engine release a module targets
+
+Each release of this SDK generates for one engine release, `v1.0.0-beta.21`
+today: `engineTarget` in `main.dang`. It stays before the identifier-casing cut
+of `v1.0.0-beta.22` until the Java codegen is ported to the new naming rules.
+The generated code declares it in two places:
+
+- Core's `Version.VERSION`. A program outside a module, such as a
+  [plain Maven project](#clients-in-a-plain-maven-project), announces it when
+  it starts a session, as `dagger session --version`, and the engine serves
+  that release's API.
+- The generated entrypoint, which sets `DAGGER_CLIENT_VERSION` on the process
+  that runs a call. Released engines through `v1.0.0-beta.21` ignore the
+  variable and serve the module's process their own API. An engine with
+  [dagger/dagger#14881](https://github.com/dagger/dagger/pull/14881) serves the
+  declared release, capped at its own.
+
+An engine update changes neither declaration, and an SDK update changes both:
+after updating the SDK, run `dagger generate`. An SDK that generates for a
+release newer than the engine that runs the module is an accepted gap: nothing
+checks it, and a call to an API the engine lacks fails when it is made.
+
+The `targetVersion` setting pins the release the module targets, from this
+SDK's floor, `v1.0.0-beta.18`, to the release the SDK generates for:
+
+```toml
+[sdks.java.scopes."path/to/module".settings]
+targetVersion = "v1.0.0-beta.21"
+```
+
+`dagger module init java --target-version <release>` writes it. Until Java
+libraries are published for older releases, generation refuses every other
+value, before it writes anything, with a message that says so.
+
+Not delivered yet, in two separate parts:
+
+- `clients/core` is still generated from the running engine, so an engine
+  update can still change it. A published Java library for the release will
+  make core fixed.
+- The client packages under `clients/<name>` read their modules from the
+  running engine, which is the only way to get their types, and keep doing so.
+
+A module on the runtime carries no release and ignores the setting: its
+manifest pins the engine's view, and its generated files follow the engine.
 
 ### Stale generated files
 
