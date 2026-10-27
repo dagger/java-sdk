@@ -893,8 +893,21 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
             .createResource(StandardLocation.CLASS_OUTPUT, "", "dagger/entrypoint/main.dang");
     try (Writer writer = file.openWriter()) {
       writer.write(
-          DangEntrypointRenderer.render(moduleInfo, System.getenv("_DAGGER_JAVA_SDK_MODULE_NAME")));
+          DangEntrypointRenderer.render(
+              moduleInfo,
+              environment("_DAGGER_JAVA_SDK_MODULE_NAME"),
+              environment("_DAGGER_JAVA_SDK_CLIENT_VERSION")));
     }
+  }
+
+  /**
+   * Generation sets both variables, and the entrypoint's build sets them again to compare its
+   * output with the committed one. Without them, as in a hand-run {@code mvn package} with the
+   * processor on, the entrypoint is rendered for no module and no release rather than failing.
+   */
+  private static String environment(String name) {
+    String value = System.getenv(name);
+    return value == null ? "" : value;
   }
 
   private static Boolean isNotBlank(String str) {

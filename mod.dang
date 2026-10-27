@@ -459,7 +459,8 @@ type Mod {
   emits io.dagger.gen.entrypoint.Entrypoint under
   target/generated-sources/annotations, for vendoring under
   <module>/src/generated/java, and the Dang entrypoint's main.dang under
-  target/classes/dagger/entrypoint.
+  target/classes/dagger/entrypoint, which declares the release the module's
+  core is generated for.
   """
   let processed(moduleDir: Directory!, name: String!): Container! {
     mvn
@@ -468,14 +469,16 @@ type Mod {
       .withDirectory("/module", moduleDir)
       .withWorkdir("/module")
       .withEnvVariable("_DAGGER_JAVA_SDK_MODULE_NAME", name)
+      .withEnvVariable("_DAGGER_JAVA_SDK_CLIENT_VERSION", clientVersion)
       .withExec(["mvn", "compile", "-Ddagger.proc=full", "-Ddagger.sdk=prebuilt", "-Ddagger.sdk.version=" + name, "--no-transfer-progress"])
   }
 
   """
   The Dang entrypoint: main.dang from the annotation processor, and build.dang,
   which builds the jar with the images the runtime pins. build.dang runs the
-  processor again under the name it ran under here, because the name decides
-  which object is the module's.
+  processor again under the name and the release it ran under here, because
+  the name decides which object is the module's and the release is written
+  into main.dang.
   """
   let dangEntrypointDir(processedModule: Container!, name: String!): Directory! {
     directory
@@ -485,7 +488,8 @@ type Mod {
         currentModule.source.file("entrypoint/build.dang.tmpl").contents
           .replace("<maven-image>", dockerfileImage("runtime/images/maven/Dockerfile"))
           .replace("<jre-image>", dockerfileImage("runtime/images/java/Dockerfile"))
-          .replace("<module-name>", name),
+          .replace("<module-name>", name)
+          .replace("<client-version>", clientVersion),
       )
   }
 
