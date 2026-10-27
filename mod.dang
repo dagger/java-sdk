@@ -40,12 +40,12 @@ type Mod {
   let clients: [ModuleSource!]!
 
   """
-  The engine release generated core declares in Version.VERSION, which a
-  standalone client passes to `dagger session --version`. Handed in rather than
-  read off the live engine, so an engine version change no longer changes
-  Version.VERSION.
+  The engine release this scope's generated code targets: what core declares in
+  Version.VERSION, which a standalone client announces with `dagger session
+  --version`, and the view the scope's schemas are read in. Handed in rather
+  than read off the live engine, so an engine update changes neither.
   """
-  let coreVersion: String!
+  let clientVersion: String!
 
   """
   The shared local Maven repository.
@@ -131,17 +131,18 @@ type Mod {
       versioned.withMountedDirectory("/plan", generationPlan(introspectionJSON))
     }
     let input = if (clients.length == 0) { "-Ddaggerengine.schema=/schema.json" } else { "-Ddaggerengine.plan=/plan" }
-    planned.withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", input, "-Ddaggerengine.version=" + coreVersion, "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+    planned.withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", input, "-Ddaggerengine.version=" + clientVersion, "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
   }
 
   """
   What the codegen plugin generates for a scope with clients: core from the
   scope's own schema, and one target per client. A client's schema is read in
   the module's view, so it names only the core types the module's core has. A
-  plain project has no module, and reads it in the engine's view, as its core.
+  plain project has no module, and reads it in the view of the release it
+  targets, as its core.
   """
   let generationPlan(introspectionJSON: File!): Directory! {
-    let view = if (isModule) { ws.moduleSource(workspaceRef(rootPath)).engineVersion } else { engineVersion }
+    let view = if (isModule) { ws.moduleSource(workspaceRef(rootPath)).engineVersion } else { clientVersion }
     clients.reduce(directory.withFile("core/schema.json", introspectionJSON)) { plan, client =>
       let entry = "target-" + client.moduleName
       plan
@@ -163,12 +164,6 @@ type Mod {
       "local\n" + workspaceRef(client.sourceRootSubpath) + "\n"
     }
   }
-
-  """
-  The live engine version, without build metadata: the view a plain project's
-  core and client schemas are read in, as it has no module to take one from.
-  """
-  let engineVersion: String! { version.split("+")[0] ?? version }
 
   let vendoredSdk(introspectionJSON: File!, name: String!): Directory! {
     let built = sdkBuilt(introspectionJSON, name)
@@ -407,15 +402,16 @@ type Mod {
   }
 
   """
-  Core's schema for a plain project: the client-facing one, with the host and
-  the engine API a module's schema hides. The engine serves core alone for a
-  module source with no runtime, as it installs nothing beside core.
+  Core's schema for a plain project, in the view of the release it targets:
+  the client-facing one, with the host and the engine API a module's schema
+  hides. The engine serves core alone for a module source with no runtime, as
+  it installs nothing beside core.
   """
   let projectCoreSchema: File! {
     directory
       .withNewFile("dagger-module.toml", "name = \"core-schema\"\n")
       .asModuleSource
-      .withEngineVersion(engineVersion)
+      .withEngineVersion(clientVersion)
       .clientSchemaIntrospectionJSON
   }
 
