@@ -99,6 +99,13 @@ type E2e {
   }
 
   """
+  Checks of the engine release generated code targets.
+  """
+  target: TargetChecks! {
+    TargetChecks()
+  }
+
+  """
   Fail the current check when a condition is false.
   """
   let assert(condition: Boolean!, message: String!): Void {
