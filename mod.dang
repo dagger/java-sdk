@@ -40,6 +40,14 @@ type Mod {
   let clients: [ModuleSource!]!
 
   """
+  The engine release this scope's generated code targets: what core declares in
+  Version.VERSION, which a standalone client announces with `dagger session
+  --version`, and the view the scope's schemas are read in. Handed in rather
+  than read off the live engine, so an engine update changes neither.
+  """
+  let clientVersion: String!
+
+  """
   The shared local Maven repository.
 
   Mounted LOCKED, not shared: seeding it from the committed prebuilt repository
@@ -123,17 +131,18 @@ type Mod {
       versioned.withMountedDirectory("/plan", generationPlan(introspectionJSON))
     }
     let input = if (clients.length == 0) { "-Ddaggerengine.schema=/schema.json" } else { "-Ddaggerengine.plan=/plan" }
-    planned.withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", input, "-Ddaggerengine.version=" + engineVersion, "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+    planned.withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", input, "-Ddaggerengine.version=" + clientVersion, "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
   }
 
   """
   What the codegen plugin generates for a scope with clients: core from the
   scope's own schema, and one target per client. A client's schema is read in
   the module's view, so it names only the core types the module's core has. A
-  plain project has no module, and reads it in the engine's view, as its core.
+  plain project has no module, and reads it in the view of the release it
+  targets, as its core.
   """
   let generationPlan(introspectionJSON: File!): Directory! {
-    let view = if (isModule) { ws.moduleSource(workspaceRef(rootPath)).engineVersion } else { engineVersion }
+    let view = if (isModule) { ws.moduleSource(workspaceRef(rootPath)).engineVersion } else { clientVersion }
     clients.reduce(directory.withFile("core/schema.json", introspectionJSON)) { plan, client =>
       let entry = "target-" + client.moduleName
       plan
@@ -155,19 +164,6 @@ type Mod {
       "local\n" + workspaceRef(client.sourceRootSubpath) + "\n"
     }
   }
-
-  """
-  The live engine version, without build metadata.
-
-  Codegen only reads the engine version off the CLI when it has to query the
-  schema itself. Here the schema is handed to it, so without this the version
-  stays whatever the pom happens to say, and generation cannot tell which shapes
-  the engine on the other end actually supports.
-
-  The `+<commit>` suffix is dropped: it changes on every engine build and would
-  make every module's SDK rebuild for no reason.
-  """
-  let engineVersion: String! { version.split("+")[0] ?? version }
 
   let vendoredSdk(introspectionJSON: File!, name: String!): Directory! {
     let built = sdkBuilt(introspectionJSON, name)
@@ -406,15 +402,16 @@ type Mod {
   }
 
   """
-  Core's schema for a plain project: the client-facing one, with the host and
-  the engine API a module's schema hides. The engine serves core alone for a
-  module source with no runtime, as it installs nothing beside core.
+  Core's schema for a plain project, in the view of the release it targets:
+  the client-facing one, with the host and the engine API a module's schema
+  hides. The engine serves core alone for a module source with no runtime, as
+  it installs nothing beside core.
   """
   let projectCoreSchema: File! {
     directory
       .withNewFile("dagger-module.toml", "name = \"core-schema\"\n")
       .asModuleSource
-      .withEngineVersion(engineVersion)
+      .withEngineVersion(clientVersion)
       .clientSchemaIntrospectionJSON
   }
 
@@ -462,7 +459,8 @@ type Mod {
   emits io.dagger.gen.entrypoint.Entrypoint under
   target/generated-sources/annotations, for vendoring under
   <module>/src/generated/java, and the Dang entrypoint's main.dang under
-  target/classes/dagger/entrypoint.
+  target/classes/dagger/entrypoint, which declares the release the module's
+  core is generated for.
   """
   let processed(moduleDir: Directory!, name: String!): Container! {
     mvn
@@ -471,14 +469,16 @@ type Mod {
       .withDirectory("/module", moduleDir)
       .withWorkdir("/module")
       .withEnvVariable("_DAGGER_JAVA_SDK_MODULE_NAME", name)
+      .withEnvVariable("_DAGGER_JAVA_SDK_CLIENT_VERSION", clientVersion)
       .withExec(["mvn", "compile", "-Ddagger.proc=full", "-Ddagger.sdk=prebuilt", "-Ddagger.sdk.version=" + name, "--no-transfer-progress"])
   }
 
   """
   The Dang entrypoint: main.dang from the annotation processor, and build.dang,
   which builds the jar with the images the runtime pins. build.dang runs the
-  processor again under the name it ran under here, because the name decides
-  which object is the module's.
+  processor again under the name and the release it ran under here, because
+  the name decides which object is the module's and the release is written
+  into main.dang.
   """
   let dangEntrypointDir(processedModule: Container!, name: String!): Directory! {
     directory
@@ -488,7 +488,8 @@ type Mod {
         currentModule.source.file("entrypoint/build.dang.tmpl").contents
           .replace("<maven-image>", dockerfileImage("runtime/images/maven/Dockerfile"))
           .replace("<jre-image>", dockerfileImage("runtime/images/java/Dockerfile"))
-          .replace("<module-name>", name),
+          .replace("<module-name>", name)
+          .replace("<client-version>", clientVersion),
       )
   }
 
