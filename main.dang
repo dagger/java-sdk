@@ -45,6 +45,15 @@ type JavaSdk {
   dangEntrypoint: Boolean
 
   """
+  The engine release the module's generated code targets: this SDK's floor or
+  later, and the release this SDK generates for or earlier. Empty takes the
+  release this SDK generates for. Until published Java libraries exist for
+  older releases, only that release is accepted. A module on the runtime
+  ignores it.
+  """
+  targetVersion: String! = ""
+
+  """
   Runtime source written into the dagger-module.toml of a new module on the
   runtime.
   """
@@ -112,7 +121,7 @@ type JavaSdk {
         vendorSdkJar: false,
         dangEntrypoint: null,
         clients: clients,
-        clientVersion: engineTarget,
+        clientVersion: clientVersion("scope " + scope),
       ).generated
     } else {
       let scope = normalizePath(ws.cwd)
@@ -137,6 +146,8 @@ type JavaSdk {
             "or remove [entrypoint] from dagger-module.toml to move it to the runtime"
         }
         let configured = scopeManifest(initialized, scope, name, clients)
+        # A module on the runtime ignores targetVersion: its manifest pins the
+        # engine's view, and its generated files follow the engine.
         Mod(
           rootPath: scope,
           ws: configured,
@@ -181,9 +192,10 @@ type JavaSdk {
   ): Workspace! {
     refuseEntrypointSettings(ws, scope, "dagger-module.toml", "runtime", clients)
     refuseEntrypointSettings(ws, scope, "dagger.json", "sdk", clients)
+    let target = clientVersion("module \"" + name + "\"")
     let staged = sdkHelpers.moduleManifest
       .withName(name: name)
-      .withLegacyDangRuntime(engineVersion: engineTarget)
+      .withLegacyDangRuntime(engineVersion: target)
       .generate(ws.withWorkdir(scope), legacyJson: false)
       .withWorkdir(".")
     let generated = Mod(
@@ -193,7 +205,7 @@ type JavaSdk {
       vendorSdkJar: vendorSdkJar,
       dangEntrypoint: entrypointPath,
       clients: clients,
-      clientVersion: engineTarget,
+      clientVersion: target,
     ).generated
     sdkHelpers.moduleManifest
       .withName(name: name)
@@ -411,6 +423,67 @@ type JavaSdk {
       raise refusal
     }
     null
+  }
+
+  """
+  The engine release a scope's generated code targets: the targetVersion
+  setting, as this SDK writes a release, or the release this SDK generates for
+  without one. `subject` names the scope in a refusal, which stops generation
+  before it writes anything.
+  """
+  clientVersion(subject: String!): String! {
+    let refusal = targetVersionRefusal(subject, targetVersion)
+    if (refusal != "") {
+      raise refusal
+    }
+    if (targetVersion == "") { engineTarget } else { canonicalRelease(targetVersion) }
+  }
+
+  """
+  Why this SDK refuses the targetVersion setting of a scope, or the empty
+  string when it accepts it: the value is no release, it is above the release
+  this SDK generates for, it is below this SDK's floor, or it is an older
+  release this SDK has no published Java library for yet. `subject` names the
+  scope, such as `module "app"`.
+  """
+  targetVersionRefusal(subject: String!, setting: String!): String! {
+    let pinned = canonicalRelease(setting)
+    let cannot = subject + " pins targetVersion " + pinned + ", which this release of the Java SDK cannot generate for: "
+    let remedy = ". Remove targetVersion from the scope's settings in dagger.toml, or install the SDK release built for " + pinned
+    if (setting == "") {
+      ""
+    } else if (isRelease(setting) == false) {
+      subject + " pins targetVersion \"" + setting + "\", which is no engine release such as " + engineTarget +
+        ". Set targetVersion to a release in the scope's settings in dagger.toml, or remove it"
+    } else if (releasePrecedes(engineTarget, setting)) {
+      cannot + "it targets " + engineTarget + ", and nothing later" + remedy
+    } else if (releasePrecedes(setting, engineFloor)) {
+      cannot + "it runs on " + engineFloor + " and later only" + remedy
+    } else if (releasePrecedes(setting, engineTarget)) {
+      cannot + "it targets " + engineTarget + " only, until a Java library is published for older releases" + remedy
+    } else {
+      ""
+    }
+  }
+
+  let isRelease(v: String!): Boolean! {
+    v.match(Regexp(releasePattern)) != null
+  }
+
+  """
+  A release as this SDK writes it, `v`-prefixed and without its build, or `v`
+  itself when it is no release.
+  """
+  let canonicalRelease(v: String!): String! {
+    let m = v.match(Regexp(releasePattern))
+    if (m == null) {
+      v
+    } else {
+      let c = m.captures
+      let pre = c[3] ?? ""
+      let suffix = if (pre == "") { "" } else { "-" + pre }
+      "v" + (c[0] ?? "") + "." + (c[1] ?? "") + "." + (c[2] ?? "") + suffix
+    }
   }
 
   """
