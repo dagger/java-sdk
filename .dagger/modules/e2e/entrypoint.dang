@@ -216,6 +216,70 @@ type EntrypointChecks {
     null
   }
 
+  let configPath: String! { appPath + "/src/generated/dang/entrypoint/dang.toml" }
+
+  let generateApp(ws: Workspace!): Workspace! {
+    javaSdk.generateScope(ws.withWorkdir(appPath), isModule: true, name: appName, clients: [])
+  }
+
+  let configField(ws: Workspace!, path: [String!]!): String! {
+    let decoded = JSON.encode(TOML.decode(ws.file("/" + configPath).contents))
+    json.withContents((decoded :: Dagger.JSON!)).field(path).asString
+  }
+
+  let assertRefused(ws: Workspace!, config: String!, want: String!): Void {
+    let refused = generateApp(ws.withNewFile("/" + configPath, config)).cwd rescue { err: Error => err.message }
+    assert(refused.contains(want), "dang.toml " + JSON.encode(config) + " was not refused with \"" + want + "\": " + refused)
+  }
+
+  """
+  Generation writes the entrypoint's dang.toml, which carries language 2.1 and
+  the release the entrypoint declares on the process it starts, and is listed in
+  the generated sums. Generation replaces an owned Dagger version, keeps every
+  other setting and the caller's cwd, and changes nothing the second time. It
+  refuses a file it could not honor, before it writes anything.
+  """
+  pub dangConfigCheck(ws: Workspace!): Void @check {
+    let target = "v1.0.0-beta.21"
+    let generated = generateApp(ws)
+    assert(generated.cwd == ws.withWorkdir(appPath).cwd, "generation moved the cwd to " + generated.cwd)
+    assert(configField(generated, ["dang"]) == "2.1", "dang.toml does not set language 2.1")
+    assert(configField(generated, ["imports", "Dagger", "dagger"]) == target, "dang.toml does not declare " + target)
+    assert(
+      generated.file("/" + appPath + "/src/generated/sha256sums").contents.contains("src/generated/dang/entrypoint/dang.toml"),
+      "the generated sums do not list dang.toml",
+    )
+    let main = generated.file("/" + appPath + "/src/generated/dang/entrypoint/main.dang").contents
+    assert(
+      main.contains(".withEnvVariable(\"DAGGER_CLIENT_VERSION\", \"" + target + "\")"),
+      "the process declaration differs from dang.toml:\n" + main,
+    )
+    assert(generateApp(generated).changes(generated).isEmpty, "a second generation changed the module")
+
+    ["dagger = true", "dagger = \"v1.0.0-beta.20\""].each { owned =>
+      let kept = generateApp(generated.withNewFile(
+        "/" + configPath,
+        "[imports.Dagger]\n" + owned + "\nservice = \"kept\"\n\n[imports.Other]\npath = \"../other\"\n",
+      ))
+      assert(configField(kept, ["imports", "Dagger", "dagger"]) == target, owned + " was not replaced")
+      assert(configField(kept, ["imports", "Dagger", "service"]) == "kept", "a setting of the Dagger import was lost")
+      assert(configField(kept, ["imports", "Other", "path"]) == "../other", "another import was lost")
+      assert(generateApp(kept).changes(kept).isEmpty, "a second generation changed the kept settings")
+    }
+
+    assertRefused(generated, "dang = \"2.0\"\n", "sets dang = \"2.0\"")
+    assertRefused(generated, "[imports.Dagger]\npath = \"../dagger\"\n", "gives the import \"Dagger\" a path")
+    assertRefused(generated, "[imports.Dagger]\nendpoint = \"http://engine\"\n", "has an endpoint")
+    assertRefused(generated, "[imports.Old]\ndagger = \"v1.0.0-beta.20\"\n", "declares Dagger v1.0.0-beta.20 for the import \"Old\"")
+
+    let hidden = generated
+      .withoutFile("/" + configPath)
+      .withNewFile("/" + appPath + "/dang.toml", "dang = \"2.1\"\n")
+    let refused = generateApp(hidden).cwd rescue { err: Error => err.message }
+    assert(refused.contains("would replace its settings"), "a dang.toml above the entrypoint was not refused: " + refused)
+    null
+  }
+
   """
   A module loaded by git reference builds from its commit, with no checkout of
   the caller's.

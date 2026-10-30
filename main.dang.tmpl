@@ -183,6 +183,7 @@ type JavaSdk {
   runtime resolves nothing remote. The staged manifest has no dependencies, so
   the schema is core alone, and each client is generated from its own schema.
   The manifest builder then writes the manifest that names the entrypoint.
+  Generation owns the Dagger version of the entrypoint's dang.toml.
   """
   let entrypointModule(
     ws: Workspace!,
@@ -382,8 +383,8 @@ type JavaSdk {
 
   """
   The engine release this SDK generates for: what core declares in
-  Version.VERSION, and the view the module's schema is read in. It stays before
-  the identifier-casing cut of v1.0.0-beta.22 until the Java codegen is ported
+  Version.VERSION, what the entrypoint's dang.toml declares, and the view the
+  module's schema is read in. It stays before the identifier-casing cut of v1.0.0-beta.22 until the Java codegen is ported
   to the beta.22 naming rules. Core and the clients are still generated from
   the running engine, so an engine update can still change them: a published
   Java library for this release will fix core, while the clients keep reading
