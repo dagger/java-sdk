@@ -44,7 +44,8 @@ type Mod {
   Version.VERSION, which a standalone client announces with `dagger session
   --version`, what the entrypoint's dang.toml declares, and the view the scope's
   schemas are read in. Handed in rather than read off the live engine, so an
-  engine update changes neither.
+  engine update changes neither, except on the runtime, which is handed the
+  running engine's release and follows it.
   """
   let clientVersion: String!
 

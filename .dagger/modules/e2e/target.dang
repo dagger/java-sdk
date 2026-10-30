@@ -139,7 +139,8 @@ type TargetChecks {
     let runtime = javaSdk(targetVersion: "v9.0.0", dangEntrypoint: false)
       .generateScope(ws.withWorkdir(modulePath), isModule: true, name: moduleName, clients: [])
       .withWorkdir(".")
-    assertContains(moduleFile(runtime, versionPath), "VERSION = \"" + target + "\"", "a module on the runtime did not ignore the setting")
+    let engine = version.split("+")[0] ?? version
+    assertContains(moduleFile(runtime, versionPath), "VERSION = \"" + engine + "\"", "a module on the runtime does not follow the engine")
     null
   }
 }
