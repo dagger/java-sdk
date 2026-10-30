@@ -157,8 +157,9 @@ computed again.
 ### The engine release a module targets
 
 Each release of this SDK generates for one engine release, `v1.0.0-beta.21`
-today: `engineTarget` in `main.dang`. It stays before the identifier-casing cut
-of `v1.0.0-beta.22` until the Java codegen is ported to the new naming rules.
+today: `engineTarget` in `main.dang`. It stays before the identifier-casing cut,
+whose release is not decided, until the Java codegen is ported to the new naming
+rules.
 The generated code declares it in three places:
 
 - Core's `Version.VERSION`. A program outside a module, such as a
@@ -167,9 +168,9 @@ The generated code declares it in three places:
   that release's API.
 - The generated entrypoint, which sets `DAGGER_CLIENT_VERSION` on the process
   that runs a call. Released engines through `v1.0.0-beta.21` ignore the
-  variable and serve the module's process their own API. An engine with
-  [dagger/dagger#14881](https://github.com/dagger/dagger/pull/14881) serves the
-  declared release, capped at its own.
+  variable and serve the module's process their own API. `v1.0.0-beta.22` and
+  later contain [dagger/dagger#14881](https://github.com/dagger/dagger/pull/14881),
+  which serves the declared release, capped at the engine's own.
 - The entrypoint's `dang.toml`:
 
   ```toml
@@ -181,11 +182,12 @@ The generated code declares it in three places:
 
   An engine with [dagger/dagger#14902](https://github.com/dagger/dagger/pull/14902)
   reads this file. The version sets the API view and the naming rules of the
-  entrypoint and the default view of the module's process. Released engines
-  through `v1.0.0-beta.21` do not read it, and serve one API view to all of
-  those versions. A module with no `dang.toml` gets `v1.0.0-beta.20` on an engine
-  that reads the file, which is the same view: it gets the file when it is next
-  generated.
+  entrypoint and the default view of the module's process. No released engine
+  reads it yet: `v1.0.0-beta.22` does not contain that change. Releases through
+  `v1.0.0-beta.21` share one API view, and `v1.0.0-beta.22` is the first
+  prerelease with its own. A module with no `dang.toml` gets `v1.0.0-beta.20` on
+  an engine that reads the file, which shares the view of `v1.0.0-beta.21`: it
+  gets the file when it is next generated.
 
   Dang v2.2.0 and later parse a versioned import, and older standalone Dang
   tooling may reject the file. This is separate from the language version,
