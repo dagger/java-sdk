@@ -537,8 +537,10 @@ type Mod {
   The manifest builder drops a path from the import it sets, which would lose
   it, and the engine refuses two imports that declare different Dagger versions,
   however they spell them. Dang refuses a version beside an endpoint. Generation
-  replaces the entrypoint's directory, which deletes what a relative path or
-  schema inside it refers to.
+  replaces the entrypoint's directory, the vendored SDK, the clients and the
+  generated Java, which deletes what a relative path or schema inside them
+  refers to. An absolute path names a location this generation cannot place in
+  the module, so it passes.
   """
   let refuseEntrypointConfig: Void {
     let path = entrypointConfigPath
@@ -567,10 +569,14 @@ type Mod {
       decoded.field(["imports"]).fields.each { name =>
         let source = decoded.field(["imports", name])
         ["path", "schema"].each { key =>
-          let resource = if (source.fields.contains(key)) { source.field([key]).asString } else { ".." }
-          if (resource != ".." and resource.hasPrefix("../") == false and resource.hasPrefix("/") == false) {
+          let resource = if (source.fields.contains(key)) { source.field([key]).asString } else { "" }
+          let resolved = resolvedPath((dangEntrypoint ?? "") + "/" + resource)
+          let replaced = [dangEntrypoint ?? "", "sdk", "clients", "src/generated/java"].any { dir =>
+            resolved == dir or resolved.hasPrefix(dir + "/")
+          }
+          if (resource != "" and resource.hasPrefix("/") == false and replaced) {
             raise path + " gives the import " + JSON.encode(name) + " the " + key + " " + JSON.encode(resource) +
-              ", which generation would delete with the entrypoint's directory: move it outside " + (dangEntrypoint ?? "")
+              ", which generation would delete: move it outside the directories generation replaces"
           }
         }
       }
@@ -589,6 +595,26 @@ type Mod {
       }
     }
     null
+  }
+
+  """
+  A relative path with its `.` and `..` segments resolved. A `..` that leaves the
+  start of the path stays in it.
+  """
+  let resolvedPath(path: String!): String! {
+    path.split("/").reduce("") { resolved, segment =>
+      if (segment == "" or segment == ".") {
+        resolved
+      } else if (segment != "..") {
+        if (resolved == "") { segment } else { resolved + "/" + segment }
+      } else if (resolved == "") {
+        ".."
+      } else if (resolved == ".." or resolved.hasSuffix("/..")) {
+        resolved + "/.."
+      } else {
+        resolved.split("/").dropLast(1).join("/")
+      }
+    }
   }
 
   """

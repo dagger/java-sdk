@@ -228,8 +228,8 @@ refuses the module as stale. Generation refuses a `path` on the `Dagger` import,
 an `endpoint` beside a Dagger version on any import, another import that declares
 a different Dagger version, and a `dang.toml` between the entrypoint and the module's root when none exists
 beside the entrypoint, because the new file would hide its settings. It also
-refuses a relative `path` or `schema` inside the entrypoint's directory, because
-generation replaces that directory. It does not edit a `dang.toml` above the
+refuses a relative `path` or `schema` that resolves inside a directory generation
+replaces: the entrypoint's, `sdk`, `clients` and `src/generated/java`. It does not edit a `dang.toml` above the
 module's root, and the engine does not read one.
 
 ### Stale generated files

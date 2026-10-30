@@ -278,6 +278,11 @@ type EntrypointChecks {
     assertRefused(generated, "[imports.Other]\ndagger = \"" + target + "\"\nendpoint = \"http://engine\"\n", "has an endpoint")
     assertRefused(generated, "[imports.Helpers]\npath = \"./helpers\"\n", "the path \"./helpers\", which generation would delete")
     assertRefused(generated, "[imports.Api]\nschema = \"schema.graphql\"\n", "the schema \"schema.graphql\", which generation would delete")
+    assertRefused(generated, "[imports.Helpers]\npath = \"../entrypoint/helpers\"\n", "the path \"../entrypoint/helpers\", which generation would delete")
+    assertRefused(generated, "[imports.Api]\nschema = \"../entrypoint/schema.graphql\"\n", "the schema \"../entrypoint/schema.graphql\", which generation would delete")
+    assertRefused(generated, "[imports.Helpers]\npath = \"../../../../sdk/helpers\"\n", "which generation would delete")
+    let leaves = generateApp(generated.withNewFile("/" + configPath, "[imports.Helpers]\npath = \"sub/../../other\"\n"))
+    assert(configField(leaves, ["imports", "Helpers", "path"]) == "sub/../../other", "a path that leaves the entrypoint's directory was lost")
 
     ["dang.toml", "src/dang.toml", "src/generated/dang.toml", "src/generated/dang/dang.toml"].each { ancestor =>
       let hidden = generated
@@ -288,11 +293,16 @@ type EntrypointChecks {
     }
 
     let onRuntime = javaSdk(dangEntrypoint: false).generateScope(
-      generated.withNewFile("/" + appPath + "/dagger-module.toml", "name = \"" + appName + "\"\n").withWorkdir(appPath),
+      generated.withNewFile(
+        "/" + appPath + "/dagger-module.toml",
+        "name = \"" + appName + "\"\nengineVersion = \"" + target + "\"\n\n[runtime]\n  source = \"github.com/dagger/java-sdk/runtime\"\n",
+      ).withWorkdir(appPath),
       isModule: true,
       name: appName,
       clients: [],
     )
+    let manifest = onRuntime.file("/" + appPath + "/dagger-module.toml").contents
+    assert(manifest.contains("[runtime]") and manifest.contains("[entrypoint]") == false, "the module did not move to the runtime:\n" + manifest)
     assert(configField(onRuntime, ["imports", "Dagger", "dagger"]) == target, "moving to the runtime lost dang.toml")
     null
   }
