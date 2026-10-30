@@ -187,6 +187,10 @@ The generated code declares it in three places:
   that reads the file, which is the same view: it gets the file when it is next
   generated.
 
+  Dang v2.2.0 and later parse a versioned import, and older standalone Dang
+  tooling may reject the file. This is separate from the language version,
+  which stays `2.1`.
+
 An engine update changes no declaration, and an SDK update changes them all:
 after updating the SDK, run `dagger generate`. An SDK that generates for a
 release newer than the engine that runs the module is an accepted gap: nothing
@@ -221,10 +225,12 @@ requires language `2.1`, and keeps every other setting. It rewrites the file, so
 comments and formatting are lost. The file is listed in
 `src/generated/sha256sums`: after you edit it, run `dagger generate`, or a call
 refuses the module as stale. Generation refuses a `path` on the `Dagger` import,
-an `endpoint` on it, another import that declares a different Dagger version,
-and a `dang.toml` between the entrypoint and the module's root when none exists
-beside the entrypoint, because the new file would hide its settings. It does not
-edit a `dang.toml` above the module's root, and the engine does not read one.
+an `endpoint` beside a Dagger version on any import, another import that declares
+a different Dagger version, and a `dang.toml` between the entrypoint and the module's root when none exists
+beside the entrypoint, because the new file would hide its settings. It also
+refuses a relative `path` or `schema` inside the entrypoint's directory, because
+generation replaces that directory. It does not edit a `dang.toml` above the
+module's root, and the engine does not read one.
 
 ### Stale generated files
 
