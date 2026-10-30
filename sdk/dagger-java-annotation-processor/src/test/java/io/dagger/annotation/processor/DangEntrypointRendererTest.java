@@ -96,7 +96,9 @@ class DangEntrypointRendererTest {
 
     String dang =
         DangEntrypointRenderer.render(
-            new ModuleInfo(null, new ObjectInfo[] {entry, other}, Map.of()), "hello", CLIENT_VERSION);
+            new ModuleInfo(null, new ObjectInfo[] {entry, other}, Map.of()),
+            "hello",
+            CLIENT_VERSION);
 
     assertThat(dang).contains(".withConstructor(function(\"\", typeDef.withObject(\"Hello\")))");
     assertThat(dang.split("\\.withConstructor\\(", -1)).hasSize(2);

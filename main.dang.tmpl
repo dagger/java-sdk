@@ -384,11 +384,11 @@ type JavaSdk {
   """
   The engine release this SDK generates for: what core declares in
   Version.VERSION, what the entrypoint's dang.toml declares, and the view the
-  module's schema is read in. It stays before the identifier-casing cut of v1.0.0-beta.22 until the Java codegen is ported
-  to the beta.22 naming rules. Core and the clients are still generated from
-  the running engine, so an engine update can still change them: a published
-  Java library for this release will fix core, while the clients keep reading
-  their modules from the running engine.
+  module's schema is read in. It stays before the identifier-casing cut of
+  v1.0.0-beta.22 until the Java codegen is ported to the beta.22 naming rules.
+  Core and the clients are still generated from the running engine, so an engine
+  update can still change them: a published Java library for this release will
+  fix core, while the clients keep reading their modules from the running engine.
   """
   let engineTarget: String! = "v1.0.0-beta.21"
 
