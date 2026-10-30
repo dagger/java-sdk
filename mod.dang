@@ -581,7 +581,7 @@ type Mod {
         }
       }
     }
-    config.daggerImports.each { declared =>
+    config.daggerImports.{{name, version}}.each { declared =>
       if (declared.name != "Dagger" and declared.version != null) {
         let declaredVersion = declared.version ?? clientVersion
         let source = decoded.field(["imports", declared.name])
