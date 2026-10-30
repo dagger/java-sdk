@@ -535,7 +535,10 @@ type Mod {
   anything is written. The engine reads the nearest one in the module and does
   not merge them, so a new file beside the entrypoint would hide one further up.
   The manifest builder drops a path from the import it sets, which would lose
-  it, and the engine refuses two imports that declare different Dagger versions.
+  it, and the engine refuses two imports that declare different Dagger versions,
+  however they spell them. Dang refuses a version beside an endpoint. Generation
+  replaces the entrypoint's directory, which deletes what a relative path or
+  schema inside it refers to.
   """
   let refuseEntrypointConfig: Void {
     let path = entrypointConfigPath
@@ -560,11 +563,29 @@ type Mod {
         raise path + " gives the import \"Dagger\" a path, and the generated entrypoint needs the Dagger API under that name"
       }
     }
+    if (decoded.fields.contains("imports")) {
+      decoded.field(["imports"]).fields.each { name =>
+        let source = decoded.field(["imports", name])
+        ["path", "schema"].each { key =>
+          let resource = if (source.fields.contains(key)) { source.field([key]).asString } else { ".." }
+          if (resource != ".." and resource.hasPrefix("../") == false and resource.hasPrefix("/") == false) {
+            raise path + " gives the import " + JSON.encode(name) + " the " + key + " " + JSON.encode(resource) +
+              ", which generation would delete with the entrypoint's directory: move it outside " + (dangEntrypoint ?? "")
+          }
+        }
+      }
+    }
     config.daggerImports.each { declared =>
-      let declaredVersion = declared.version ?? clientVersion
-      if (declared.name != "Dagger" and declaredVersion != clientVersion) {
-        raise path + " declares Dagger " + declaredVersion + " for the import " + JSON.encode(declared.name) +
-          ", and the generated entrypoint targets " + clientVersion
+      if (declared.name != "Dagger" and declared.version != null) {
+        let declaredVersion = declared.version ?? clientVersion
+        let source = decoded.field(["imports", declared.name])
+        if (source.fields.contains("endpoint") and source.field(["endpoint"]).asString != "") {
+          raise path + " import " + JSON.encode(declared.name) + " has an endpoint, which Dang does not allow with a Dagger version"
+        }
+        if ("v" + (declaredVersion.trimPrefix("v").split("+")[0] ?? declaredVersion) != clientVersion) {
+          raise path + " declares Dagger " + declaredVersion + " for the import " + JSON.encode(declared.name) +
+            ", and the generated entrypoint targets " + clientVersion
+        }
       }
     }
     null

@@ -129,8 +129,9 @@ type EntrypointChecks {
     let entrypoint = "src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"
     let source = "src/main/java/io/dagger/modules/entryapp/EntryApp.java"
     let greet = ["-m", "app", "call", "greet", "--name", "World"]
-    [core, entrypoint].each { path =>
-      let called = cli(playground(generated.withNewFile(path, generated.file(path).contents + "// edited by hand\n")), greet)
+    let config = "src/generated/dang/entrypoint/dang.toml"
+    [core, entrypoint, config].each { path =>
+      let called = cli(playground(generated.withNewFile(path, generated.file(path).contents + "\n")), greet)
       let said = called.stdout + called.stderr
       assert(
         called.exitCode != 0 and said.contains("these generated files changed since dagger generate wrote them: " + path + "."),
@@ -237,7 +238,8 @@ type EntrypointChecks {
   the release the entrypoint declares on the process it starts, and is listed in
   the generated sums. Generation replaces an owned Dagger version, keeps every
   other setting and the caller's cwd, and changes nothing the second time. It
-  refuses a file it could not honor, before it writes anything.
+  refuses a file it could not honor, before it writes anything, and leaves the
+  file in place when the module moves to the runtime.
   """
   pub dangConfigCheck(ws: Workspace!): Void @check {
     let target = "v1.0.0-beta.21"
@@ -259,7 +261,9 @@ type EntrypointChecks {
     ["dagger = true", "dagger = \"v1.0.0-beta.20\""].each { owned =>
       let kept = generateApp(generated.withNewFile(
         "/" + configPath,
-        "[imports.Dagger]\n" + owned + "\nservice = \"kept\"\n\n[imports.Other]\npath = \"../other\"\n",
+        "[imports.Dagger]\n" + owned + "\nservice = \"kept\"\n\n[imports.Other]\npath = \"../other\"\n\n" +
+          "[imports.Bare]\ndagger = \"1.0.0-beta.21\"\n\n[imports.Built]\ndagger = \"v1.0.0-beta.21+abc\"\n\n" +
+          "[imports.Free]\ndagger = true\nendpoint = \"http://engine\"\n",
       ))
       assert(configField(kept, ["imports", "Dagger", "dagger"]) == target, owned + " was not replaced")
       assert(configField(kept, ["imports", "Dagger", "service"]) == "kept", "a setting of the Dagger import was lost")
@@ -271,12 +275,25 @@ type EntrypointChecks {
     assertRefused(generated, "[imports.Dagger]\npath = \"../dagger\"\n", "gives the import \"Dagger\" a path")
     assertRefused(generated, "[imports.Dagger]\nendpoint = \"http://engine\"\n", "has an endpoint")
     assertRefused(generated, "[imports.Old]\ndagger = \"v1.0.0-beta.20\"\n", "declares Dagger v1.0.0-beta.20 for the import \"Old\"")
+    assertRefused(generated, "[imports.Other]\ndagger = \"" + target + "\"\nendpoint = \"http://engine\"\n", "has an endpoint")
+    assertRefused(generated, "[imports.Helpers]\npath = \"./helpers\"\n", "the path \"./helpers\", which generation would delete")
+    assertRefused(generated, "[imports.Api]\nschema = \"schema.graphql\"\n", "the schema \"schema.graphql\", which generation would delete")
 
-    let hidden = generated
-      .withoutFile("/" + configPath)
-      .withNewFile("/" + appPath + "/dang.toml", "dang = \"2.1\"\n")
-    let refused = generateApp(hidden).cwd rescue { err: Error => err.message }
-    assert(refused.contains("would replace its settings"), "a dang.toml above the entrypoint was not refused: " + refused)
+    ["dang.toml", "src/dang.toml", "src/generated/dang.toml", "src/generated/dang/dang.toml"].each { ancestor =>
+      let hidden = generated
+        .withoutFile("/" + configPath)
+        .withNewFile("/" + appPath + "/" + ancestor, "dang = \"2.1\"\n")
+      let refused = generateApp(hidden).cwd rescue { err: Error => err.message }
+      assert(refused.contains("would replace its settings"), ancestor + " above the entrypoint was not refused: " + refused)
+    }
+
+    let onRuntime = javaSdk(dangEntrypoint: false).generateScope(
+      generated.withNewFile("/" + appPath + "/dagger-module.toml", "name = \"" + appName + "\"\n").withWorkdir(appPath),
+      isModule: true,
+      name: appName,
+      clients: [],
+    )
+    assert(configField(onRuntime, ["imports", "Dagger", "dagger"]) == target, "moving to the runtime lost dang.toml")
     null
   }
 
