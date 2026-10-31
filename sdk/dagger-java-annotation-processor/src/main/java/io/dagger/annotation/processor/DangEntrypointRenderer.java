@@ -12,7 +12,8 @@ import java.util.List;
 /**
  * Renders the module's Dang entrypoint: the {@link ModuleInfo} that {@code register()} sends to the
  * engine at run time, as static {@code types}, and a {@code call} that runs the generated {@code
- * Entrypoint} in {@code engine-call} mode. Both backends must describe the same schema.
+ * Entrypoint} in {@code engine-call} mode, declaring the engine release the module's core is
+ * generated for on the process it starts. Both backends must describe the same schema.
  */
 final class DangEntrypointRenderer {
 
@@ -22,9 +23,11 @@ final class DangEntrypointRenderer {
 
   static final String RESULT_PATH = "/dagger/result.json";
 
+  static final String CLIENT_VERSION_VARIABLE = "DAGGER_CLIENT_VERSION";
+
   private DangEntrypointRenderer() {}
 
-  static String render(ModuleInfo moduleInfo, String moduleName) {
+  static String render(ModuleInfo moduleInfo, String moduleName, String clientVersion) {
     DaggerType.setKnownEnums(moduleInfo.enumInfos().keySet());
 
     List<String> defs = new ArrayList<>();
@@ -43,7 +46,7 @@ final class DangEntrypointRenderer {
       b.append(Dang.indent(def, 6)).append(",\n");
     }
     b.append("    ]\n  }\n\n");
-    b.append(CALL);
+    b.append(renderCall(clientVersion));
     b.append("}\n");
     return b.toString();
   }
@@ -60,57 +63,65 @@ final class DangEntrypointRenderer {
           "  }",
           "");
 
-  private static final String CALL =
-      String.join(
-          "\n",
-          "  pub call(",
-          "    receiverType: String!,",
-          "    receiverValue: JSON,",
-          "    fnName: String!,",
-          "    fnArgs: JSON!,",
-          "    callDigest: String,",
-          "  ): JSON! {",
-          "    let request = JSON.encode({{",
-          "      receiverType: receiverType,",
-          "      receiverValue: receiverValue,",
-          "      fnName: fnName,",
-          "      fnArgs: fnArgs,",
-          "    }})",
-          "    let build = JavaModuleBuild()",
-          "    # A build failure stays out of the rescue below, so it surfaces unchanged.",
-          "    let jar = build.jar.sync",
-          "    let result = build",
-          "      .runtime(jar)",
-          "      .withEnvVariable(\"DAGGER_MODULE_CALL_DIGEST\", callDigest ?? \"\")",
-          "      .withExec(",
-          "        [\"java\", \"-jar\", \"/opt/module/module.jar\", \"engine-call\", \"--output\", "
-              + Dang.quote(RESULT_PATH)
-              + "],",
-          "        stdin: request,",
-          "        experimentalPrivilegedNesting: true,",
-          "      )",
-          "      .file(" + Dang.quote(RESULT_PATH) + ")",
-          "      .contents rescue {",
-          "        err: GraphQLError => raiseFunctionError(err)",
-          "      }",
-          "    (result :: JSON!)",
-          "  }",
-          "",
-          "  # The exec error carries the end of the dispatcher's stderr, whose last marker",
-          "  # line holds the function's error. Without one, the exec failed before the",
-          "  # function returned, and its own error is raised again.",
-          "  let raiseFunctionError(err: GraphQLError!): String! {",
-          "    let marker = " + Dang.quote(FUNCTION_ERROR_MARKER),
-          "    let stderr = ((JSON.decode(err.extensions) :: {{stderr: String}}).stderr ?? \"\")"
-              + " rescue \"\"",
-          "    let lines = stderr.split(\"\\n\").filter { line => line.hasPrefix(marker) }",
-          "    if (lines.isEmpty) {",
-          "      raise err",
-          "    }",
-          "    raise ((JSON.decode(lines.takeLast(1).join(\"\").trimPrefix(marker)) :: String!)"
-              + " rescue err.message)",
-          "  }",
-          "");
+  private static String renderCall(String clientVersion) {
+    return String.join(
+        "\n",
+        "  pub call(",
+        "    receiverType: String!,",
+        "    receiverValue: JSON,",
+        "    fnName: String!,",
+        "    fnArgs: JSON!,",
+        "    callDigest: String,",
+        "  ): JSON! {",
+        "    let request = JSON.encode({{",
+        "      receiverType: receiverType,",
+        "      receiverValue: receiverValue,",
+        "      fnName: fnName,",
+        "      fnArgs: fnArgs,",
+        "    }})",
+        "    let build = JavaModuleBuild()",
+        "    # A build failure stays out of the rescue below, so it surfaces unchanged.",
+        "    let jar = build.jar.sync",
+        "    # The engine release the module's core is generated for, which an engine",
+        "    # that serves declared releases serves to this process.",
+        "    let result = build",
+        "      .runtime(jar)",
+        "      .withEnvVariable(\"DAGGER_MODULE_CALL_DIGEST\", callDigest ?? \"\")",
+        "      .withEnvVariable("
+            + Dang.quote(CLIENT_VERSION_VARIABLE)
+            + ", "
+            + Dang.quote(clientVersion)
+            + ")",
+        "      .withExec(",
+        "        [\"java\", \"-jar\", \"/opt/module/module.jar\", \"engine-call\", \"--output\", "
+            + Dang.quote(RESULT_PATH)
+            + "],",
+        "        stdin: request,",
+        "        experimentalPrivilegedNesting: true,",
+        "      )",
+        "      .file(" + Dang.quote(RESULT_PATH) + ")",
+        "      .contents rescue {",
+        "        err: GraphQLError => raiseFunctionError(err)",
+        "      }",
+        "    (result :: JSON!)",
+        "  }",
+        "",
+        "  # The exec error carries the end of the dispatcher's stderr, whose last marker",
+        "  # line holds the function's error. Without one, the exec failed before the",
+        "  # function returned, and its own error is raised again.",
+        "  let raiseFunctionError(err: GraphQLError!): String! {",
+        "    let marker = " + Dang.quote(FUNCTION_ERROR_MARKER),
+        "    let stderr = ((JSON.decode(err.extensions) :: {{stderr: String}}).stderr ?? \"\")"
+            + " rescue \"\"",
+        "    let lines = stderr.split(\"\\n\").filter { line => line.hasPrefix(marker) }",
+        "    if (lines.isEmpty) {",
+        "      raise err",
+        "    }",
+        "    raise ((JSON.decode(lines.takeLast(1).join(\"\").trimPrefix(marker)) :: String!)"
+            + " rescue err.message)",
+        "  }",
+        "");
+  }
 
   private static String renderObject(ObjectInfo object, String moduleName) {
     StringBuilder b = new StringBuilder("typeDef.withObject(").append(Dang.quote(object.name()));

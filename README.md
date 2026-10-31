@@ -22,11 +22,15 @@ generated when the engine loads the module**. The module builds with a plain
 > `dagger module init` and `dagger generate` stop before they write anything,
 > with a message that names the floor and the engine's version.
 >
+> Each release of this SDK generates for one engine release, which the
+> generated code declares to the engine. See
+> [The engine release a module targets](#the-engine-release-a-module-targets).
+>
 > It writes module manifests through
 > [`github.com/dagger/sdk-helpers`](https://github.com/dagger/sdk-helpers), the
 > manifest builder that
 > [dagger/dagger#13992](https://github.com/dagger/dagger/pull/13992) moved out of
-> the engine, pinned at its `v1.0.2` tag.
+> the engine, pinned at its `v1.0.8` tag.
 
 ## Install
 
@@ -62,8 +66,9 @@ generates the SDK bindings in one step:
   src/main/java/io/dagger/modules/<pkg>/<Module>.java
   src/main/java/io/dagger/modules/<pkg>/package-info.java
   src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java   # generated entrypoint
-  src/generated/dang/entrypoint/main.dang                       # the module's types and its calls
+  src/generated/dang/entrypoint/main.dang                       # the module's types and its calls, which declare the release it targets
   src/generated/dang/entrypoint/build.dang                      # the jar's Maven build
+  src/generated/dang/entrypoint/dang.toml                       # the Dang and Dagger versions it is written against
   src/generated/sha256sums                                      # every generated file, with its SHA-256
   sdk/src/main/java/...                                         # vendored SDK library
   sdk/src/processor/java/...                                    # vendored annotation processor
@@ -79,11 +84,13 @@ dagger module init java --name my-module --template empty
 ```
 
 `--template` picks a starter under `templates/`: `default` (a small working
-module), `empty` (a bare object class), or `legacy`. `--lock` records, for a
-module on the runtime, the commit each git client resolved to as a pin in its
-manifest; without it a client added at a branch or tag keeps following it. A
-client of a module on the entrypoint always loads the commit it was generated
-against.
+module), `empty` (a bare object class), or `legacy`. `--target-version` pins
+the engine release the module targets, as
+[The engine release a module targets](#the-engine-release-a-module-targets)
+describes. `--lock` records, for a module on the runtime, the commit each git
+client resolved to as a pin in its manifest; without it a client added at a
+branch or tag keeps following it. A client of a module on the entrypoint always
+loads the commit it was generated against.
 
 Because everything is committed and the pom defaults `dagger.proc=none`, a
 plain `mvn package` runs no annotation processor: it compiles the committed
@@ -146,6 +153,86 @@ as `include`.
 `@Function(cache = ...)` sets a function's cache policy on either path:
 `"never"`, `"session"`, or a duration such as `"10m"` after which the result is
 computed again.
+
+### The engine release a module targets
+
+Each release of this SDK generates for one engine release, `v1.0.0-beta.21`
+today: `engineTarget` in `main.dang`. It stays before the identifier-casing cut,
+whose release is not decided, until the Java codegen is ported to the new naming
+rules.
+The generated code declares it in three places:
+
+- Core's `Version.VERSION`. A program outside a module, such as a
+  [plain Maven project](#clients-in-a-plain-maven-project), announces it when
+  it starts a session, as `dagger session --version`, and the engine serves
+  that release's API.
+- The generated entrypoint, which sets `DAGGER_CLIENT_VERSION` on the process
+  that runs a call. Released engines through `v1.0.0-beta.21` ignore the
+  variable and serve the module's process their own API. `v1.0.0-beta.22` and
+  later contain [dagger/dagger#14881](https://github.com/dagger/dagger/pull/14881),
+  which serves the declared release, capped at the engine's own.
+- The entrypoint's `dang.toml`:
+
+  ```toml
+  dang = "2.1"
+
+  [imports.Dagger]
+  dagger = "v1.0.0-beta.21"
+  ```
+
+  An engine with [dagger/dagger#14902](https://github.com/dagger/dagger/pull/14902)
+  reads this file. The version sets the API view and the naming rules of the
+  entrypoint and the default view of the module's process. No released engine
+  reads it yet: `v1.0.0-beta.22` does not contain that change. Releases through
+  `v1.0.0-beta.21` share one API view, and `v1.0.0-beta.22` is the first
+  prerelease with its own. A module with no `dang.toml` gets `v1.0.0-beta.20` on
+  an engine that reads the file, which shares the view of `v1.0.0-beta.21`: it
+  gets the file when it is next generated.
+
+  Dang v2.2.0 and later parse a versioned import, and older standalone Dang
+  tooling may reject the file. This is separate from the language version,
+  which stays `2.1`.
+
+An engine update changes no declaration, and an SDK update changes them all:
+after updating the SDK, run `dagger generate`. An SDK that generates for a
+release newer than the engine that runs the module is an accepted gap: nothing
+checks it, and a call to an API the engine lacks fails when it is made.
+
+The `targetVersion` setting pins the release the module targets, from this
+SDK's floor, `v1.0.0-beta.18`, to the release the SDK generates for:
+
+```toml
+[sdks.java.scopes."path/to/module".settings]
+targetVersion = "v1.0.0-beta.21"
+```
+
+`dagger module init java --target-version <release>` writes it. Until Java
+libraries are published for older releases, generation refuses every other
+value, before it writes anything, with a message that says so.
+
+Not delivered yet, in two separate parts:
+
+- `clients/core` is still generated from the running engine, so an engine
+  update can still change it. A published Java library for the release will
+  make core fixed.
+- The client packages under `clients/<name>` read their modules from the
+  running engine, which is the only way to get their types, and keep doing so.
+
+A module on the runtime carries no release and ignores the setting: its
+manifest pins the engine's view, and its generated files follow the engine.
+
+`dagger generate` owns the Dagger version of the import named `Dagger` in the
+entrypoint's `dang.toml`. It replaces `dagger = true` or an older version,
+requires language `2.1`, and keeps every other setting. It rewrites the file, so
+comments and formatting are lost. The file is listed in
+`src/generated/sha256sums`: after you edit it, run `dagger generate`, or a call
+refuses the module as stale. Generation refuses a `path` on the `Dagger` import,
+an `endpoint` beside a Dagger version on any import, another import that declares
+a different Dagger version, and a `dang.toml` between the entrypoint and the module's root when none exists
+beside the entrypoint, because the new file would hide its settings. It also
+refuses a relative `path` or `schema` that resolves inside a directory generation
+replaces: the entrypoint's, `sdk`, `clients` and `src/generated/java`. It does not edit a `dang.toml` above the
+module's root, and the engine does not read one.
 
 ### Stale generated files
 

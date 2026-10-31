@@ -1,0 +1,146 @@
+"""
+Checks of the engine release generated code targets: the one this SDK
+generates for, which core declares and the generated entrypoint declares to
+the engine, and the targetVersion setting that may pin it.
+"""
+type TargetChecks {
+  let outputRoot: String! = ".dagger/modules/e2e/out"
+  # The name other checks give a module that just needs to be one, so this
+  # module shares their vendored SDK build.
+  let moduleName: String! = "new-app"
+  let modulePath: String! { outputRoot + "/" + moduleName }
+  let projectPath: String! = ".dagger/modules/e2e/fixtures/standalone/app"
+  let clientDepPath: String! = ".dagger/modules/e2e/fixtures/clients/dep"
+  let entrypointPath: String! = "src/generated/dang/entrypoint"
+  let versionPath: String! = "clients/core/src/main/java/io/dagger/client/modules/core/Version.java"
+
+  """
+  The engine release this SDK generates for, as main.dang hardcodes it.
+  """
+  let target: String! = "v1.0.0-beta.21"
+
+  let floor: String! = "v1.0.0-beta.18"
+
+  let assert(condition: Boolean!, message: String!): Void {
+    if (condition == false) { raise message }
+    null
+  }
+
+  let assertContains(value: String!, want: String!, message: String!): Void {
+    assert(value.contains(want), message)
+  }
+
+  let assertNotContains(value: String!, want: String!, message: String!): Void {
+    assert(value.contains(want) == false, message)
+  }
+
+  let generate(ws: Workspace!, sdk: JavaSdk!): Workspace! {
+    sdk.generateScope(ws.withWorkdir(modulePath), isModule: true, name: moduleName, clients: []).withWorkdir(".")
+  }
+
+  let moduleFile(ws: Workspace!, path: String!): String! {
+    ws.file("/" + modulePath + "/" + path).contents
+  }
+
+  """
+  A generated module declares the release this SDK generates for, not the
+  running engine's: core's Version.VERSION, which a standalone client
+  announces, and the DAGGER_CLIENT_VERSION variable the entrypoint sets on the
+  exec that starts the module's process, beside the call digest. The
+  entrypoint carries no targetVersion member and no check of the engine.
+  build.dang runs the processor under the same release, so a call's stale
+  check compares like with like. Generating again, or with the setting naming
+  the same release in another spelling, changes nothing.
+  """
+  pub generatedCheck(ws: Workspace!): Void @check {
+    let generated = generate(ws, javaSdk)
+    let main = moduleFile(generated, entrypointPath + "/main.dang")
+    assertContains(
+      main,
+      "\n      .withEnvVariable(\"DAGGER_MODULE_CALL_DIGEST\", callDigest ?? \"\")\n" +
+        "      .withEnvVariable(\"DAGGER_CLIENT_VERSION\", \"" + target + "\")\n      .withExec(\n",
+      "the entrypoint does not declare the targeted release beside the call digest:\n" + main,
+    )
+    assertNotContains(main, "targetVersion", "the entrypoint carries a targetVersion member:\n" + main)
+    assertContains(
+      moduleFile(generated, entrypointPath + "/build.dang"),
+      ".withEnvVariable(\"_DAGGER_JAVA_SDK_CLIENT_VERSION\", \"" + target + "\")",
+      "build.dang does not run the processor under the targeted release",
+    )
+    assertContains(moduleFile(generated, versionPath), "VERSION = \"" + target + "\"", "core does not declare the targeted release")
+
+    let again = generate(generated, javaSdk)
+    assert(again.changes(generated).isEmpty, "a second generation changed the module")
+    let pinned = generate(generated, javaSdk(targetVersion: target.trimPrefix("v") + "+0123abcd"))
+    assert(pinned.changes(generated).isEmpty, "the setting naming the targeted release changed the module")
+    null
+  }
+
+  """
+  A plain project's core declares the release this SDK generates for too, so
+  the program it is compiled into announces it.
+  """
+  pub projectCheck(ws: Workspace!): Void @check {
+    let generated = javaSdk.generateScope(
+      ws.withWorkdir(projectPath),
+      isModule: false,
+      name: "",
+      clients: [ws.moduleSource("/" + clientDepPath)],
+    )
+    assertContains(
+      generated.file("/" + projectPath + "/" + versionPath).contents,
+      "VERSION = \"" + target + "\"",
+      "a plain project's core does not declare the targeted release",
+    )
+    null
+  }
+
+  """
+  The targetVersion setting is refused before anything is written unless it
+  names the release this SDK generates for: a release above it, one below the
+  floor, one between them, which needs a published Java library this SDK does
+  not have yet, and one that is no release. Each refusal names the scope, the
+  setting and where it lives, and what to do. The spelling may drop the v or
+  carry a build. A plain project takes the setting as a module does; a module
+  on the runtime ignores it.
+  """
+  pub settingCheck(ws: Workspace!): Void @check {
+    let subject = "module \"" + moduleName + "\""
+    let cannot = " pins targetVersion "
+    let sdk = ", which this release of the Java SDK cannot generate for: "
+    let settings = "the scope's settings in dagger.toml"
+    let refusals = [
+      ["v9.0.0", subject + cannot + "v9.0.0" + sdk + "it targets " + target + ", and nothing later. Remove targetVersion from " + settings + ", or install the SDK release built for v9.0.0"],
+      ["v1.0.0", subject + cannot + "v1.0.0" + sdk + "it targets " + target + ", and nothing later"],
+      ["v1.0.0-beta.17", subject + cannot + "v1.0.0-beta.17" + sdk + "it runs on " + floor + " and later only. Remove targetVersion from " + settings + ", or install the SDK release built for v1.0.0-beta.17"],
+      ["v1.0.0-beta.9", subject + cannot + "v1.0.0-beta.9" + sdk + "it runs on " + floor + " and later only"],
+      ["v1.0.0-beta.20", subject + cannot + "v1.0.0-beta.20" + sdk + "it targets " + target + " only, until a Java library is published for older releases. Remove targetVersion from " + settings + ", or install the SDK release built for v1.0.0-beta.20"],
+      ["1.0.0-beta.20+abc", subject + cannot + "v1.0.0-beta.20" + sdk + "it targets " + target + " only, until a Java library is published"],
+      [floor, subject + cannot + floor + sdk + "it targets " + target + " only, until a Java library is published"],
+      ["latest", subject + cannot + "\"latest\", which is no engine release such as " + target + ". Set targetVersion to a release in " + settings + ", or remove it"],
+      ["v1.0.0-beta..1", subject + cannot + "\"v1.0.0-beta..1\", which is no engine release"],
+      ["v1.0.0-beta.21+???", subject + cannot + "\"v1.0.0-beta.21+???\", which is no engine release"],
+    ]
+    refusals.each { case =>
+      let said = javaSdk.targetVersionRefusal(subject, case[0] ?? "")
+      assertContains(said, case[1] ?? "", "setting \"" + (case[0] ?? "") + "\": the refusal does not say \"" + (case[1] ?? "") + "\": " + said)
+    }
+    ["", target, target.trimPrefix("v"), target + "+a7a2e64e"].each { setting =>
+      let said = javaSdk.targetVersionRefusal(subject, setting)
+      assert(said == "", "setting \"" + setting + "\" was refused: " + said)
+    }
+
+    let refused = generate(ws, javaSdk(targetVersion: "v1.0.0-beta.20")).cwd rescue { err: Error => err.message }
+    assertContains(refused, subject + cannot + "v1.0.0-beta.20" + sdk, "generation did not refuse the setting: " + refused)
+    let project = javaSdk(targetVersion: "v9.0.0")
+      .generateScope(ws.withWorkdir(projectPath), isModule: false, name: "", clients: [ws.moduleSource("/" + clientDepPath)])
+      .cwd rescue { err: Error => err.message }
+    assertContains(project, "scope " + projectPath + cannot + "v9.0.0" + sdk, "a plain project did not refuse the setting: " + project)
+    let runtime = javaSdk(targetVersion: "v9.0.0", dangEntrypoint: false)
+      .generateScope(ws.withWorkdir(modulePath), isModule: true, name: moduleName, clients: [])
+      .withWorkdir(".")
+    let engine = version.split("+")[0] ?? version
+    assertContains(moduleFile(runtime, versionPath), "VERSION = \"" + engine + "\"", "a module on the runtime does not follow the engine")
+    null
+  }
+}

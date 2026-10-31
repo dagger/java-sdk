@@ -40,6 +40,16 @@ type Mod {
   let clients: [ModuleSource!]!
 
   """
+  The engine release this scope's generated code targets: what core declares in
+  Version.VERSION, which a standalone client announces with `dagger session
+  --version`, what the entrypoint's dang.toml declares, and the view the scope's
+  schemas are read in. Handed in rather than read off the live engine, so an
+  engine update changes neither, except on the runtime, which is handed the
+  running engine's release and follows it.
+  """
+  let clientVersion: String!
+
+  """
   The shared local Maven repository.
 
   Mounted LOCKED, not shared: seeding it from the committed prebuilt repository
@@ -123,17 +133,18 @@ type Mod {
       versioned.withMountedDirectory("/plan", generationPlan(introspectionJSON))
     }
     let input = if (clients.length == 0) { "-Ddaggerengine.schema=/schema.json" } else { "-Ddaggerengine.plan=/plan" }
-    planned.withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", input, "-Ddaggerengine.version=" + engineVersion, "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
+    planned.withExec(["mvn", "--projects", "dagger-java-sdk,dagger-java-annotation-processor", "--also-make", "install", input, "-Ddaggerengine.version=" + clientVersion, "-Dmaven.test.skip=true", "-Dfmt.skip=true", "--no-transfer-progress"])
   }
 
   """
   What the codegen plugin generates for a scope with clients: core from the
   scope's own schema, and one target per client. A client's schema is read in
   the module's view, so it names only the core types the module's core has. A
-  plain project has no module, and reads it in the engine's view, as its core.
+  plain project has no module, and reads it in the view of the release it
+  targets, as its core.
   """
   let generationPlan(introspectionJSON: File!): Directory! {
-    let view = if (isModule) { ws.moduleSource(workspaceRef(rootPath)).engineVersion } else { engineVersion }
+    let view = if (isModule) { ws.moduleSource(workspaceRef(rootPath)).engineVersion } else { clientVersion }
     clients.reduce(directory.withFile("core/schema.json", introspectionJSON)) { plan, client =>
       let entry = "target-" + client.moduleName
       plan
@@ -155,19 +166,6 @@ type Mod {
       "local\n" + workspaceRef(client.sourceRootSubpath) + "\n"
     }
   }
-
-  """
-  The live engine version, without build metadata.
-
-  Codegen only reads the engine version off the CLI when it has to query the
-  schema itself. Here the schema is handed to it, so without this the version
-  stays whatever the pom happens to say, and generation cannot tell which shapes
-  the engine on the other end actually supports.
-
-  The `+<commit>` suffix is dropped: it changes on every engine build and would
-  make every module's SDK rebuild for no reason.
-  """
-  let engineVersion: String! { version.split("+")[0] ?? version }
 
   let vendoredSdk(introspectionJSON: File!, name: String!): Directory! {
     let built = sdkBuilt(introspectionJSON, name)
@@ -406,15 +404,16 @@ type Mod {
   }
 
   """
-  Core's schema for a plain project: the client-facing one, with the host and
-  the engine API a module's schema hides. The engine serves core alone for a
-  module source with no runtime, as it installs nothing beside core.
+  Core's schema for a plain project, in the view of the release it targets:
+  the client-facing one, with the host and the engine API a module's schema
+  hides. The engine serves core alone for a module source with no runtime, as
+  it installs nothing beside core.
   """
   let projectCoreSchema: File! {
     directory
       .withNewFile("dagger-module.toml", "name = \"core-schema\"\n")
       .asModuleSource
-      .withEngineVersion(engineVersion)
+      .withEngineVersion(clientVersion)
       .clientSchemaIntrospectionJSON
   }
 
@@ -462,7 +461,8 @@ type Mod {
   emits io.dagger.gen.entrypoint.Entrypoint under
   target/generated-sources/annotations, for vendoring under
   <module>/src/generated/java, and the Dang entrypoint's main.dang under
-  target/classes/dagger/entrypoint.
+  target/classes/dagger/entrypoint, which declares the release the module's
+  core is generated for.
   """
   let processed(moduleDir: Directory!, name: String!): Container! {
     mvn
@@ -471,14 +471,16 @@ type Mod {
       .withDirectory("/module", moduleDir)
       .withWorkdir("/module")
       .withEnvVariable("_DAGGER_JAVA_SDK_MODULE_NAME", name)
+      .withEnvVariable("_DAGGER_JAVA_SDK_CLIENT_VERSION", clientVersion)
       .withExec(["mvn", "compile", "-Ddagger.proc=full", "-Ddagger.sdk=prebuilt", "-Ddagger.sdk.version=" + name, "--no-transfer-progress"])
   }
 
   """
   The Dang entrypoint: main.dang from the annotation processor, and build.dang,
   which builds the jar with the images the runtime pins. build.dang runs the
-  processor again under the name it ran under here, because the name decides
-  which object is the module's.
+  processor again under the name and the release it ran under here, because
+  the name decides which object is the module's and the release is written
+  into main.dang.
   """
   let dangEntrypointDir(processedModule: Container!, name: String!): Directory! {
     directory
@@ -488,7 +490,8 @@ type Mod {
         currentModule.source.file("entrypoint/build.dang.tmpl").contents
           .replace("<maven-image>", dockerfileImage("runtime/images/maven/Dockerfile"))
           .replace("<jre-image>", dockerfileImage("runtime/images/java/Dockerfile"))
-          .replace("<module-name>", name),
+          .replace("<module-name>", name)
+          .replace("<client-version>", clientVersion),
       )
   }
 
@@ -519,6 +522,119 @@ type Mod {
   }
 
   """
+  The entrypoint's dang.toml, from the workspace root.
+  """
+  let entrypointConfigPath: String! { joinPath(rootPath, (dangEntrypoint ?? "") + "/dang.toml") }
+
+  let hasFile(path: String!): Boolean! {
+    ws.directory("/", include: [path]).exists(path)
+  }
+
+  """
+  Refuse a dang.toml this scope cannot generate its entrypoint's over, before
+  anything is written. The engine reads the nearest one in the module and does
+  not merge them, so a new file beside the entrypoint would hide one further up.
+  The manifest builder drops a path from the import it sets, which would lose
+  it, and the engine refuses two imports that declare different Dagger versions,
+  however they spell them. Dang refuses a version beside an endpoint. Generation
+  replaces the entrypoint's directory, the vendored SDK, the clients and the
+  generated Java, which deletes what a relative path or schema inside them
+  refers to. An absolute path names a location this generation cannot place in
+  the module, so it passes.
+  """
+  let refuseEntrypointConfig: Void {
+    let path = entrypointConfigPath
+    if (hasFile(path) == false) {
+      ["src/generated/dang/dang.toml", "src/generated/dang.toml", "src/dang.toml", "dang.toml"].each { ancestor =>
+        let found = joinPath(rootPath, ancestor)
+        if (hasFile(found)) {
+          raise found + " governs the module's generated entrypoint, and the dang.toml generated at " + path +
+            " would replace its settings: move them to " + path
+        }
+      }
+      return null
+    }
+    let contents = ws.file(workspaceRef(path)).contents
+    let config = sdkHelpers.dangConfig(loadToml: ws.file(workspaceRef(path)))
+    if (config.version != "2.1") {
+      raise path + " sets dang = " + JSON.encode(config.version) + ", and the generated entrypoint is written in 2.1"
+    }
+    let decoded = json.withContents((JSON.encode(TOML.decode(contents)) :: Dagger.JSON!))
+    if (decoded.fields.contains("imports") and decoded.field(["imports"]).fields.contains("Dagger")) {
+      if (decoded.field(["imports", "Dagger"]).fields.contains("path")) {
+        raise path + " gives the import \"Dagger\" a path, and the generated entrypoint needs the Dagger API under that name"
+      }
+    }
+    if (decoded.fields.contains("imports")) {
+      decoded.field(["imports"]).fields.each { name =>
+        let source = decoded.field(["imports", name])
+        ["path", "schema"].each { key =>
+          let resource = if (source.fields.contains(key)) { source.field([key]).asString } else { "" }
+          let resolved = resolvedPath((dangEntrypoint ?? "") + "/" + resource)
+          let replaced = [dangEntrypoint ?? "", "sdk", "clients", "src/generated/java"].any { dir =>
+            resolved == dir or resolved.hasPrefix(dir + "/")
+          }
+          if (resource != "" and resource.hasPrefix("/") == false and replaced) {
+            raise path + " gives the import " + JSON.encode(name) + " the " + key + " " + JSON.encode(resource) +
+              ", which generation would delete: move it outside the directories generation replaces"
+          }
+        }
+      }
+    }
+    config.daggerImports.{{name, version}}.each { declared =>
+      if (declared.name != "Dagger" and declared.version != null) {
+        let declaredVersion = declared.version ?? clientVersion
+        let source = decoded.field(["imports", declared.name])
+        if (source.fields.contains("endpoint") and source.field(["endpoint"]).asString != "") {
+          raise path + " import " + JSON.encode(declared.name) + " has an endpoint, which Dang does not allow with a Dagger version"
+        }
+        if ("v" + (declaredVersion.trimPrefix("v").split("+")[0] ?? declaredVersion) != clientVersion) {
+          raise path + " declares Dagger " + declaredVersion + " for the import " + JSON.encode(declared.name) +
+            ", and the generated entrypoint targets " + clientVersion
+        }
+      }
+    }
+    null
+  }
+
+  """
+  A relative path with its `.` and `..` segments resolved. A `..` that leaves the
+  start of the path stays in it.
+  """
+  let resolvedPath(path: String!): String! {
+    path.split("/").reduce("") { resolved, segment =>
+      if (segment == "" or segment == ".") {
+        resolved
+      } else if (segment != "..") {
+        if (resolved == "") { segment } else { resolved + "/" + segment }
+      } else if (resolved == "") {
+        ".."
+      } else if (resolved == ".." or resolved.hasSuffix("/..")) {
+        resolved + "/.."
+      } else {
+        resolved.split("/").dropLast(1).join("/")
+      }
+    }
+  }
+
+  """
+  The workspace with the entrypoint's dang.toml written: the one generation
+  found, read from ws because staged has replaced the entrypoint's directory,
+  with the Dagger version set to the release this scope targets. A module on the
+  entrypoint is generated with the cwd at the workspace root, where the manifest
+  builder that runs next expects it.
+  """
+  let withEntrypointConfig(staged: Workspace!): Workspace! {
+    let path = entrypointConfigPath
+    sdkHelpers
+      .dangConfig(loadToml: if (hasFile(path)) { ws.file(workspaceRef(path)) } else { null })
+      .withVersion("2.1")
+      .withDaggerImport(name: "Dagger", version: clientVersion)
+      .generate(staged.withWorkdir(joinPath(rootPath, dangEntrypoint ?? "")))
+      .withWorkdir(".")
+  }
+
+  """
   The image a single-FROM Dockerfile of the runtime names, which Dependabot
   keeps up to date.
   """
@@ -539,6 +655,9 @@ type Mod {
       return withSdkAndClients(staleClientDirs(committed), vendored, projectCoreSchema, projectSdkVersion, pom)
     }
     requireCoreClientSource(committed)
+    if (dangEntrypoint != null) {
+      refuseEntrypointConfig
+    }
     let modSource = ws.moduleSource(workspaceRef(rootPath))
     let name = modSource.moduleName
     let introspectionJSON = modSource.introspectionSchemaJSON
@@ -584,9 +703,10 @@ type Mod {
       workspaceRef(joinPath(rootPath, dangEntrypoint ?? "")),
       dangEntrypointDir(processedModule, name),
     )
-    withEntrypoint.withNewFile(
+    let configured = withEntrypointConfig(withEntrypoint)
+    configured.withNewFile(
       workspaceRef(joinPath(rootPath, generatedSumsPath)),
-      generatedSums(withEntrypoint),
+      generatedSums(configured),
     )
   }
 
