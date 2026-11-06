@@ -40,6 +40,11 @@ type Mod {
   let clients: [ModuleSource!]!
 
   """
+  The engine release the generated entrypoint declares, empty without one.
+  """
+  let clientVersion: String!
+
+  """
   The shared local Maven repository.
 
   Mounted LOCKED, not shared: seeding it from the committed prebuilt repository
@@ -471,6 +476,7 @@ type Mod {
       .withDirectory("/module", moduleDir)
       .withWorkdir("/module")
       .withEnvVariable("_DAGGER_JAVA_SDK_MODULE_NAME", name)
+      .withEnvVariable("_DAGGER_JAVA_SDK_CLIENT_VERSION", clientVersion)
       .withExec(["mvn", "compile", "-Ddagger.proc=full", "-Ddagger.sdk=prebuilt", "-Ddagger.sdk.version=" + name, "--no-transfer-progress"])
   }
 
@@ -488,7 +494,8 @@ type Mod {
         currentModule.source.file("entrypoint/build.dang.tmpl").contents
           .replace("<maven-image>", dockerfileImage("runtime/images/maven/Dockerfile"))
           .replace("<jre-image>", dockerfileImage("runtime/images/java/Dockerfile"))
-          .replace("<module-name>", name),
+          .replace("<module-name>", name)
+          .replace("<client-version>", clientVersion),
       )
   }
 

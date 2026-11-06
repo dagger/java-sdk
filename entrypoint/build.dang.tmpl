@@ -30,6 +30,7 @@ type JavaModuleBuild {
     )
     let built = module
       .withEnvVariable("_DAGGER_JAVA_SDK_MODULE_NAME", "<module-name>")
+      .withEnvVariable("_DAGGER_JAVA_SDK_CLIENT_VERSION", "<client-version>")
       .withExec(["sh", "-c", buildScript])
     refuseStale(
       built.file("/tmp/stale").contents,

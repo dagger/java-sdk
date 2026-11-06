@@ -112,6 +112,7 @@ type JavaSdk {
         vendorSdkJar: false,
         dangEntrypoint: null,
         clients: clients,
+        clientVersion: "",
       ).generated
     } else {
       let scope = normalizePath(ws.cwd)
@@ -143,6 +144,7 @@ type JavaSdk {
           vendorSdkJar: vendorSdkJar,
           dangEntrypoint: null,
           clients: [],
+          clientVersion: "",
         ).generated.withWorkdir(scope)
       }
     }
@@ -191,6 +193,7 @@ type JavaSdk {
       vendorSdkJar: vendorSdkJar,
       dangEntrypoint: entrypointPath,
       clients: clients,
+      clientVersion: entrypointTarget,
     ).generated
     sdkHelpers.moduleManifest
       .withName(name: name)

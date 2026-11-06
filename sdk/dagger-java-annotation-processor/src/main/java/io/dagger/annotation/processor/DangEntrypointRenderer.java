@@ -12,7 +12,8 @@ import java.util.List;
 /**
  * Renders the module's Dang entrypoint: the {@link ModuleInfo} that {@code register()} sends to the
  * engine at run time, as static {@code types}, and a {@code call} that runs the generated {@code
- * Entrypoint} in {@code engine-call} mode. Both backends must describe the same schema.
+ * Entrypoint} in {@code engine-call} mode, declaring the engine release its bindings target on the
+ * process it starts. Both backends must describe the same schema.
  */
 final class DangEntrypointRenderer {
 
@@ -24,7 +25,7 @@ final class DangEntrypointRenderer {
 
   private DangEntrypointRenderer() {}
 
-  static String render(ModuleInfo moduleInfo, String moduleName) {
+  static String render(ModuleInfo moduleInfo, String moduleName, String clientVersion) {
     DaggerType.setKnownEnums(moduleInfo.enumInfos().keySet());
 
     List<String> defs = new ArrayList<>();
@@ -43,7 +44,7 @@ final class DangEntrypointRenderer {
       b.append(Dang.indent(def, 6)).append(",\n");
     }
     b.append("    ]\n  }\n\n");
-    b.append(CALL);
+    b.append(CALL.replace("<client-version>", Dang.quote(clientVersion)));
     b.append("}\n");
     return b.toString();
   }
@@ -82,6 +83,7 @@ final class DangEntrypointRenderer {
           "    let result = build",
           "      .runtime(jar)",
           "      .withEnvVariable(\"DAGGER_MODULE_CALL_DIGEST\", callDigest ?? \"\")",
+          "      .withEnvVariable(\"DAGGER_CLIENT_VERSION\", <client-version>)",
           "      .withExec(",
           "        [\"java\", \"-jar\", \"/opt/module/module.jar\", \"engine-call\", \"--output\", "
               + Dang.quote(RESULT_PATH)
