@@ -217,6 +217,25 @@ type EntrypointChecks {
   }
 
   """
+  The targetVersion setting accepts the release this SDK generates for, in any
+  spelling, and refuses every other value before anything is written.
+  """
+  pub targetVersionCheck(ws: Workspace!): Void @check {
+    let target = javaSdk.clientVersion
+    let scope = ws.withWorkdir(appPath)
+    let generated = javaSdk.generateScope(scope, isModule: true, name: appName, clients: [])
+    ["v1.0.0-beta.20", "latest"].each { pin =>
+      let refused = javaSdk(targetVersion: pin).generateScope(scope, isModule: true, name: appName, clients: [])
+        .cwd rescue { err: Error => err.message }
+      assert(refused.contains("targetVersion \"" + pin + "\" is not " + target), "targetVersion " + pin + " was not refused: " + refused)
+    }
+    let pinned = javaSdk(targetVersion: target.trimPrefix("v") + "+abc")
+      .generateScope(scope, isModule: true, name: appName, clients: [])
+    assert(pinned.changes(generated).isEmpty, "targetVersion naming " + target + " changed the module")
+    null
+  }
+
+  """
   A module loaded by git reference builds from its commit, with no checkout of
   the caller's.
   """
