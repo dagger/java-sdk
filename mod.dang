@@ -40,7 +40,8 @@ type Mod {
   let clients: [ModuleSource!]!
 
   """
-  The engine release the generated entrypoint declares, empty without one.
+  The engine release the generated entrypoint declares in its process and its
+  dang.toml, empty without one.
   """
   let clientVersion: String!
 
@@ -525,6 +526,58 @@ type Mod {
       .stdout
   }
 
+  let entrypointDir: String! { joinPath(rootPath, dangEntrypoint ?? "") }
+
+  let entrypointConfig: String! { entrypointDir + "/dang.toml" }
+
+  let decodedDangConfig(file: File!): Dagger.JSONValue! {
+    json.withContents((JSON.encode(TOML.decode(file.contents)) :: Dagger.JSON!))
+  }
+
+  """
+  Refuse what the Go SDK refuses: another language, a path on the Dagger
+  import, another Dagger version, or an ancestor dang.toml the new file hides,
+  unless it holds only what generation writes.
+  """
+  let refuseDangConfig: Void {
+    let above = (dangEntrypoint ?? "").split("/").dropLast(1)
+      .reduce([rootPath]) { dirs, part => dirs + [joinPath(dirs.takeLast(1)[0] ?? rootPath, part)] }
+      .map { dir => joinPath(dir, "dang.toml") }
+    let present = ws.directory("/", include: [entrypointConfig] + above)
+    if (present.exists(entrypointConfig) == false) {
+      let inherited = above.filter { path => present.exists(path) }.takeLast(1)[0] ?? ""
+      if (inherited == "") {
+        return null
+      }
+      let config = decodedDangConfig(present.file(inherited))
+      let dagger = toString(config.field(["imports", "Dagger", "dagger"]).contents) rescue "true"
+      let isDefault = config.fields.all { f => f == "dang" or f == "imports" } and
+        (toString(config.field(["dang"]).contents) rescue "\"2.1\"") == "\"2.1\"" and
+        (config.field(["imports"]).fields rescue []).all { i => i == "Dagger" } and
+        (config.field(["imports", "Dagger"]).fields rescue []).all { f => f == "dagger" } and
+        (dagger == "true" or dagger == JSON.encode(clientVersion))
+      if (isDefault == false) {
+        raise inherited + " has settings that a generated " + entrypointConfig + " would hide, because the engine reads only the nearest dang.toml; move them to " + entrypointConfig
+      }
+      return null
+    }
+    let file = present.file(entrypointConfig)
+    let config = sdkHelpers.dangConfig(loadToml: file)
+    if (config.version != "2.1") {
+      raise entrypointConfig + " sets dang = " + JSON.encode(config.version) + ", and the generated entrypoint is written in 2.1"
+    }
+    config.daggerImports.{{name, version}}.each { declared =>
+      if (declared.name != "Dagger" and declared.version != null and declared.version != clientVersion) {
+        raise entrypointConfig + " sets imports." + declared.name + ".dagger = " + JSON.encode(declared.version ?? "") + ", and this module targets " + clientVersion
+      }
+    }
+    # sdk-helpers drops a path on the import it sets without a word.
+    if (decodedDangConfig(file).field(["imports", "Dagger"]).fields.contains("path") rescue false) {
+      raise entrypointConfig + " sets a path for the Dagger import, which the generated entrypoint needs from the engine"
+    }
+    null
+  }
+
   """
   The image a single-FROM Dockerfile of the runtime names, which Dependabot
   keeps up to date.
@@ -546,6 +599,9 @@ type Mod {
       return withSdkAndClients(staleClientDirs(committed), vendored, projectCoreSchema, projectSdkVersion, pom)
     }
     requireCoreClientSource(committed)
+    if (dangEntrypoint != null) {
+      refuseDangConfig
+    }
     let modSource = ws.moduleSource(workspaceRef(rootPath))
     let name = modSource.moduleName
     let introspectionJSON = modSource.introspectionSchemaJSON
@@ -587,13 +643,17 @@ type Mod {
     if (dangEntrypoint == null) {
       return staged
     }
-    let withEntrypoint = staged.withNewDirectory(
-      workspaceRef(joinPath(rootPath, dangEntrypoint ?? "")),
-      dangEntrypointDir(processedModule, name),
-    )
-    withEntrypoint.withNewFile(
+    let withEntrypoint = staged.withDirectory(workspaceRef(entrypointDir), dangEntrypointDir(processedModule, name))
+    let leaf = ws.directory("/", include: [entrypointConfig])
+    let configured = sdkHelpers
+      .dangConfig(loadToml: if (leaf.exists(entrypointConfig)) { leaf.file(entrypointConfig) } else { null })
+      .withVersion("2.1")
+      .withDaggerImport(name: "Dagger", version: clientVersion)
+      .generate(withEntrypoint.withWorkdir(entrypointDir))
+      .withWorkdir(".")
+    configured.withNewFile(
       workspaceRef(joinPath(rootPath, generatedSumsPath)),
-      generatedSums(withEntrypoint),
+      generatedSums(configured),
     )
   }
 

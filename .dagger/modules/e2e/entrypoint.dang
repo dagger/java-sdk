@@ -216,6 +216,47 @@ type EntrypointChecks {
     null
   }
 
+  let regenerate(ws: Workspace!): Workspace! {
+    javaSdk.generateScope(ws, isModule: true, name: appName, clients: [])
+  }
+
+  """
+  Generation writes the entrypoint's dang.toml with language 2.1 and the
+  release the entrypoint declares on its process, replaces an owned Dagger
+  version, keeps other settings, and changes nothing the second time.
+  """
+  pub dangConfigCheck(ws: Workspace!): Void @check {
+    let configPath = "/" + appPath + "/src/generated/dang/entrypoint/dang.toml"
+    let seeded = regenerate(ws.withWorkdir(appPath))
+      .withNewFile(configPath, "[imports.Dagger]\ndagger = true\n\n[imports.Helpers]\npath = \"./helpers\"\n")
+      .withNewFile("/" + appPath + "/src/generated/dang/entrypoint/helpers/main.dang", "pub helper: String! { \"kept\" }\n")
+    let generated = regenerate(seeded)
+    let config = json.withContents((JSON.encode(TOML.decode(generated.file(configPath).contents)) :: Dagger.JSON!))
+    let declared = config.field(["imports", "Dagger", "dagger"]).asString
+    let main = generated.file("/" + appPath + "/src/generated/dang/entrypoint/main.dang").contents
+    assert(config.field(["dang"]).asString == "2.1", "dang.toml does not set language 2.1")
+    assert(declared == javaSdk.clientVersion, "dang.toml declares " + declared)
+    assert(main.contains(".withEnvVariable(\"DAGGER_CLIENT_VERSION\", \"" + declared + "\")"), "the entrypoint declares another release:\n" + main)
+    assert(config.field(["imports", "Helpers", "path"]).asString == "./helpers", "another import was lost")
+    assert(generated.directory("/" + appPath + "/src/generated/dang/entrypoint").exists("helpers/main.dang"), "a file beside dang.toml was lost")
+    assert(generated.file("/" + appPath + "/src/generated/sha256sums").contents.contains("dang/entrypoint/dang.toml"), "the generated sums do not list dang.toml")
+    assert(regenerate(generated).changes(generated).isEmpty, "a second generation changed the module")
+    let inherited = generated.withoutFile(configPath).withNewFile("/" + appPath + "/src/dang.toml", "dang = \"2.1\"\n\n[imports.Dagger]\ndagger = true\n")
+    assert((regenerate(inherited).cwd rescue { err: Error => err.message }) == generated.cwd, "a default dang.toml above the entrypoint was refused")
+    [
+      [configPath, "dang = \"2.0\"\n", "sets dang = \"2.0\""],
+      [configPath, "[imports.Dagger]\npath = \"../dagger\"\n", "a path for the Dagger import"],
+      [configPath, "[imports.Old]\ndagger = \"v1.0.0-beta.20\"\n", "imports.Old.dagger"],
+      ["/" + appPath + "/src/dang.toml", "[imports.Other]\npath = \"../other\"\n", "would hide"],
+      ["/" + appPath + "/src/dang.toml", "[imports.Dagger]\ndagger = \"v1.0.0-beta.20\"\n", "would hide"],
+      ["/" + appPath + "/src/dang.toml", "dang = \"2.0\"\n", "would hide"],
+    ].each { c =>
+      let refused = regenerate(generated.withoutFile(configPath).withNewFile(c[0] ?? "", c[1] ?? "")).cwd rescue { err: Error => err.message }
+      assert(refused.contains(c[2] ?? ""), "dang.toml " + JSON.encode(c[1] ?? "") + " was not refused: " + refused)
+    }
+    null
+  }
+
   """
   The targetVersion setting accepts the release this SDK generates for, in any
   spelling, and refuses every other value before anything is written.
@@ -223,7 +264,7 @@ type EntrypointChecks {
   pub targetVersionCheck(ws: Workspace!): Void @check {
     let target = javaSdk.clientVersion
     let scope = ws.withWorkdir(appPath)
-    let generated = javaSdk.generateScope(scope, isModule: true, name: appName, clients: [])
+    let generated = regenerate(scope)
     ["v1.0.0-beta.20", "latest"].each { pin =>
       let refused = javaSdk(targetVersion: pin).generateScope(scope, isModule: true, name: appName, clients: [])
         .cwd rescue { err: Error => err.message }
