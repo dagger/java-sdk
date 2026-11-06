@@ -893,7 +893,10 @@ public class DaggerModuleAnnotationProcessor extends AbstractProcessor {
             .createResource(StandardLocation.CLASS_OUTPUT, "", "dagger/entrypoint/main.dang");
     try (Writer writer = file.openWriter()) {
       writer.write(
-          DangEntrypointRenderer.render(moduleInfo, System.getenv("_DAGGER_JAVA_SDK_MODULE_NAME")));
+          DangEntrypointRenderer.render(
+              moduleInfo,
+              System.getenv("_DAGGER_JAVA_SDK_MODULE_NAME"),
+              Objects.requireNonNullElse(System.getenv("_DAGGER_JAVA_SDK_CLIENT_VERSION"), "")));
     }
   }
 

@@ -26,7 +26,7 @@ generated when the engine loads the module**. The module builds with a plain
 > [`github.com/dagger/sdk-helpers`](https://github.com/dagger/sdk-helpers), the
 > manifest builder that
 > [dagger/dagger#13992](https://github.com/dagger/dagger/pull/13992) moved out of
-> the engine, pinned at its `v1.0.2` tag.
+> the engine, pinned at its `v1.0.8` tag.
 
 ## Install
 
@@ -64,6 +64,7 @@ generates the SDK bindings in one step:
   src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java   # generated entrypoint
   src/generated/dang/entrypoint/main.dang                       # the module's types and its calls
   src/generated/dang/entrypoint/build.dang                      # the jar's Maven build
+  src/generated/dang/entrypoint/dang.toml                       # the Dang and Dagger versions it is written against
   src/generated/sha256sums                                      # every generated file, with its SHA-256
   sdk/src/main/java/...                                         # vendored SDK library
   sdk/src/processor/java/...                                    # vendored annotation processor
@@ -146,6 +147,17 @@ as `include`.
 `@Function(cache = ...)` sets a function's cache policy on either path:
 `"never"`, `"session"`, or a duration such as `"10m"` after which the result is
 computed again.
+
+### The engine release a module targets
+
+A module on the entrypoint targets `v1.0.0-beta.25`: its bindings use the
+running engine's view of that release, its entrypoint sets
+`DAGGER_CLIENT_VERSION` on the process that runs a call, and generation writes
+`src/generated/dang/entrypoint/dang.toml` with `dang = "2.1"` and that release
+on the `Dagger` import. Generation keeps other files and settings there, drops
+comments, and refuses settings it would break. Those files are listed in
+`src/generated/sha256sums`, so after editing one, run `dagger generate`. The
+`targetVersion` scope setting accepts only that release.
 
 ### Stale generated files
 
