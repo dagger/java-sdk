@@ -369,10 +369,10 @@ type JavaSdk {
   The engine release a module on the entrypoint is staged at, so its bindings
   are generated from the API view the engine serves the module: an entrypoint
   module carries no engine version, and the engine serves it a release before
-  the identifier-casing cut of v1.0.0-beta.22. Pre-cut until the Java codegen
-  is ported to the beta.22 naming rules.
+  the identifier-casing cut. Pre-cut until the Java codegen is ported to the
+  new naming rules.
   """
-  let entrypointTarget: String! = "v1.0.0-beta.21"
+  let entrypointTarget: String! = "v1.0.0-beta.25"
 
   """
   The first engine release this SDK runs on.
