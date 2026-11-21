@@ -737,10 +737,11 @@ type E2e {
   """
   The CLI of the engine running the check lists this checkout as the java
   SDK, initializes a Java module on the Dang entrypoint from it, and runs the
-  module. Each CLI call is a session of its own, as a user's is.
+  module. Each CLI call is a session of its own, as a user's is. The module's
+  class is E2eSmoke, as the engine formats a Java class name.
   """
   devSdkCheck(ws: Workspace!): Void @check {
-    let modulePath = ".dagger/modules/sdk-smoke"
+    let modulePath = ".dagger/modules/e2e-smoke"
     let checkout = container
       .from("registry.dagger.io/engine:" + (version.split("+")[0] ?? version))
       .withoutEntrypoint
@@ -756,13 +757,13 @@ type E2e {
 
     let initialized = listed
       .withExec(
-        ["dagger", "--auto-apply", "module", "init", "java", "--name", "sdk-smoke", "--path", modulePath],
+        ["dagger", "--auto-apply", "module", "init", "java", "--name", "e2e-smoke", "--path", modulePath],
         daggerInDaggerNewSession: true,
       )
       .withExec(["test", "-f", modulePath + "/dagger-module.toml"])
       .withExec(["test", "!", "-e", modulePath + "/dagger.json"])
       .withExec(["test", "-f", modulePath + "/pom.xml"])
-      .withExec(["test", "-f", modulePath + "/src/main/java/io/dagger/modules/sdksmoke/SdkSmoke.java"])
+      .withExec(["test", "-f", modulePath + "/src/main/java/io/dagger/modules/e2esmoke/E2eSmoke.java"])
       .withExec(["test", "-f", modulePath + "/sdk/src/main/java/io/dagger/client/Dagger.java"])
       .withExec(["test", "-f", modulePath + "/clients/core/src/main/java/io/dagger/client/modules/core/Core.java"])
       .withExec(["test", "!", "-e", modulePath + "/sdk/src/generated"])
