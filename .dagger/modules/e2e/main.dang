@@ -64,7 +64,7 @@ type E2e {
   entrypoint only.
   """
   let entrypointManifest(name: String!): String! {
-    "name = \"" + name + "\"\n\n[entrypoint]\n  kind = \"dang\"\n  source = \"./" + dangEntrypointPath + "\"\n"
+    "name = \"" + name + "\"\n\n[entrypoint]\nkind = \"dang\"\nsource = \"./" + dangEntrypointPath + "\"\n"
   }
 
   let floorVersion: String! = "v1.0.0-beta.18"
