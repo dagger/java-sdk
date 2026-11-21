@@ -376,7 +376,7 @@ add one, such as `slf4j-simple`, to see the session's progress.
 ## Collections
 
 `@Collection` marks an object whose items the engine serves by key, as `keys`,
-`get`, `list`, `subset` and `batch`. `@Keys` marks its keys field, `@Get` its
+`get`, `list` and `subset`. `@Keys` marks its keys field, `@Get` its
 get function, and `@Delta` a `CollectionDelta` field that receives the keys
 added and removed since the module returned it. A function that returns its
 receiver keeps the collection's base; a new instance starts its own.

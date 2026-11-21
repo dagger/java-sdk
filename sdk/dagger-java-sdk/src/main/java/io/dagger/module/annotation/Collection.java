@@ -8,10 +8,10 @@ import java.lang.annotation.Target;
 /**
  * Mark an object as a collection: a set of items, each with a unique key.
  *
- * <p>Callers do not see the collection's own members. The engine serves {@code keys}, {@code get},
- * {@code list}, {@code subset}, and {@code batch} on it instead. A collection has a keys field,
- * marked with {@link Keys}, and a get function, marked with {@link Get}. Without the markers, the
- * engine looks for members named {@code keys} and {@code get}.
+ * <p>Callers do not see the collection's keys field and get function. The engine serves {@code
+ * keys}, {@code get}, {@code list}, and {@code subset} on it instead, beside its other functions. A
+ * collection has a keys field, marked with {@link Keys}, and a get function, marked with {@link
+ * Get}. Without the markers, the engine looks for members named {@code keys} and {@code get}.
  *
  * <pre>{@code
  * @Object

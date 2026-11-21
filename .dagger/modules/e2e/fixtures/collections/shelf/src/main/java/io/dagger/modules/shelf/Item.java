@@ -14,10 +14,13 @@ public class Item {
     this.name = name;
   }
 
-  /** Items.verify replaces this check, so it never runs on an item of Items. */
+  /** Rejects item c. The engine passes the collection the selectors narrowed, as items. */
   @Function
   @Check
-  public void verify() {
-    throw new IllegalStateException("the item's verify ran for " + name);
+  public void verify(Items items) {
+    if (name.equals("item:c")) {
+      throw new IllegalStateException(
+          "verified " + String.join(",", items.selected()) + ": c is rejected");
+    }
   }
 }
