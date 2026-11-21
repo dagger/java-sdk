@@ -26,8 +26,8 @@ class FormattedNamesTest {
   private record Request(String query, JsonObject variables) {}
 
   /**
-   * Fakes the engine: answers each formatIdentifiers alias (f0, f1, ...) with each name prefixed by
-   * the alias, and records the requests.
+   * Fakes the engine: answers each formatIdentifiers alias (f0, f1, ...) under naming with each
+   * name prefixed by the alias, and records the requests.
    */
   private static FormattedNames.QueryRunner engine(List<Request> requests) {
     return (query, variables) -> {
@@ -41,15 +41,15 @@ class FormattedNamesTest {
         }
         data.add("f" + i, out);
       }
-      return stream(data.build().toString());
+      return stream(Json.createObjectBuilder().add("naming", data).build().toString());
     };
   }
 
   @Test
-  void formatsNamesWhenTheSchemaHasFormatIdentifiers() throws Exception {
+  void formatsNamesWithTheNamingOfTheSchemaVersion() throws Exception {
     List<Request> requests = new ArrayList<>();
     Map<String, Map<String, String>> names =
-        FormattedNames.fetch(schema(true, "v1.0.0-beta.22"), engine(requests));
+        FormattedNames.fetch(schema("v1.0.0-beta.28"), engine(requests));
 
     assertThat(requests).hasSize(1);
     Request request = requests.get(0);
@@ -58,63 +58,38 @@ class FormattedNamesTest {
     // SCREAMING_SNAKE_CASE enum constants, all with the dictionary of the schema's version.
     assertThat(request.query())
         .contains("$names: [String!]!, $version: String")
+        .contains("naming(version: $version) {")
+        .contains("f0: formatIdentifiers(names: $names, casing: CAMEL, acronyms: CAPITALIZED)")
+        .contains("f1: formatIdentifiers(names: $names, casing: PASCAL, acronyms: CAPITALIZED)")
         .contains(
-            "f0: formatIdentifiers(names: $names, casing: CAMEL, acronyms: CAPITALIZED,"
-                + " version: $version)")
-        .contains(
-            "f1: formatIdentifiers(names: $names, casing: PASCAL, acronyms: CAPITALIZED,"
-                + " version: $version)")
-        .contains(
-            "f2: formatIdentifiers(names: $names, casing: SCREAMING_SNAKE, acronyms: UPPERCASE,"
-                + " version: $version)");
-    assertThat(request.variables().getString("version")).isEqualTo("v1.0.0-beta.22");
+            "f2: formatIdentifiers(names: $names, casing: SCREAMING_SNAKE, acronyms: UPPERCASE)");
+    assertThat(request.variables().getString("version")).isEqualTo("v1.0.0-beta.28");
     assertThat(FormattedNames.FORMATS)
         .containsExactly(FormattedNames.MEMBERS, FormattedNames.TYPES, FormattedNames.ENUM_VALUES);
     // Type, field, argument and enum value names, sorted, leaving out introspection names and
     // names with no letters or digits.
     assertThat(request.variables().getJsonArray("names").getValuesAs(JsonString::getString))
-        .containsExactly(
-            "Kind",
-            "Query",
-            "SHARED",
-            "acronyms",
-            "casing",
-            "formatIdentifiers",
-            "htmlURL",
-            "names");
+        .containsExactly("Kind", "Query", "SHARED", "htmlURL");
 
     // Results map back to the names in input order, keyed by format like a names file.
     assertThat(names).containsOnlyKeys(FormattedNames.FORMATS);
     assertThat(names.get("CAMEL:CAPITALIZED"))
         .containsEntry("htmlURL", "f0_htmlURL")
         .containsEntry("SHARED", "f0_SHARED")
-        .hasSize(8);
-    assertThat(names.get("PASCAL:CAPITALIZED")).containsEntry("Kind", "f1_Kind").hasSize(8);
+        .hasSize(4);
+    assertThat(names.get("PASCAL:CAPITALIZED")).containsEntry("Kind", "f1_Kind").hasSize(4);
     assertThat(names.get("SCREAMING_SNAKE:UPPERCASE"))
         .containsEntry("SHARED", "f2_SHARED")
-        .hasSize(8);
+        .hasSize(4);
   }
 
   /** A schema without a version leaves the dictionary to the engine. */
   @Test
   void sendsANullVersionWithoutASchemaVersion() throws Exception {
     List<Request> requests = new ArrayList<>();
-    FormattedNames.fetch(schema(true, null), engine(requests));
+    FormattedNames.fetch(schema(null), engine(requests));
 
     assertThat(requests.get(0).variables().isNull("version")).isTrue();
-  }
-
-  @Test
-  void formatsNothingWithoutFormatIdentifiers() throws Exception {
-    assertThat(FormattedNames.hasFormatIdentifiers(schema(false, "v1.0.0-beta.20"))).isFalse();
-    assertThat(FormattedNames.hasFormatIdentifiers(schema(true, "v1.0.0-beta.21"))).isTrue();
-    Map<String, Map<String, String>> names =
-        FormattedNames.fetch(
-            schema(false, "v1.0.0-beta.20"),
-            (query, variables) -> {
-              throw new AssertionError("unexpected query: " + query);
-            });
-    assertThat(names).isNull();
   }
 
   @Test
@@ -154,10 +129,11 @@ class FormattedNamesTest {
     assertThatThrownBy(
             () ->
                 FormattedNames.fetch(
-                    schema(true, "v1.0.0-beta.21"),
-                    (query, variables) -> stream("{\"f0\":[\"x\"],\"f1\":[\"x\"],\"f2\":[\"x\"]}")))
+                    schema("v1.0.0-beta.28"),
+                    (query, variables) ->
+                        stream("{\"naming\":{\"f0\":[\"x\"],\"f1\":[\"x\"],\"f2\":[\"x\"]}}")))
         .isInstanceOf(IOException.class)
-        .hasMessageContaining("sent 8 names, got 1 back");
+        .hasMessageContaining("sent 4 names, got 1 back");
   }
 
   @Test
@@ -184,18 +160,12 @@ class FormattedNamesTest {
     assertThat(FormattedNames.read(stream("{}"))).isNull();
   }
 
-  private static byte[] schema(boolean withFormatIdentifiers, String version) {
-    String formatIdentifiers =
-        withFormatIdentifiers
-            ? "{\"name\":\"formatIdentifiers\",\"args\":[{\"name\":\"names\"},"
-                + "{\"name\":\"casing\"},{\"name\":\"acronyms\"}]},"
-            : "";
+  private static byte[] schema(String version) {
     String schemaVersion = version == null ? "" : "\"__schemaVersion\":\"" + version + "\",";
     return ("{"
             + schemaVersion
             + "\"__schema\":{\"queryType\":{\"name\":\"Query\"},\"types\":["
             + "{\"kind\":\"OBJECT\",\"name\":\"Query\",\"fields\":["
-            + formatIdentifiers
             + "{\"name\":\"htmlURL\",\"args\":[]}]},"
             + "{\"kind\":\"ENUM\",\"name\":\"Kind\",\"enumValues\":[{\"name\":\"SHARED\"}]},"
             + "{\"kind\":\"OBJECT\",\"name\":\"__Type\",\"fields\":[{\"name\":\"possibleTypes\"}]},"

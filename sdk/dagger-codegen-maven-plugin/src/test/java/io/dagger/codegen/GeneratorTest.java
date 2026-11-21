@@ -3,7 +3,13 @@ package io.dagger.codegen;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.dagger.codegen.introspection.FormattedNames;
+import jakarta.json.Json;
+import jakarta.json.JsonArray;
+import jakarta.json.JsonObjectBuilder;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.StringReader;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -250,7 +256,7 @@ class GeneratorTest {
     Path reversed = Files.createTempDirectory("plan-reversed");
     writePlanAt(reversed, CORE_WITH_TWO_TARGETS, target("beta", BETA), target("alpha", ALPHA));
     Path secondOut = Files.createTempDirectory("out-reversed");
-    new Generator(secondOut, StandardCharsets.UTF_8, VERSION)
+    new Generator(secondOut, StandardCharsets.UTF_8, VERSION, SCHEMA_NAMES)
         .generate(GenerationPlan.read(reversed));
 
     assertThat(Files.readString(secondOut.resolve("io/dagger/client/modules/core/Core.java")))
@@ -407,7 +413,8 @@ class GeneratorTest {
   }
 
   private void generate() throws IOException {
-    new Generator(out, StandardCharsets.UTF_8, VERSION).generate(GenerationPlan.read(plan));
+    new Generator(out, StandardCharsets.UTF_8, VERSION, SCHEMA_NAMES)
+        .generate(GenerationPlan.read(plan));
   }
 
   private record Entry(String module, String schema, String descriptor) {}
@@ -569,6 +576,19 @@ class GeneratorTest {
   }
 
   private static final String VERSION = "v1.0.0-beta.18";
+
+  /** Formats every name as itself, so these tests need no engine. */
+  private static final FormattedNames.QueryRunner SCHEMA_NAMES =
+      (query, variables) -> {
+        JsonArray names =
+            Json.createReader(new StringReader(variables)).readObject().getJsonArray("names");
+        JsonObjectBuilder naming = Json.createObjectBuilder();
+        for (int i = 0; i < FormattedNames.FORMATS.size(); i++) {
+          naming.add("f" + i, names);
+        }
+        String data = Json.createObjectBuilder().add("naming", naming).build().toString();
+        return new ByteArrayInputStream(data.getBytes(StandardCharsets.UTF_8));
+      };
 
   private static String owned(String module) {
     return "\"directives\": [{\"name\": \"sourceMap\", \"args\": [{\"name\": \"module\","

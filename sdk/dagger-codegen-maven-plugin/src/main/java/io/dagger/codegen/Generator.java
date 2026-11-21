@@ -48,8 +48,8 @@ public final class Generator {
   }
 
   /**
-   * @param engine where a schema with {@code Query.formatIdentifiers} gets its names formatted,
-   *     unless its plan entry carries a names file
+   * @param engine where a schema gets its names formatted, unless its plan entry carries a names
+   *     file
    */
   public Generator(
       Path outputDirectory,
@@ -196,8 +196,8 @@ public final class Generator {
   }
 
   /**
-   * A plan's schema, with the Java names the engine formatted for it when it has {@code
-   * Query.formatIdentifiers}: from the {@code names.json} beside it, else from the engine.
+   * A plan's schema, with the Java names the engine formatted for it: from the {@code names.json}
+   * beside it, else from the engine.
    */
   private Schema read(Path schemaFile) throws IOException {
     byte[] schemaJson = Files.readAllBytes(schemaFile);
@@ -211,9 +211,6 @@ public final class Generator {
 
   private Map<String, Map<String, String>> formattedNames(byte[] schemaJson, Path namesFile)
       throws IOException {
-    if (!FormattedNames.hasFormatIdentifiers(schemaJson)) {
-      return null;
-    }
     if (Files.isRegularFile(namesFile)) {
       try (InputStream in = Files.newInputStream(namesFile)) {
         return FormattedNames.read(in);

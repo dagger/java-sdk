@@ -143,7 +143,7 @@ type Mod {
     clients.reduce(directory.withFile("core/schema.json", introspectionJSON)) { plan, client =>
       let entry = "target-" + client.moduleName
       plan
-        .withFile(entry + "/schema.json", client.withEngineVersion(view).clientSchemaIntrospectionJSON)
+        .withFile(entry + "/schema.json", client.withEngineVersion(view).clientSchemaIntrospectionJson)
         .withNewFile(entry + "/module", client.moduleName + "\n")
         .withNewFile(entry + "/descriptor", clientDescriptor(client))
     }
@@ -421,7 +421,7 @@ type Mod {
       .withNewFile("dagger-module.toml", "name = \"core-schema\"\n")
       .asModuleSource
       .withEngineVersion(engineVersion)
-      .clientSchemaIntrospectionJSON
+      .clientSchemaIntrospectionJson
   }
 
   """
@@ -604,7 +604,7 @@ type Mod {
     }
     let modSource = ws.moduleSource(workspaceRef(rootPath))
     let name = modSource.moduleName
-    let introspectionJSON = modSource.introspectionSchemaJSON
+    let introspectionJSON = modSource.introspectionSchemaJson
     let vendored = vendoredSdk(introspectionJSON, name)
     let pom = withClientsProfile(committed.file("pom.xml").contents)
     let stale = staleClientDirs(committed)

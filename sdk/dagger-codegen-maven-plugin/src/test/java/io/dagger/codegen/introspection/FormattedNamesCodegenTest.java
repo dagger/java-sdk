@@ -10,7 +10,6 @@ import jakarta.json.JsonArrayBuilder;
 import jakarta.json.JsonObject;
 import jakarta.json.JsonObjectBuilder;
 import jakarta.json.JsonString;
-import jakarta.json.JsonValue;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -25,9 +24,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Codegen gated on {@code Query.formatIdentifiers}: with it, Java identifiers follow the names the
- * engine formatted, while everything sent to the API keeps the schema's names; without it, codegen
- * keeps the schema's names and never asks the engine.
+ * Java identifiers follow the names the engine formatted, while everything sent to the API keeps
+ * the schema's names.
  */
 class FormattedNamesCodegenTest {
   @TempDir Path output;
@@ -38,7 +36,7 @@ class FormattedNamesCodegenTest {
 
   @Test
   void namesJavaIdentifiersFromFormattedNames() throws Exception {
-    generate(schema(true), engine());
+    generate(schema(), engine());
 
     // The engine was asked once, with the schema's own version.
     assertThat(versions).containsExactly("v1.0.0-beta.21");
@@ -167,44 +165,15 @@ class FormattedNamesCodegenTest {
     assertThat(output.resolve(corePath("JSON"))).doesNotExist();
   }
 
-  /** The gate is the schema: without formatIdentifiers the engine is never asked. */
-  @Test
-  void keepsSchemaNamesWithoutFormatIdentifiers() throws Exception {
-    generate(
-        schema(false),
-        (query, variables) -> {
-          throw new AssertionError("asked the engine for a schema without formatIdentifiers");
-        });
-
-    assertSchemaNames();
-  }
-
-  /** A names file beside a schema without formatIdentifiers is not read either. */
-  @Test
-  void ignoresANamesFileWithoutFormatIdentifiers() throws Exception {
-    Path plan = plan(schema(false));
-    Files.copy(resource("formatted-names.names.json"), plan.resolve("core/names.json"));
-    new Generator(
-            output,
-            StandardCharsets.UTF_8,
-            "v1.0.0-beta.20",
-            (query, variables) -> {
-              throw new AssertionError("asked the engine for a schema without formatIdentifiers");
-            })
-        .generate(GenerationPlan.read(plan));
-
-    assertSchemaNames();
-  }
-
   /** A names file beside the schema stands in for the engine. */
   @Test
   void readsANamesFileInsteadOfAskingTheEngine() throws Exception {
-    Path plan = plan(schema(true));
+    Path plan = plan(schema());
     Files.copy(resource("formatted-names.names.json"), plan.resolve("core/names.json"));
     new Generator(
             output,
             StandardCharsets.UTF_8,
-            "v1.0.0-beta.21",
+            "v1.0.0-beta.28",
             (query, variables) -> {
               throw new AssertionError("asked the engine despite a names file");
             })
@@ -215,31 +184,31 @@ class FormattedNamesCodegenTest {
   }
 
   /**
-   * With formatIdentifiers, an engine that can't format the names fails codegen, rather than
-   * generating the schema's names: that would be a different API from the one the schema names.
+   * An engine that can't format the names fails codegen, rather than generating the schema's names:
+   * that would be a different API from the one the schema names.
    */
   @Test
   void failsWhenTheEngineCannotFormatTheNames() throws Exception {
     assertThatThrownBy(
             () ->
                 generate(
-                    schema(true),
+                    schema(),
                     (query, variables) -> {
-                      throw new IOException("Cannot query field \"formatIdentifiers\"");
+                      throw new IOException("Cannot query field \"naming\"");
                     }))
         .isInstanceOf(IOException.class)
-        .hasMessageContaining("Query.formatIdentifiers")
+        .hasMessageContaining("Query.naming")
         .hasMessageContaining("v1.0.0-beta.21")
-        .hasMessageContaining("Cannot query field \"formatIdentifiers\"");
+        .hasMessageContaining("Cannot query field \"naming\"");
 
     assertThatThrownBy(
             () ->
                 generate(
-                    schema(true),
+                    schema(),
                     (query, variables) ->
                         new ByteArrayInputStream("{\"f0\":[]}".getBytes(StandardCharsets.UTF_8))))
         .isInstanceOf(IOException.class)
-        .hasMessageContaining("could not format them");
+        .hasMessageContaining("could not format");
     assertThat(output.resolve(corePath("Container"))).doesNotExist();
   }
 
@@ -249,7 +218,7 @@ class FormattedNamesCodegenTest {
     names.get(FormattedNames.MEMBERS).remove("withMCPServer");
     names.get(FormattedNames.TYPES).remove("JSONValue");
     names.get(FormattedNames.ENUM_VALUES).remove("PerSession");
-    generate(schema(true), engine(names));
+    generate(schema(), engine(names));
 
     // Its argument is still renamed.
     assertThat(read("Container"))
@@ -266,48 +235,8 @@ class FormattedNamesCodegenTest {
         .doesNotContain("PER_SESSION");
   }
 
-  private void assertSchemaNames() throws Exception {
-    assertThat(read("Container"))
-        .contains("public String htmlURL()")
-        .contains("public String asJSON()")
-        .contains("public List<String> prerequisiteSHAs()")
-        .contains("public Container withGPU(List<String> devices)")
-        .contains("public Container withMCPServer(String name, WithMCPServerArguments optArgs)")
-        .contains(
-            "public WithMCPServerArguments withInsecureSkipTLSVerify(Boolean insecureSkipTLSVerify)")
-        .contains("public Container importTarball(String source)")
-        .contains("public class Container implements Node, IDAble<ID>")
-        .contains("public List<JSONValue> values()")
-        .contains("new JSONValue(qb)")
-        .doesNotContain("htmlUrl")
-        .doesNotContain("JsonbProperty")
-        .doesNotContain("@Deprecated");
-    assertThat(read("Node")).contains("String htmlURL() throws").doesNotContain("default");
-    assertThat(read("BuildArg"))
-        .contains("private Boolean insecureSkipTLSVerify;")
-        .contains("map.put(\"insecureSkipTLSVerify\", this.insecureSkipTLSVerify)")
-        .doesNotContain("JsonbProperty")
-        .doesNotContain("@Deprecated");
-    // Classes and enum constants keep the schema's names.
-    assertThat(read("JSONValue")).contains("public class JSONValue").doesNotContain("GraphQLType");
-    assertThat(read("JSON")).contains("public class JSON").doesNotContain("GraphQLType");
-    assertThat(read("ID")).contains("public class ID").doesNotContain("GraphQLType");
-    assertThat(read("FunctionCachePolicy"))
-        .contains("PerSession")
-        .doesNotContain("PER_SESSION")
-        .doesNotContain("GraphQLEnum");
-    assertThat(read("ImageLayerCompression")).contains("Gzip,").contains("GZIP");
-    assertThat(read("Core"))
-        .contains("this.queryBuilder.chainNode(clazz.getSimpleName(), id)")
-        .doesNotContain("GraphQLType");
-    assertThat(read("JsonConverter"))
-        .contains("public static JSON toJSON(Object object)")
-        .doesNotContain("GraphQLEnums");
-    assertThat(output.resolve(corePath("Json"))).doesNotExist();
-  }
-
   private void generate(byte[] schema, FormattedNames.QueryRunner engine) throws Exception {
-    new Generator(output, StandardCharsets.UTF_8, "v1.0.0-beta.21", engine)
+    new Generator(output, StandardCharsets.UTF_8, "v1.0.0-beta.28", engine)
         .generate(GenerationPlan.read(plan(schema)));
   }
 
@@ -319,39 +248,11 @@ class FormattedNamesCodegenTest {
     return plan;
   }
 
-  /**
-   * The fixture schema, with Query.formatIdentifiers or without it (a view before v1.0.0-beta.21).
-   */
-  private static byte[] schema(boolean withFormatIdentifiers) throws IOException {
-    byte[] schema;
+  /** The fixture schema. */
+  private static byte[] schema() throws IOException {
     try (InputStream in = resource("formatted-names.json")) {
-      schema = in.readAllBytes();
+      return in.readAllBytes();
     }
-    if (withFormatIdentifiers) {
-      return schema;
-    }
-    JsonObject root =
-        Json.createReader(new StringReader(new String(schema, StandardCharsets.UTF_8)))
-            .readObject();
-    JsonObject inner = root.getJsonObject("__schema");
-    JsonArrayBuilder types = Json.createArrayBuilder();
-    for (JsonValue type : inner.getJsonArray("types")) {
-      JsonObject object = type.asJsonObject();
-      if ("Query".equals(object.getString("name"))) {
-        JsonArrayBuilder fields = Json.createArrayBuilder();
-        object.getJsonArray("fields").stream()
-            .filter(f -> !"formatIdentifiers".equals(f.asJsonObject().getString("name")))
-            .forEach(fields::add);
-        object = Json.createObjectBuilder(object).add("fields", fields).build();
-      }
-      types.add(object);
-    }
-    return Json.createObjectBuilder(root)
-        .add("__schemaVersion", "v1.0.0-beta.20")
-        .add("__schema", Json.createObjectBuilder(inner).add("types", types))
-        .build()
-        .toString()
-        .getBytes(StandardCharsets.UTF_8);
   }
 
   private FormattedNames.QueryRunner engine() throws Exception {
@@ -359,12 +260,12 @@ class FormattedNamesCodegenTest {
   }
 
   /**
-   * A fake engine answering formatIdentifiers from a names file, and the name itself for a name the
-   * file doesn't have.
+   * A fake engine answering naming's formatIdentifiers from a names file, and the name itself for a
+   * name the file doesn't have.
    */
   private FormattedNames.QueryRunner engine(Map<String, Map<String, String>> names) {
     return (query, variables) -> {
-      assertThat(query).contains("formatIdentifiers(").contains("version: $version");
+      assertThat(query).contains("naming(version: $version)").contains("formatIdentifiers(");
       JsonObject vars = Json.createReader(new StringReader(variables)).readObject();
       versions.add(vars.isNull("version") ? null : vars.getString("version"));
       List<String> requested =
@@ -376,7 +277,8 @@ class FormattedNamesCodegenTest {
         requested.forEach(name -> out.add(formatted.getOrDefault(name, name)));
         data.add("f" + i, out);
       }
-      return new ByteArrayInputStream(data.build().toString().getBytes(StandardCharsets.UTF_8));
+      String response = Json.createObjectBuilder().add("naming", data).build().toString();
+      return new ByteArrayInputStream(response.getBytes(StandardCharsets.UTF_8));
     };
   }
 

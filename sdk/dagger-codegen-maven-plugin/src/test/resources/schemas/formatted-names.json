@@ -10,21 +10,6 @@
             "name": "container", "description": "Creates a scratch container.", "args": [],
             "type": {"kind": "NON_NULL", "name": null, "ofType": {"kind": "OBJECT", "name": "Container", "ofType": null}},
             "isDeprecated": false, "deprecationReason": null, "directives": []
-          },
-          {
-            "name": "formatIdentifiers", "description": "Format many names at once, for codegen.",
-            "args": [
-              {
-                "name": "names", "description": "The names to format.", "defaultValue": null, "directives": [],
-                "type": {"kind": "NON_NULL", "name": null, "ofType": {"kind": "LIST", "name": null, "ofType": {"kind": "NON_NULL", "name": null, "ofType": {"kind": "SCALAR", "name": "String", "ofType": null}}}}
-              },
-              {
-                "name": "version", "description": "The dictionary's engine version.", "defaultValue": null, "directives": [],
-                "type": {"kind": "SCALAR", "name": "String", "ofType": null}
-              }
-            ],
-            "type": {"kind": "NON_NULL", "name": null, "ofType": {"kind": "LIST", "name": null, "ofType": {"kind": "NON_NULL", "name": null, "ofType": {"kind": "SCALAR", "name": "String", "ofType": null}}}},
-            "isDeprecated": false, "deprecationReason": null, "directives": []
           }
         ],
         "interfaces": []

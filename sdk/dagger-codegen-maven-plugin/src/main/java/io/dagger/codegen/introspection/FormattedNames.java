@@ -25,14 +25,12 @@ import java.util.regex.Pattern;
  * {@code Llm}), and enum constants in SCREAMING_SNAKE_CASE ({@code PER_SESSION}).
  *
  * <p>Codegen doesn't parse names itself: the naming rules live in the engine, which formats them
- * with {@code Query.formatIdentifiers}. Its {@code version} argument is the schema's own {@code
+ * with {@code Query.naming(version:).formatIdentifiers}. The version is the schema's own {@code
  * __schemaVersion}, so the names follow the dictionary of the schema being generated whatever the
  * view of the session that formats them.
  *
- * <p>The gate is the schema being generated: without {@code Query.formatIdentifiers} (views before
- * v1.0.0-beta.21), nothing is formatted, and codegen keeps the schema's names, generating the same
- * code as before. With it, the names have to be formatted: a failure fails codegen rather than
- * falling back to the schema's names, which would generate a different API.
+ * <p>A failure fails codegen rather than falling back to the schema's names, which would generate a
+ * different API.
  */
 public final class FormattedNames {
 
@@ -63,7 +61,9 @@ public final class FormattedNames {
 
   private static String query() {
     StringBuilder query =
-        new StringBuilder("query FormatIdentifiers($names: [String!]!, $version: String) {");
+        new StringBuilder(
+            "query FormatIdentifiers($names: [String!]!, $version: String) {"
+                + " naming(version: $version) {");
     for (int i = 0; i < FORMATS.size(); i++) {
       String[] format = FORMATS.get(i).split(":");
       query
@@ -73,9 +73,9 @@ public final class FormattedNames {
           .append(format[0])
           .append(", acronyms: ")
           .append(format[1])
-          .append(", version: $version)");
+          .append(")");
     }
-    return query.append(" }").toString();
+    return query.append(" } }").toString();
   }
 
   /**
@@ -87,17 +87,10 @@ public final class FormattedNames {
     InputStream query(String query, String variables) throws IOException, InterruptedException;
   }
 
-  /** Whether a schema has {@code Query.formatIdentifiers}: the gate for formatted names. */
-  public static boolean hasFormatIdentifiers(byte[] schemaJson) throws IOException {
-    return hasFormatIdentifiers(read(schemaJson, "the introspection JSON"));
-  }
-
   /**
    * Formats the names of a schema through the engine, in batches, in every format Java codegen
    * uses, passing the schema's {@code __schemaVersion} as the dictionary version. Returns the names
-   * keyed by format ({@link #MEMBERS}, {@link #TYPES}, {@link #ENUM_VALUES}), like a names file, or
-   * null, formatting nothing and never calling the runner, when the schema has no {@code
-   * Query.formatIdentifiers}.
+   * keyed by format ({@link #MEMBERS}, {@link #TYPES}, {@link #ENUM_VALUES}), like a names file.
    *
    * @throws IOException when the names can't be formatted, with a message that says why codegen
    *     needs them
@@ -105,9 +98,6 @@ public final class FormattedNames {
   public static Map<String, Map<String, String>> fetch(byte[] schemaJson, QueryRunner runner)
       throws IOException, InterruptedException {
     JsonObject root = read(schemaJson, "the introspection JSON");
-    if (!hasFormatIdentifiers(root)) {
-      return null;
-    }
     String version = schemaVersion(root);
     Map<String, Map<String, String>> formatted = new HashMap<>();
     for (String format : FORMATS) {
@@ -122,12 +112,13 @@ public final class FormattedNames {
       }
       JsonObject data;
       try (InputStream in = runner.query(QUERY, variables.build().toString())) {
-        data = read(in.readAllBytes(), "the formatIdentifiers response");
+        data = read(in.readAllBytes(), "the naming response");
       } catch (IOException e) {
         throw failure(version, e.getMessage(), e);
       }
+      JsonObject naming = object(data, "naming");
       for (int i = 0; i < FORMATS.size(); i++) {
-        JsonValue result = data.get("f" + i);
+        JsonValue result = naming == null ? null : naming.get("f" + i);
         if (result == null || result.getValueType() != ValueType.ARRAY) {
           throw failure(version, "the response has no formatIdentifiers result: " + data, null);
         }
@@ -147,10 +138,9 @@ public final class FormattedNames {
 
   private static IOException failure(String version, String why, Throwable cause) {
     return new IOException(
-        "the schema has Query.formatIdentifiers (schema version "
+        "the engine could not format the schema's Java names with Query.naming (schema version "
             + (version == null ? "unknown" : version)
-            + "), so its Java names follow the engine's naming rules, but the engine could not"
-            + " format them: "
+            + "): "
             + why,
         cause);
   }
@@ -178,22 +168,6 @@ public final class FormattedNames {
       formatted.put(format, byName);
     }
     return formatted.isEmpty() ? null : formatted;
-  }
-
-  static boolean hasFormatIdentifiers(JsonObject root) {
-    JsonObject schema = object(root, "__schema");
-    if (schema == null) {
-      return false;
-    }
-    JsonObject queryType = object(schema, "queryType");
-    String queryName = queryType == null ? "Query" : queryType.getString("name", "Query");
-    for (JsonObject type : objects(schema, "types")) {
-      if (queryName.equals(type.getString("name", null))) {
-        return objects(type, "fields").stream()
-            .anyMatch(field -> "formatIdentifiers".equals(field.getString("name", null)));
-      }
-    }
-    return false;
   }
 
   /** The schema's {@code __schemaVersion}, or null when it has none. */

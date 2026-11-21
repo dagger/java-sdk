@@ -27,9 +27,9 @@ import java.util.Map;
  * <p>Codegen usually runs in a Maven exec the SDK module started, with the schema handed to it as a
  * file. Such an exec joins the engine's session as a nested client ({@code DAGGER_SESSION_PORT} and
  * {@code DAGGER_SESSION_TOKEN}), and a request without client metadata is served at the engine's
- * own API view, which has {@code Query.formatIdentifiers} from v1.0.0-beta.21: codegen asks there,
- * passing the generated schema's version, so the names follow that schema's dictionary. Outside a
- * session, it asks through the {@code dagger} CLI.
+ * own API view, which has {@code Query.naming} from v1.0.0-beta.26: codegen asks there, passing the
+ * generated schema's version, so the names follow that schema's dictionary. Outside a session, it
+ * asks through the {@code dagger} CLI.
  */
 public final class EngineQueries {
 

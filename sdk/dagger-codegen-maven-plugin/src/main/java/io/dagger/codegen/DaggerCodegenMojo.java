@@ -48,8 +48,7 @@ public class DaggerCodegenMojo extends AbstractMojo {
 
   /**
    * The names file written with the introspection JSON (see {@link FormattedNames#read}). Only read
-   * with {@code introspectionJson}, for a schema with {@code Query.formatIdentifiers}: without it,
-   * codegen asks the engine for the names.
+   * with {@code introspectionJson}: without it, codegen asks the engine for the names.
    */
   @Parameter(property = "dagger.namesJson")
   protected String namesJson;
@@ -160,9 +159,9 @@ public class DaggerCodegenMojo extends AbstractMojo {
   }
 
   /**
-   * Loads the schema, with the Java names the engine formatted for it when it has {@code
-   * Query.formatIdentifiers}: from the names file of an introspection JSON file when there is one,
-   * else from the engine. A schema read through the CLI gets its names through the CLI too.
+   * Loads the schema, with the Java names the engine formatted for it: from the names file of an
+   * introspection JSON file when there is one, else from the engine. A schema read through the CLI
+   * gets its names through the CLI too.
    */
   private Schema loadSchema() throws IOException, MojoFailureException, InterruptedException {
     if (this.introspectionJson != null && !this.introspectionJson.isEmpty()) {
@@ -170,9 +169,7 @@ public class DaggerCodegenMojo extends AbstractMojo {
       if (f.exists()) {
         byte[] schemaJson = Files.readAllBytes(f.toPath());
         Schema schema = Schema.initialize(new ByteArrayInputStream(schemaJson), version);
-        if (FormattedNames.hasFormatIdentifiers(schemaJson)) {
-          schema.setFormattedNames(namesFor(schemaJson));
-        }
+        schema.setFormattedNames(namesFor(schemaJson));
         return schema;
       }
     }
@@ -207,7 +204,7 @@ public class DaggerCodegenMojo extends AbstractMojo {
         }
       }
     }
-    getLog().info("Formatting the schema's names with the engine (Query.formatIdentifiers)");
+    getLog().info("Formatting the schema's names with the engine (Query.naming)");
     return FormattedNames.fetch(schemaJson, EngineQueries.fromEnvironment(System.getenv(), bin));
   }
 

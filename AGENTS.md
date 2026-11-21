@@ -2,7 +2,7 @@
 
 ## Run the checks locally
 
-The checks need an engine at this SDK's floor, v1.0.0-beta.18, or later. The
+The checks need an engine at this SDK's floor, v1.0.0-beta.26, or later. The
 CLI runs on the engine it ships with; `--engine` or `DAGGER_ENGINE` selects
 another (`dagger help engine`):
 
@@ -36,12 +36,12 @@ dagger check engine-e2e:dev-sdk-check
 ```
 
 `floor-check` runs every e2e check on the floor engine, built from its commit.
-`below-floor-check` checks that v1.0.0-beta.17 is refused. `dev-sdk-check`
+`below-floor-check` checks that v1.0.0-beta.25 is refused. `dev-sdk-check`
 initializes a Java module through the CLI on the floor engine and calls it. To
 run e2e checks on the floor's released engine instead:
 
 ```sh
-dagger check --engine=image://registry.dagger.io/engine:v1.0.0-beta.18 \
+dagger check --engine=image://registry.dagger.io/engine:v1.0.0-beta.26 \
   -m .dagger/modules/e2e find-client-root-check
 ```
 

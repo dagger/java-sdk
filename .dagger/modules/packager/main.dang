@@ -82,11 +82,8 @@ type Packager {
     # against plain core types, the way a freshly generated Java module does.
     let templates = ws.moduleSource("/.dagger/modules/templates")
     let introspectionJSON = templates.introspectionSchemaJSON
-    # The same module at the engine's own version: from v1.0.0-beta.21 its schema
-    # has Query.formatIdentifiers, so the SDK is generated with Java's names
-    # (Json, PER_SESSION, ...), formatted by the engine through the exec's nested
-    # session, and its tests run against that shape too. On an older engine both
-    # schemas generate the schema's names.
+    # The same module at the engine's own version, whose schema spells names by
+    # the current rules (asJson, PER_SESSION): the SDK's tests run against it too.
     let latestJSON = templates.withEngineVersion(engineVersion).introspectionSchemaJSON
     mvn
       .withoutEntrypoint
