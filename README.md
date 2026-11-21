@@ -397,21 +397,12 @@ dagger check
 ```
 
 On the engine the CLI runs on, this runs the SDK library's unit tests
-(`packager:unit-tests`) and the staleness checks of the prebuilt assets and the
-templates. The `engine-e2e` checks build engines from the dagger/dagger commits
-pinned in `.dagger/modules/engine-e2e`:
+(`packager:unit-tests`), the staleness checks of the prebuilt assets and the
+templates, and the e2e checks of `.dagger/modules/e2e`. They are not run on an
+engine at the floor, `v1.0.0-beta.26`.
 
-- `engine-e2e:floor-check` builds the floor release, `v1.0.0-beta.26`, and runs
-  every e2e check on it.
-- `engine-e2e:dev-sdk-check` installs this checkout as the `java` SDK on the
-  same engine, initializes a Java module through the CLI, and calls it.
-- `engine-e2e:below-floor-check` builds `v1.0.0-beta.25` and checks that
-  generation and `dagger module init` refuse it.
-- `engine-e2e:cache-policy-sessions-check`, `pinned-git-client-check` and
-  `standalone-client-check` run calls in sessions of their own on the same
-  engine, which the e2e checks cannot do: their calls share the check's
-  session.
-
-`dagger.toml` does not install the `e2e` module, so `dagger check` runs the e2e
-checks only on the floor engine. AGENTS.md has the commands that run them on the
-local engine.
+The e2e checks drive the CLI of the engine that runs them. Most CLI calls share
+the check's session. `entrypoint:cache-policy-sessions-check`,
+`clients:pinned-git-client-check` and `standalone:standalone-client-check` give
+each call a session of its own. `dev-sdk-check` installs this checkout as the
+`java` SDK, initializes a Java module through the CLI, and calls it.

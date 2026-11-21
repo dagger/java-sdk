@@ -18,6 +18,10 @@ dagger check -m .dagger/modules/e2e find-client-root-check generate-scope-init-c
 dagger check -m .dagger/modules/e2e 'e2e:*'
 ```
 
+A check of a namespace is named with its path, such as
+`collections:collection-check`. A name that matches no check passes, so
+confirm a pattern with `-l` first.
+
 Run the SDK library's unit tests and the staleness checks of the committed
 assets:
 
@@ -26,24 +30,8 @@ dagger check packager:unit-tests
 dagger check packager:generate:stale templates:generate:stale
 ```
 
-Without a pattern, `dagger check` also selects the `engine-e2e` checks, which
-build engines from dagger/dagger commits:
-
-```sh
-dagger check engine-e2e:floor-check
-dagger check engine-e2e:below-floor-check
-dagger check engine-e2e:dev-sdk-check
-```
-
-`floor-check` runs every e2e check on the floor engine, built from its commit.
-`below-floor-check` checks that v1.0.0-beta.25 is refused. `dev-sdk-check`
-initializes a Java module through the CLI on the floor engine and calls it. To
-run e2e checks on the floor's released engine instead:
-
-```sh
-dagger check --engine=image://registry.dagger.io/engine:v1.0.0-beta.26 \
-  -m .dagger/modules/e2e find-client-root-check
-```
+The root `dagger.toml` installs the e2e module, so `dagger check` without a
+pattern runs all of these checks.
 
 Judge a check by `dagger check`, never by `dagger call <check>`: on
 v1.0.0-beta.18, `dagger call` exits 0 when the check fails.

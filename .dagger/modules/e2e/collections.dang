@@ -229,7 +229,7 @@ type CollectionChecks {
       .withDirectory(
         checkoutRoot,
         ws.directory("/", exclude: [".git", "**/target/**"])
-          .withFile("dagger.toml", ws.file("/.dagger/modules/engine-e2e/workspace.toml")),
+          .withFile("dagger.toml", ws.file("/.dagger/modules/e2e/workspace.toml")),
       )
       .withDirectory(checkoutRoot + "/.dagger/modules/shelf", app(ws))
       .withWorkdir(checkoutRoot)
