@@ -1,13 +1,13 @@
 """
 Checks of clients generated into a plain Maven project, a scope with a pom.xml
-and no module. engine-e2e's standalone-client-check runs the project's program
-with java -jar, which takes a session of its own.
+and no module.
 """
 type StandaloneChecks {
   let appPath: String! = ".dagger/modules/e2e/fixtures/standalone/app"
   let clientDepPath: String! = ".dagger/modules/e2e/fixtures/clients/dep"
   let clientDepDir: String! = "clients/client-dep"
   let moduleAppPath: String! = ".dagger/modules/e2e/out/client-app"
+  let checkoutRoot: String! = "/work/java-sdk"
 
   let assert(condition: Boolean!, message: String!): Void {
     if (condition == false) { raise message }
@@ -121,5 +121,57 @@ type StandaloneChecks {
     assert(built.exitCode == 0, "mvn package failed on the plain project:\n" + built.stdout)
     assert(built.directory("/app/target").exists("app.jar"), "mvn package did not build target/app.jar")
     null
+  }
+
+  """
+  A plain Maven project calls a module through a client the CLI added to it,
+  from a program run with java -jar that holds no connection code. With no
+  session in its environment, the program starts `dagger session` on its
+  first call and stops it before the JVM exits, so no session process
+  outlives the program. The project builds with mvn package in a container
+  with no engine and no dagger CLI.
+  """
+  pub standaloneClientCheck(ws: Workspace!): Void @check {
+    let cli = container.from("registry.dagger.io/engine:" + (version.split("+")[0] ?? version)).file("/usr/local/bin/dagger")
+    let added = container
+      .from(runtimeImage(ws, "java"))
+      .withExec(["apk", "add", "--no-cache", "git"])
+      .withFile("/usr/local/bin/dagger", cli)
+      .withDirectory(
+        checkoutRoot,
+        ws.directory("/", exclude: [".git", "**/target/**"])
+          .withFile("dagger.toml", ws.file("/.dagger/modules/e2e/workspace.toml")),
+      )
+      .withWorkdir(checkoutRoot)
+      .withExec(["git", "init", "--quiet"])
+      .withExec(["cp", "-R", appPath, "standalone-app"])
+      .withWorkdir("standalone-app")
+      .withExec(
+        ["dagger", "--auto-apply", "module", "client", "add", "../" + clientDepPath, "--sdk", "java"],
+        daggerInDaggerNewSession: true,
+      )
+    let jar = container
+      .from(runtimeImage(ws, "maven"))
+      .withoutEntrypoint
+      .withMountedCache("/root/.m2", cacheVolume("e2e-maven-m2"))
+      .withDirectory("/app", added.directory("."))
+      .withWorkdir("/app")
+      .withExec(["mvn", "package", "--no-transfer-progress"])
+      .file("/app/target/app.jar")
+    let script = "set -e\n" +
+      "java -jar app.jar\n" +
+      "if ps -o args | grep -qE '[d]agger[^ ]* session'; then ps -o pid,args >&2; exit 1; fi\n"
+    let ran = added.withFile("app.jar", jar).withExec(["sh", "-c", script], daggerInDaggerNewSession: true, expect: ReturnType.ANY)
+    let said = ran.stdout + ran.stderr
+    assert(ran.exitCode == 0, "the program failed, or left its dagger session running:\n" + said)
+    assert(ran.stdout.trimSpace == "hello from the client dependency", "the program did not call its client:\n" + said)
+    null
+  }
+
+  """
+  The image a single-FROM Dockerfile under runtime/images names.
+  """
+  let runtimeImage(ws: Workspace!, name: String!): String! {
+    ws.file("/runtime/images/" + name + "/Dockerfile").contents.trimSpace.trimPrefix("FROM ")
   }
 }

@@ -2,10 +2,8 @@
 End-to-end checks for the Java SDK helper module.
 
 Every check here calls the java-sdk module, which needs an engine at its floor,
-v1.0.0-beta.26, or later. dagger.toml does not install this module, so
-`dagger check` runs these checks only through `engine-e2e:floor-check`, on an
-engine built from the floor's commit. AGENTS.md has the commands that run them
-on the local engine.
+v1.0.0-beta.26, or later. dagger.toml installs this module, so `dagger check`
+runs these checks on the engine that runs it.
 """
 type E2e {
   let fixtureRoot: String! = ".dagger/modules/e2e/fixtures"
@@ -698,27 +696,11 @@ type E2e {
   }
 
   """
-  floorCheck's precondition, not a check of its own: the engine running these
-  checks is the floor release, by the version it reports itself. A release
-  reports its build after a "+", which is not part of the version; a dev or
-  later build is refused. engine-e2e's floorCheck calls it before the checks, so
-  that check cannot pass on another engine.
-  """
-  assertFloorEngine: Void {
-    if ((version.split("+")[0] ?? "") != floorVersion) {
-      raise "the floor is " + floorVersion + " and the engine running these checks is " + version +
-        ": a pass would not prove the floor. Run `dagger check engine-e2e:floor-check`, which provisions its engine"
-    }
-    null
-  }
-
-  """
   The SDK refuses an engine release older than its floor before it generates
   anything, and names the floor and the version it found. Every other version
   passes, a development build and one it cannot read among them, so an
   unexpected format never blocks a user. On an engine the SDK refuses,
-  generation itself refuses; engine-e2e's belowFloorCheck runs this check on
-  one.
+  generation itself refuses.
   """
   engineFloorRefusalCheck(ws: Workspace!): Void @check {
     let refused = [
@@ -749,6 +731,53 @@ type E2e {
         }
       assert(said.contains(refusal), "generation on engine " + version + ", which the SDK refuses, said: " + said)
     }
+    null
+  }
+
+  """
+  The CLI of the engine running the check lists this checkout as the java
+  SDK, initializes a Java module on the Dang entrypoint from it, and runs the
+  module. Each CLI call is a session of its own, as a user's is. The module's
+  class is E2eSmoke, as the engine formats a Java class name.
+  """
+  devSdkCheck(ws: Workspace!): Void @check {
+    let modulePath = ".dagger/modules/e2e-smoke"
+    let checkout = container
+      .from("registry.dagger.io/engine:" + (version.split("+")[0] ?? version))
+      .withoutEntrypoint
+      .withDirectory(
+        "/work/java-sdk",
+        ws.directory("/", exclude: [".git", "**/target/**"])
+          .withFile("dagger.toml", ws.file("/.dagger/modules/e2e/workspace.toml")),
+      )
+      .withWorkdir("/work/java-sdk")
+      .withExec(["git", "init", "--quiet"])
+    let listed = checkout.withExec(["dagger", "sdk", "list"], daggerInDaggerNewSession: true)
+    assert(listed.stdout.contains("java"), "the development Java SDK was not listed")
+
+    let initialized = listed
+      .withExec(
+        ["dagger", "--auto-apply", "module", "init", "java", "--name", "e2e-smoke", "--path", modulePath],
+        daggerInDaggerNewSession: true,
+      )
+      .withExec(["test", "-f", modulePath + "/dagger-module.toml"])
+      .withExec(["test", "!", "-e", modulePath + "/dagger.json"])
+      .withExec(["test", "-f", modulePath + "/pom.xml"])
+      .withExec(["test", "-f", modulePath + "/src/main/java/io/dagger/modules/e2esmoke/E2eSmoke.java"])
+      .withExec(["test", "-f", modulePath + "/sdk/src/main/java/io/dagger/client/Dagger.java"])
+      .withExec(["test", "-f", modulePath + "/clients/core/src/main/java/io/dagger/client/modules/core/Core.java"])
+      .withExec(["test", "!", "-e", modulePath + "/sdk/src/generated"])
+      .withExec(["test", "-f", modulePath + "/src/generated/java/io/dagger/gen/entrypoint/Entrypoint.java"])
+      .withExec(["test", "-f", modulePath + "/src/generated/dang/entrypoint/main.dang"])
+      .withExec(["grep", "-q", "^\\[entrypoint\\]$", modulePath + "/dagger-module.toml"])
+
+    let release = initialized
+      .withExec(
+        ["dagger", "-m", modulePath, "call", "container", "file", "--path", "/etc/alpine-release", "contents"],
+        daggerInDaggerNewSession: true,
+      )
+      .stdout
+    assert(release.trimSpace != "", "the generated module did not run")
     null
   }
 

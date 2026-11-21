@@ -1,0 +1,13 @@
+# The workspace of the CLI that e2e checks run: this checkout as its java SDK.
+# The checks put this file in place of dagger.toml in the copy the CLI works
+# in, so that CLI loads none of the checkout's other modules.
+
+[modules.e2e]
+source = ".dagger/modules/e2e"
+
+[modules.java-sdk]
+source = "."
+check.skip = ["*"]
+
+[sdks.java]
+module = "java-sdk"

@@ -500,9 +500,16 @@ type JavaSdk {
   }
 
   """
-  Render a Java template, substituting the requested module name.
+  Render a Java template, substituting the requested module name. The main
+  class is named as the engine formats a Java class name, the way codegen
+  names the class of the module's client.
   """
   let renderedTemplate(name: String!, template: String!): Directory! {
+    let className = naming(version: entrypointTarget)
+      .formatIdentifiers(names: [name], casing: Casing.PASCAL, acronyms: AcronymStyle.CAPITALIZED)[0] ?? ""
+    if (className == "") {
+      raise "the engine formatted no Java class name for module " + JSON.encode(name)
+    }
     container
       .from("golang:1.25-alpine")
       .withoutEntrypoint
@@ -523,7 +530,7 @@ type JavaSdk {
       )
       .withWorkdir("/helper")
       .withExec(["go", "build", "-o", "/usr/local/bin/render-java-template", "."])
-      .withExec(["render-java-template", name, "/template", "/rendered"])
+      .withExec(["render-java-template", name, className, "/template", "/rendered"])
       .directory("/rendered")
   }
 

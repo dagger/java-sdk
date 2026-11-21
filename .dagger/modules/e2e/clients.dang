@@ -37,7 +37,7 @@ type ClientChecks {
       .withDirectory(
         playgroundRoot,
         ws.directory("/", exclude: [".git", "**/target/**"])
-          .withFile("dagger.toml", ws.file("/.dagger/modules/engine-e2e/workspace.toml")),
+          .withFile("dagger.toml", ws.file("/.dagger/modules/e2e/workspace.toml")),
       )
       .withWorkdir(playgroundRoot)
       .withExec(["git", "init", "--quiet"])
@@ -144,10 +144,10 @@ type ClientChecks {
   let callResult: String! = "result() { r=$(dagger \"$@\"); echo \"$r\"; }\n"
 
   """
-  A git server for one repository, pinned.git, whose one commit, tagged
+  A git repository, pinned.git, served on port 9418, whose one commit, tagged
   v1.0.0, is a module whose message is its version.
   """
-  let gitServer: Service! {
+  let gitRepo: Container! {
     container
       .from("alpine:3.22")
       .withoutEntrypoint
@@ -161,15 +161,28 @@ type ClientChecks {
       .withExec(["git", "tag", "v1.0.0"])
       .withExec(["git", "clone", "-q", "--bare", ".", "/srv/pinned.git"])
       .withExposedPort(9418)
-      .withDefaultArgs(["git", "daemon", "--export-all", "--base-path=/srv", "/srv"])
+  }
+
+  let gitServer: Service! {
+    gitRepo.withDefaultArgs(["git", "daemon", "--export-all", "--base-path=/srv", "/srv"]).asService
+  }
+
+  """
+  A git server that takes pushes. It differs from gitServer, so the engine
+  starts one for it alone: a push to a server that another check shares
+  would move that check's tag.
+  """
+  let pushableGitServer: Service! {
+    gitRepo
+      .withDefaultArgs(["git", "daemon", "--export-all", "--enable=receive-pack", "--base-path=/srv", "/srv"])
       .asService
   }
 
   """
   A module calls a git client through its entrypoint. The client is added at
   the version query @v1, and generated with the commit v1.0.0 resolved to as
-  its pin. engine-e2e's pinned-git-client-check shows that the pin holds after
-  a newer tag matches @v1, which takes a session per call.
+  its pin. pinnedGitClientCheck shows that the pin holds after a newer tag
+  matches @v1, which takes a session per call.
 
   The address names the server by its IP: the engine refuses a git host
   without a dot, which a service hostname is. One script does everything,
@@ -208,6 +221,57 @@ type ClientChecks {
       "the client is not pinned to the commit v1.0.0 resolved to: " + JSON.encode(results) + "\n" + said,
     )
     assert((results[3] ?? "") == "pinned: v1.0.0", "the module did not call its git client: " + JSON.encode(results) + "\n" + said)
+    null
+  }
+
+  """
+  A git client of a module on the Dang entrypoint stays on the commit it was
+  generated against after a newer tag matches its ref (dagger/dagger#14284).
+  The client is added at @v1 when only v1.0.0 exists, and v1.0.1 is pushed
+  after. The workspace lock records what @v1 resolved to, so its entries for
+  the repository are dropped, and the next call resolves @v1 again, to
+  v1.0.1. Each CLI call is a session of its own, because a session keeps
+  what @v1 resolved to in it.
+
+  The address names the server by its IP, as in gitCheck, and one script
+  does everything, because the tag pushed to the server lasts only as long
+  as the exec that holds the server.
+  """
+  pub pinnedGitClientCheck(ws: Workspace!): Void @check {
+    let server = pushableGitServer
+    let host = server.hostname
+    let ready = javaModule(
+      playground(ws).withServiceBinding(host, server),
+      pinAppPath,
+      "pin-app",
+      "src/main/java/io/dagger/modules/pinapp/PinApp.java",
+      pinAppSource,
+    )
+    let script = "set -e\n" +
+      callResult +
+      "address=git://$(getent hosts " + host + " | cut -d ' ' -f 1)/pinned.git@v1\n" +
+      "dagger --auto-apply module client add \"$address\" --sdk java >&2\n" +
+      "result -m . call message\n" +
+      "git clone -q git://" + host + "/pinned.git /tmp/pinned\n" +
+      "(cd /tmp/pinned && sed -i 's/v1.0.0/v1.0.1/' main.dang &&\n" +
+      "  git -c user.name=e2e -c user.email=e2e@example.com commit -q -am v1.0.1 &&\n" +
+      "  git tag v1.0.1 && git push -q origin main v1.0.1)\n" +
+      "grep -v '/pinned\"' " + playgroundRoot + "/dagger.lock > /tmp/dagger.lock\n" +
+      "cp /tmp/dagger.lock " + playgroundRoot + "/dagger.lock\n" +
+      "result -m \"$address\" call message\n" +
+      "result -m . call message\n"
+    let ran = ready
+      .withWorkdir(pinAppPath)
+      .withExec(["sh", "-c", script], daggerInDaggerNewSession: true, expect: ReturnType.ANY)
+    let said = ran.stdout + ran.stderr
+    assert(ran.exitCode == 0, "the calls of the git client failed:\n" + said)
+    let results = ran.stdout.trimSpace.split("\n")
+    assert((results[0] ?? "") == "pinned: v1.0.0", "the module did not call its git client: " + JSON.encode(results) + "\n" + said)
+    assert((results[1] ?? "") == "v1.0.1", "@v1 did not resolve to the newer tag: " + JSON.encode(results) + "\n" + said)
+    assert(
+      (results[2] ?? "") == "pinned: v1.0.0",
+      "the git client left its pinned commit for the newer tag: " + JSON.encode(results) + "\n" + said,
+    )
     null
   }
 
@@ -350,7 +414,7 @@ type ClientChecks {
       + "\n"
       + "@Object\n"
       + "public class PinApp {\n"
-      + "  @Function\n"
+      + "  @Function(cache = \"never\")\n"
       + "  public String message()\n"
       + "      throws ExecutionException, DaggerQueryException, InterruptedException {\n"
       + "    return \"pinned: \" + pinned().message();\n"

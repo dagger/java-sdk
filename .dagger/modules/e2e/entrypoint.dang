@@ -158,8 +158,8 @@ type EntrypointChecks {
   Each cache policy holds in a session: a default or per-session result is
   reused, a never result is not, and a result with an explicit TTL is reused
   until it expires and computed again after (dagger/dagger#14694). Every CLI
-  call here shares the session that runs the check; engine-e2e's
-  cache-policy-sessions-check calls across sessions.
+  call here shares the session that runs the check;
+  cachePolicySessionsCheck calls across sessions.
   """
   pub cachePolicyCheck(ws: Workspace!): Void @check {
     let script = "set -e\n" +
@@ -177,6 +177,29 @@ type EntrypointChecks {
     assert(calls[4] == calls[5], "a per-session result was not reused in its session:\n" + said)
     assert(ttl[0] == ttl[1], "a result was not reused before its TTL:\n" + said)
     assert(ttl[1] != ttl[2], "a result was reused after its TTL:\n" + said)
+    null
+  }
+
+  """
+  Results of a module on the Dang entrypoint follow their cache policy across
+  sessions: a default result is reused, a per-session or a never result is
+  not. Each CLI call here is a session of its own.
+
+  The module gets a file of its own, so its calls share no cache entry with
+  cachePolicyCheck's: a result that check stores while this one runs would
+  replace the one this check compares.
+  """
+  pub cachePolicySessionsCheck(ws: Workspace!): Void @check {
+    let script = "set -e\n" +
+      "c() { dagger -m app call \"$1\"; }\n" +
+      "echo $(c cached) $(c cached) $(c per-session) $(c per-session) $(c fresh) $(c fresh)\n"
+    let ran = playground(app(ws).withNewFile("cache-policy-sessions", "")).withExec(["sh", "-c", script], daggerInDaggerNewSession: true, expect: ReturnType.ANY)
+    let said = ran.stdout + ran.stderr
+    assert(ran.exitCode == 0, "the calls failed:\n" + said)
+    let calls = ran.stdout.trimSpace.split(" ")
+    assert(calls.length == 6 and calls[0] == calls[1], "a default result was not reused in another session:\n" + said)
+    assert(calls[2] != calls[3], "a per-session result was reused in another session:\n" + said)
+    assert(calls[4] != calls[5], "a never-cached result was reused:\n" + said)
     null
   }
 

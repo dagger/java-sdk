@@ -2,7 +2,6 @@ package io.dagger.modules.shelf;
 
 import io.dagger.client.exception.DaggerQueryException;
 import io.dagger.client.modules.core.CollectionDelta;
-import io.dagger.module.annotation.Check;
 import io.dagger.module.annotation.Collection;
 import io.dagger.module.annotation.Delta;
 import io.dagger.module.annotation.Function;
@@ -64,14 +63,5 @@ public class Items {
   @Function
   public Items fresh() {
     return new Items(List.of("z"), prefix);
-  }
-
-  /** Replaces Item.verify: runs once over the selected items, and rejects item c. */
-  @Function
-  @Check
-  public void verify() {
-    if (names.contains("c")) {
-      throw new IllegalStateException("verified " + String.join(",", names) + ": c is rejected");
-    }
   }
 }

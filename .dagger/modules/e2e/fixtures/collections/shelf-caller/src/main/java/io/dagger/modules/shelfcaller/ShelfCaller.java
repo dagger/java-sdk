@@ -13,9 +13,9 @@ import java.util.List;
 import java.util.concurrent.ExecutionException;
 
 /**
- * Calls the shelf module's collections through its client. keys, get, list, subset and batch exist
- * only in the engine's projection of a collection, so the client has them only if it was generated
- * from that.
+ * Calls the shelf module's collections through its client. keys, get, list and subset exist only
+ * in the engine's projection of a collection, so the client has them only if it was generated from
+ * that.
  */
 @Object
 public class ShelfCaller {
@@ -33,7 +33,7 @@ public class ShelfCaller {
         + " get="
         + items.get("a").name()
         + " removed="
-        + items.subset(List.of("c")).batch().removed();
+        + items.subset(List.of("c")).removed();
   }
 
   @Function

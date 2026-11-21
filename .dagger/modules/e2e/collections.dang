@@ -1,8 +1,8 @@
 """
 Checks of a module whose objects are collections, on the Dang entrypoint
 generated into it, driven through the CLI of the engine that runs them. The
-engine serves keys, get, list, subset and batch on a collection, from the
-markers the module declares.
+engine serves keys, get, list and subset on a collection, from the markers the
+module declares.
 """
 type CollectionChecks {
   let fixturePath: String! = ".dagger/modules/e2e/fixtures/collections/shelf"
@@ -77,9 +77,10 @@ type CollectionChecks {
   }
 
   """
-  The engine serves keys, list, get, subset and batch on a collection whose
-  members it finds by their markers, and fills the delta field with the keys
-  added and removed since the module returned the collection.
+  The engine serves keys, list, get and subset on a collection whose members
+  it finds by their markers, beside the collection's own functions, and fills
+  the delta field with the keys added and removed since the module returned
+  the collection.
 
   A collection that a function changes and returns keeps its base, so its
   delta compares it with the keys the module first returned. A new instance
@@ -95,21 +96,22 @@ type CollectionChecks {
     "  keys\n" +
     "  list { name }\n" +
     "  get(key: \"a\") { name }\n" +
-    "  batch { selected removed }\n" +
-    "  subset(keys: [\"c\", \"b\"]) { keys batch { selected removed } }\n" +
-    "  changed: batch { change(names: [\"c\", \"d\"]) { keys batch { added removed } } }\n" +
-    "  fresh: subset(keys: [\"c\"]) { batch { fresh { keys batch { added removed } } } }\n" +
+    "  selected removed\n" +
+    "  subset(keys: [\"c\", \"b\"]) { keys selected removed }\n" +
+    "  changed: change(names: [\"c\", \"d\"]) { keys added removed }\n" +
+    "  fresh: subset(keys: [\"c\"]) { fresh { keys added removed } }\n" +
     "} }"
 
   """The answer to itemsQuery, with its keys sorted the way the CLI prints them."""
   let itemsAnswer: String! = "{\"items\":{" +
-    "\"batch\":{\"removed\":[],\"selected\":[\"b\",\"a\",\"c\"]}," +
-    "\"changed\":{\"change\":{\"batch\":{\"added\":[\"d\"],\"removed\":[\"b\",\"a\"]},\"keys\":[\"c\",\"d\"]}}," +
-    "\"fresh\":{\"batch\":{\"fresh\":{\"batch\":{\"added\":[],\"removed\":[]},\"keys\":[\"z\"]}}}," +
+    "\"changed\":{\"added\":[\"d\"],\"keys\":[\"c\",\"d\"],\"removed\":[\"b\",\"a\"]}," +
+    "\"fresh\":{\"fresh\":{\"added\":[],\"keys\":[\"z\"],\"removed\":[]}}," +
     "\"get\":{\"name\":\"item:a\"}," +
     "\"keys\":[\"b\",\"a\",\"c\"]," +
     "\"list\":[{\"name\":\"item:b\"},{\"name\":\"item:a\"},{\"name\":\"item:c\"}]," +
-    "\"subset\":{\"batch\":{\"removed\":[\"a\"],\"selected\":[\"b\",\"c\"]},\"keys\":[\"b\",\"c\"]}" +
+    "\"removed\":[]," +
+    "\"selected\":[\"b\",\"a\",\"c\"]," +
+    "\"subset\":{\"keys\":[\"b\",\"c\"],\"removed\":[\"a\"],\"selected\":[\"b\",\"c\"]}" +
     "}}"
 
   """
@@ -123,57 +125,57 @@ type CollectionChecks {
   }
 
   let kindsQuery: String! = "{\n" +
-    "  numbers { keys get(key: 2) { name } subset(keys: [3, 1]) { keys batch { removed } } }\n" +
-    "  ratios { keys get(key: 1.5) { name } subset(keys: [1.5]) { batch { removed } } }\n" +
-    "  flags { keys get(key: false) { name } subset(keys: [false]) { batch { removed } } }\n" +
-    "  colors { keys get(key: BLUE) { name } subset(keys: [BLUE]) { batch { removed } } }\n" +
-    "  platforms { keys get(key: \"linux/arm64\") { name } subset(keys: [\"linux/arm64\"]) { batch { removed } } }\n" +
-    "  racks { keys get(key: \"r2\") { keys get(key: \"r2-1\") { name } subset(keys: [\"r2-2\"]) { batch { selected } } } subset(keys: [\"r1\"]) { batch { count } } }\n" +
+    "  numbers { keys get(key: 2) { name } subset(keys: [3, 1]) { keys removed } }\n" +
+    "  ratios { keys get(key: 1.5) { name } subset(keys: [1.5]) { removed } }\n" +
+    "  flags { keys get(key: false) { name } subset(keys: [false]) { removed } }\n" +
+    "  colors { keys get(key: BLUE) { name } subset(keys: [BLUE]) { removed } }\n" +
+    "  platforms { keys get(key: \"linux/arm64\") { name } subset(keys: [\"linux/arm64\"]) { removed } }\n" +
+    "  racks { keys get(key: \"r2\") { keys get(key: \"r2-1\") { name } subset(keys: [\"r2-2\"]) { selected } } subset(keys: [\"r1\"]) { count } }\n" +
     "}"
 
   """The answer to kindsQuery, with its keys sorted the way the CLI prints them."""
   let kindsAnswer: String! = "{" +
-    "\"colors\":{\"get\":{\"name\":\"blue\"},\"keys\":[\"RED\",\"BLUE\"],\"subset\":{\"batch\":{\"removed\":[\"RED\"]}}}," +
-    "\"flags\":{\"get\":{\"name\":\"ffalse\"},\"keys\":[true,false],\"subset\":{\"batch\":{\"removed\":[\"true\"]}}}," +
-    "\"numbers\":{\"get\":{\"name\":\"n2\"},\"keys\":[2,1,3],\"subset\":{\"batch\":{\"removed\":[\"2\"]},\"keys\":[1,3]}}," +
-    "\"platforms\":{\"get\":{\"name\":\"linux/arm64\"},\"keys\":[\"linux/amd64\",\"linux/arm64\"],\"subset\":{\"batch\":{\"removed\":[\"linux/amd64\"]}}}," +
-    "\"racks\":{\"get\":{\"get\":{\"name\":\"r2-1\"},\"keys\":[\"r2-1\",\"r2-2\"],\"subset\":{\"batch\":{\"selected\":[\"r2-2\"]}}},\"keys\":[\"r1\",\"r2\"],\"subset\":{\"batch\":{\"count\":1}}}," +
-    "\"ratios\":{\"get\":{\"name\":\"r1.5\"},\"keys\":[0.5,1.5],\"subset\":{\"batch\":{\"removed\":[\"0.5\"]}}}" +
+    "\"colors\":{\"get\":{\"name\":\"blue\"},\"keys\":[\"RED\",\"BLUE\"],\"subset\":{\"removed\":[\"RED\"]}}," +
+    "\"flags\":{\"get\":{\"name\":\"ffalse\"},\"keys\":[true,false],\"subset\":{\"removed\":[\"true\"]}}," +
+    "\"numbers\":{\"get\":{\"name\":\"n2\"},\"keys\":[2,1,3],\"subset\":{\"keys\":[1,3],\"removed\":[\"2\"]}}," +
+    "\"platforms\":{\"get\":{\"name\":\"linux/arm64\"},\"keys\":[\"linux/amd64\",\"linux/arm64\"],\"subset\":{\"removed\":[\"linux/amd64\"]}}," +
+    "\"racks\":{\"get\":{\"get\":{\"name\":\"r2-1\"},\"keys\":[\"r2-1\",\"r2-2\"],\"subset\":{\"selected\":[\"r2-2\"]}},\"keys\":[\"r1\",\"r2\"],\"subset\":{\"count\":1}}," +
+    "\"ratios\":{\"get\":{\"name\":\"r1.5\"},\"keys\":[0.5,1.5],\"subset\":{\"removed\":[\"0.5\"]}}" +
     "}"
 
   """
   The CLI names an item of a collection with a selector named after the module
-  and the item type: after the collection, in place of the path to it, and
-  repeated to select a subset for a batch function.
+  and the item type: after the collection, and in place of the path to it.
+  subset selects several items for the collection's own functions.
   """
   pub collectionSelectorsCheck(ws: Workspace!): Void @check {
     let pg = playground(app(ws))
     assertCall(pg, ["items", "name", "--shelf-item=a"], "item:a")
     assertCall(pg, ["--shelf-item=c", "name"], "item:c")
-    assertCall(pg, ["items", "selected", "--shelf-item=c", "--shelf-item=b"], "b\nc")
+    assertCall(pg, ["items", "subset", "--keys=c,b", "selected"], "b\nc")
     null
   }
 
   """
-  `dagger check` runs a batch check once over the items its selectors name,
-  in place of the check of the same name on the item type. With -m, the
-  selectors go in the check's link. Items.verify rejects item c, and
-  Item.verify fails wherever it runs.
+  `dagger check` runs an item's check once for each item its selectors name,
+  and hands each the collection narrowed to those items: Item.verify takes
+  its Items, and rejects item c. With -m, the selectors go in the check's
+  link.
   """
-  pub collectionBatchCheck(ws: Workspace!): Void @check {
+  pub collectionItemCheck(ws: Workspace!): Void @check {
     let pg = playground(app(ws))
     let passed = cli(pg, ["-m", "app", "check", "items/verify?shelf-item=a&shelf-item=b"])
     assert(
-      passed.exitCode == 0 and passed.stderr.contains("1 passed"),
-      "the batch check over a and b did not pass once:\n" + passed.stdout + passed.stderr,
+      passed.exitCode == 0 and passed.stderr.contains("2 passed"),
+      "the checks of a and b did not both pass:\n" + passed.stdout + passed.stderr,
     )
     let failed = cli(pg, ["-m", "app", "check", "items/verify?shelf-item=a&shelf-item=c"])
     let said = failed.stdout + failed.stderr
     assert(
-      failed.exitCode != 0 and said.contains("1 failed") and said.contains("verified a,c: c is rejected"),
-      "the batch check over a and c did not fail once with its error:\n" + said,
+      failed.exitCode != 0 and said.contains("1 passed") and said.contains("1 failed") and
+        said.contains("verified a,c: c is rejected"),
+      "the check of c did not fail alone, with the selected items in its error:\n" + said,
     )
-    assert(said.contains("the item's verify ran") == false, "the item's own check ran:\n" + said)
     null
   }
 
@@ -227,7 +229,7 @@ type CollectionChecks {
       .withDirectory(
         checkoutRoot,
         ws.directory("/", exclude: [".git", "**/target/**"])
-          .withFile("dagger.toml", ws.file("/.dagger/modules/engine-e2e/workspace.toml")),
+          .withFile("dagger.toml", ws.file("/.dagger/modules/e2e/workspace.toml")),
       )
       .withDirectory(checkoutRoot + "/.dagger/modules/shelf", app(ws))
       .withWorkdir(checkoutRoot)
@@ -240,7 +242,7 @@ type CollectionChecks {
 
   """
   A Java module calls the collections of the fixture module through the
-  client generated from it: keys, list, get, subset and batch, with keys of
+  client generated from it: keys, list, get and subset, with keys of
   the types Int, an enum and Platform, and an item that is a collection.
   """
   pub collectionClientCheck(ws: Workspace!): Void @check {
