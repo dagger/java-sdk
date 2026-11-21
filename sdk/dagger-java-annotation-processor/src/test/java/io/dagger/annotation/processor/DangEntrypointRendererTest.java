@@ -58,7 +58,7 @@ class DangEntrypointRendererTest {
                 "        .withFunction(",
                 "          function(\"lint\","
                     + " typeDef.withKind(TypeDefKind.VOID_KIND).withOptional(true))",
-                "            .withCachePolicy(FunctionCachePolicy.Never)",
+                "            .withCachePolicy(FunctionCachePolicy.NEVER)",
                 "            .withCheck",
                 "        )",
                 "        .withField(\"source\", typeDef.withObject(\"Directory\"), description:"
@@ -77,11 +77,11 @@ class DangEntrypointRendererTest {
 
   @Test
   void cachePoliciesFollowTheValuesEveryOtherSdkAccepts() {
-    assertThat(renderFunction("never")).contains(".withCachePolicy(FunctionCachePolicy.Never)");
+    assertThat(renderFunction("never")).contains(".withCachePolicy(FunctionCachePolicy.NEVER)");
     assertThat(renderFunction("session"))
-        .contains(".withCachePolicy(FunctionCachePolicy.PerSession)");
+        .contains(".withCachePolicy(FunctionCachePolicy.PER_SESSION)");
     assertThat(renderFunction("10s"))
-        .contains(".withCachePolicy(FunctionCachePolicy.Default, timeToLive: \"10s\")");
+        .contains(".withCachePolicy(FunctionCachePolicy.DEFAULT, timeToLive: \"10s\")");
     assertThat(renderFunction("")).doesNotContain("withCachePolicy");
   }
 

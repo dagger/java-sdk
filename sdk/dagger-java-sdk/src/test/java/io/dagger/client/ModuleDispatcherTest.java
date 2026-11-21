@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.dagger.client.engineconn.TestConnections;
-import io.dagger.client.modules.core.JSON;
 import io.dagger.client.modules.core.JsonConverter;
 import jakarta.json.Json;
 import java.io.ByteArrayInputStream;
@@ -23,14 +22,28 @@ import org.junit.jupiter.api.io.TempDir;
 
 class ModuleDispatcherTest {
 
+  /**
+   * A stand-in for the generated JSON scalar, whose class name depends on the schema the SDK was
+   * generated from: the dispatcher takes any.
+   */
+  static final class TestJson extends Scalar<String> {
+    TestJson(String value) {
+      super(value);
+    }
+
+    static TestJson from(String value) {
+      return new TestJson(value);
+    }
+  }
+
   @Test
   void theRequestReachesTheSwitchVerbatim() throws Exception {
     var seen =
         new Object() {
-          Map<String, JSON> args;
+          Map<String, TestJson> args;
           String parentName;
           String fnName;
-          JSON parentJson;
+          TestJson parentJson;
         };
 
     String result =
@@ -44,7 +57,7 @@ class ModuleDispatcherTest {
               seen.parentName = parentName;
               seen.fnName = fnName;
               seen.args = inputArgs;
-              return JSON.from("\"Hi, World\"");
+              return TestJson.from("\"Hi, World\"");
             });
 
     assertThat(seen.parentName).isEqualTo("Hello");
@@ -83,7 +96,7 @@ class ModuleDispatcherTest {
           seen[0] = parentName;
           seen[1] = fnName;
           seen[2] = parentJson.convert();
-          return JSON.from("{}");
+          return TestJson.from("{}");
         });
 
     assertThat(seen).containsExactly("Hello", "", "null");
@@ -97,8 +110,8 @@ class ModuleDispatcherTest {
 
   @Test
   void malformedRequestsAreRejected() {
-    ModuleDispatcher.Dispatch never =
-        (parentJson, parentName, fnName, inputArgs) -> JSON.from("null");
+    ModuleDispatcher.Dispatch<TestJson> never =
+        (parentJson, parentName, fnName, inputArgs) -> TestJson.from("null");
 
     assertThatThrownBy(() -> dispatch("{\"fnName\":\"greet\",\"fnArgs\":\"{}\"}", never))
         .hasMessageContaining("receiverType");
@@ -122,9 +135,10 @@ class ModuleDispatcherTest {
             () ->
                 ModuleDispatcher.engineCall(
                     new String[] {"engine-call", "--output", output.toString()},
+                    TestJson::from,
                     (parentJson, parentName, fnName, inputArgs) -> {
                       System.out.println("a log line of the module");
-                      return JSON.from("[\"a\",\"b\"]");
+                      return TestJson.from("[\"a\",\"b\"]");
                     }));
 
     assertThat(code).isZero();
@@ -138,6 +152,7 @@ class ModuleDispatcherTest {
         () ->
             ModuleDispatcher.engineCall(
                 new String[] {"engine-call", "--output", dir.resolve("result.json").toString()},
+                TestJson::from,
                 (parentJson, parentName, fnName, inputArgs) -> null));
 
     assertThat(TestConnections.markedModule()).isTrue();
@@ -185,14 +200,14 @@ class ModuleDispatcherTest {
 
   @Test
   void aCollectionThatReturnsItselfKeepsItsReceiversBase() throws Exception {
-    JSON receiverJson =
-        JSON.from("{\"names\":[\"b\",\"a\"],\"__daggerCollectionBase\":\"base-id\"}");
-    Items receiver = JsonConverter.fromJSON(receiverJson, Items.class);
+    TestJson receiverJson =
+        TestJson.from("{\"names\":[\"b\",\"a\"],\"__daggerCollectionBase\":\"base-id\"}");
+    Items receiver = JsonConverter.fromJSON(receiverJson.convert(), Items.class);
     receiver.names = List.of("c");
 
-    JSON result =
+    TestJson result =
         ModuleDispatcher.collectionResult(
-            receiverJson, receiver, receiver, JsonConverter.toJSON(receiver));
+            receiverJson, receiver, receiver, toJson(receiver), TestJson::from);
 
     assertThat(result.convert())
         .isEqualTo("{\"names\":[\"c\"],\"__daggerCollectionBase\":\"base-id\"}");
@@ -201,27 +216,33 @@ class ModuleDispatcherTest {
   /** Without the base, the engine makes the new instance its own base, so its delta is empty. */
   @Test
   void aNewCollectionDoesNotInheritTheReceiversBase() throws Exception {
-    JSON receiverJson =
-        JSON.from("{\"names\":[\"b\",\"a\"],\"__daggerCollectionBase\":\"base-id\"}");
-    Items receiver = JsonConverter.fromJSON(receiverJson, Items.class);
+    TestJson receiverJson =
+        TestJson.from("{\"names\":[\"b\",\"a\"],\"__daggerCollectionBase\":\"base-id\"}");
+    Items receiver = JsonConverter.fromJSON(receiverJson.convert(), Items.class);
     Items fresh = new Items();
     fresh.names = List.of("b", "a");
 
-    JSON result =
+    TestJson result =
         ModuleDispatcher.collectionResult(
-            receiverJson, receiver, fresh, JsonConverter.toJSON(fresh));
+            receiverJson, receiver, fresh, toJson(fresh), TestJson::from);
 
     assertThat(result.convert()).isEqualTo("{\"names\":[\"b\",\"a\"]}");
   }
 
   @Test
   void aReceiverWithoutBaseLeavesTheResultAsItIs() throws Exception {
-    JSON receiverJson = JSON.from("{\"names\":[\"a\"]}");
-    Items receiver = JsonConverter.fromJSON(receiverJson, Items.class);
-    JSON resultJson = JsonConverter.toJSON(receiver);
+    TestJson receiverJson = TestJson.from("{\"names\":[\"a\"]}");
+    Items receiver = JsonConverter.fromJSON(receiverJson.convert(), Items.class);
+    TestJson resultJson = toJson(receiver);
 
-    assertThat(ModuleDispatcher.collectionResult(receiverJson, receiver, receiver, resultJson))
+    assertThat(
+            ModuleDispatcher.collectionResult(
+                receiverJson, receiver, receiver, resultJson, TestJson::from))
         .isSameAs(resultJson);
+  }
+
+  private static TestJson toJson(Object value) throws Exception {
+    return TestJson.from(JsonConverter.toJSON(value).convert());
   }
 
   public static class Items {
@@ -240,10 +261,12 @@ class ModuleDispatcherTest {
         + "}";
   }
 
-  private static String dispatch(String request, ModuleDispatcher.Dispatch dispatch)
+  private static String dispatch(String request, ModuleDispatcher.Dispatch<TestJson> dispatch)
       throws Exception {
     return ModuleDispatcher.dispatch(
-        new ByteArrayInputStream(request.getBytes(StandardCharsets.UTF_8)), dispatch);
+        new ByteArrayInputStream(request.getBytes(StandardCharsets.UTF_8)),
+        TestJson::from,
+        dispatch);
   }
 
   private static String failWith(Throwable failure, String log) {
@@ -257,6 +280,7 @@ class ModuleDispatcherTest {
               () ->
                   ModuleDispatcher.engineCall(
                       new String[] {"engine-call"},
+                      TestJson::from,
                       (parentJson, parentName, fnName, inputArgs) -> {
                         System.err.println(log);
                         if (failure instanceof Exception e) {

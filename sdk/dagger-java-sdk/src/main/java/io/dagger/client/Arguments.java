@@ -79,6 +79,9 @@ public class Arguments {
         list.add(toArgumentValue(o));
       }
       return list;
+    } else if (value instanceof GraphQLEnum) {
+      // Constants named apart from their schema values go as their values.
+      return ((GraphQLEnum) value).graphQLValue();
     } else if (value instanceof Enum<?>) {
       return ((Enum<?>) value).toString();
     } else {

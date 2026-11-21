@@ -1,7 +1,7 @@
 # Collections
 
 A collection is an object that holds a set of items a module discovers at run
-time, each with a unique key. This SDK needs an engine v1.0.0-beta.18 or later.
+time, each with a unique key. This SDK needs an engine v1.0.0-beta.26 or later.
 The engine serves collections from v1.0.0-beta.15
 ([dagger/dagger#14221](https://github.com/dagger/dagger/pull/14221)).
 v1.0.0-beta.17 adds the projected types that every call into a collection

@@ -1,9 +1,9 @@
 name = "java-sdk"
-engineVersion = "v1.0.0-beta.18"
+engineVersion = "v1.0.0-beta.26"
 
 [runtime]
   source = "dang"
 
 [[dependencies]]
   name = "sdk-helpers"
-  source = "github.com/dagger/sdk-helpers@v1.0.8"
+  source = "github.com/dagger/sdk-helpers@v1.0.12"

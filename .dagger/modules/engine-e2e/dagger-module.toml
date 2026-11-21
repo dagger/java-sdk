@@ -6,10 +6,10 @@ engineVersion = "v1.0.0-0"
 
 [[dependencies]]
   name = "engine-dev"
-  source = "github.com/dagger/dagger/.dagger/modules/engine-dev@249edbd646e63c5181053c8af72623ed9bdf030d"
-  pin = "249edbd646e63c5181053c8af72623ed9bdf030d"
+  source = "github.com/dagger/dagger/.dagger/modules/engine-dev@9f15293b2d3960d9eeee567d2e50bd60dcf0df80"
+  pin = "9f15293b2d3960d9eeee567d2e50bd60dcf0df80"
 
 [[dependencies]]
   name = "below-floor-engine-dev"
-  source = "github.com/dagger/dagger/.dagger/modules/engine-dev@0da36c8da9cb6a682c7d27eca9bd2c125de5ed09"
-  pin = "0da36c8da9cb6a682c7d27eca9bd2c125de5ed09"
+  source = "github.com/dagger/dagger/.dagger/modules/engine-dev@a45241b20a5e07fbfc5954479ef0b61da843499c"
+  pin = "a45241b20a5e07fbfc5954479ef0b61da843499c"

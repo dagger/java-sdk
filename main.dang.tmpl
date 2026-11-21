@@ -376,12 +376,9 @@ type JavaSdk {
 
   """
   The engine release a module on the entrypoint is staged at, so its bindings
-  are generated from the API view the engine serves the module: an entrypoint
-  module carries no engine version, and the engine serves it a release before
-  the identifier-casing cut. Pre-cut until the Java codegen is ported to the
-  new naming rules.
+  are generated from the API view its entrypoint imports.
   """
-  let entrypointTarget: String! = "v1.0.0-beta.25"
+  let entrypointTarget: String! = "v1.0.0-beta.28"
 
   """
   The engine release a module on the entrypoint targets, refusing a
@@ -398,7 +395,7 @@ type JavaSdk {
   """
   The first engine release this SDK runs on.
   """
-  let engineFloor: String! = "v1.0.0-beta.18"
+  let engineFloor: String! = "v1.0.0-beta.26"
 
   """
   Why this SDK refuses an engine of the given version, or the empty string when

@@ -192,10 +192,10 @@ final class DangEntrypointRenderer {
     }
     switch (function.cache()) {
       case "" -> {}
-      case "never" -> b.append("\n  .withCachePolicy(FunctionCachePolicy.Never)");
-      case "session" -> b.append("\n  .withCachePolicy(FunctionCachePolicy.PerSession)");
+      case "never" -> b.append("\n  .withCachePolicy(FunctionCachePolicy.NEVER)");
+      case "session" -> b.append("\n  .withCachePolicy(FunctionCachePolicy.PER_SESSION)");
       default ->
-          b.append("\n  .withCachePolicy(FunctionCachePolicy.Default, timeToLive: ")
+          b.append("\n  .withCachePolicy(FunctionCachePolicy.DEFAULT, timeToLive: ")
               .append(Dang.quote(function.cache()))
               .append(")");
     }

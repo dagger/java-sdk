@@ -18,7 +18,7 @@ generated when the engine loads the module**. The module builds with a plain
 > until it moves to the entrypoint.
 
 > [!IMPORTANT]
-> This SDK needs an engine `v1.0.0-beta.18` or later. On an older engine,
+> This SDK needs an engine `v1.0.0-beta.26` or later. On an older engine,
 > `dagger module init` and `dagger generate` stop before they write anything,
 > with a message that names the floor and the engine's version.
 >
@@ -26,7 +26,7 @@ generated when the engine loads the module**. The module builds with a plain
 > [`github.com/dagger/sdk-helpers`](https://github.com/dagger/sdk-helpers), the
 > manifest builder that
 > [dagger/dagger#13992](https://github.com/dagger/dagger/pull/13992) moved out of
-> the engine, pinned at its `v1.0.8` tag.
+> the engine, pinned at its `v1.0.12` tag.
 
 ## Install
 
@@ -150,7 +150,7 @@ computed again.
 
 ### The engine release a module targets
 
-A module on the entrypoint targets `v1.0.0-beta.25`: its bindings use the
+A module on the entrypoint targets `v1.0.0-beta.28`: its bindings use the
 running engine's view of that release, its entrypoint sets
 `DAGGER_CLIENT_VERSION` on the process that runs a call, and generation writes
 `src/generated/dang/entrypoint/dang.toml` with `dang = "2.1"` and that release
@@ -158,6 +158,11 @@ on the `Dagger` import. Generation keeps other files and settings there, drops
 comments, and refuses settings it would break. Those files are listed in
 `src/generated/sha256sums`, so after editing one, run `dagger generate`. The
 `targetVersion` scope setting accepts only that release.
+
+Generated Java names follow Java's conventions as the engine formats them:
+`Json`, `Id` and `Llm` for `JSON`, `ID` and `LLM`, `asJson()` for `asJSON`, and
+`PER_SESSION` for `PerSession`. A method or enum constant the engine renames
+keeps its schema name as a deprecated alias; a renamed class has no alias.
 
 ### Stale generated files
 
@@ -396,11 +401,11 @@ On the engine the CLI runs on, this runs the SDK library's unit tests
 templates. The `engine-e2e` checks build engines from the dagger/dagger commits
 pinned in `.dagger/modules/engine-e2e`:
 
-- `engine-e2e:floor-check` builds the floor release, `v1.0.0-beta.18`, and runs
+- `engine-e2e:floor-check` builds the floor release, `v1.0.0-beta.26`, and runs
   every e2e check on it.
 - `engine-e2e:dev-sdk-check` installs this checkout as the `java` SDK on the
   same engine, initializes a Java module through the CLI, and calls it.
-- `engine-e2e:below-floor-check` builds `v1.0.0-beta.17` and checks that
+- `engine-e2e:below-floor-check` builds `v1.0.0-beta.25` and checks that
   generation and `dagger module init` refuse it.
 - `engine-e2e:cache-policy-sessions-check`, `pinned-git-client-check` and
   `standalone-client-check` run calls in sessions of their own on the same

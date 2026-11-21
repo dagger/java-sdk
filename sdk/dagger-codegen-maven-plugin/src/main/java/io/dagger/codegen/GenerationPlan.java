@@ -22,6 +22,10 @@ import java.util.stream.Stream;
  *   &lt;plan&gt;/target-*&#47;descriptor      where that target lives, as {@link TargetDescriptor#read}
  * </pre>
  *
+ * <p>Beside any schema, an optional {@code names.json} holds the Java names the engine formatted
+ * for it (see {@code FormattedNames}); without one, a schema that needs them gets them from the
+ * engine.
+ *
  * <p>The directory names carry no meaning beyond ordering the targets; a module name can hold
  * characters a path cannot, so it travels in a file. Targets are read in module-name order, so a
  * plan generates the same bytes however its caller happened to lay it out.
