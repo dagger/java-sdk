@@ -155,10 +155,53 @@ type Mod {
   serveModule reads in the calling module's own tree.
   """
   let clientDescriptor(client: ModuleSource!): String! {
-    if (client.kind == ModuleSourceKind.GIT_SOURCE) {
+    if (client.kind == ModuleSourceKind.GIT_SOURCE and inWorkspace(client) == false) {
       "git\n" + client.asString + "\n" + client.pin + "\n"
     } else {
       "local\n" + workspaceRef(client.sourceRootSubpath) + "\n"
+    }
+  }
+
+  """
+  A workspace loaded from Git resolves its own modules as Git sources at its
+  commit. Bound by that ref, a client would change with every commit and
+  never match what a checkout generates. A Git client is a module of the
+  workspace when it is pinned at the workspace's commit, and its ref and the
+  workspace address name the same repository with the same selector, or the
+  address names none. The Go and Python SDKs bind clients by the same rule
+  (dagger/go-sdk#73, dagger/go-sdk#78, dagger/go-sdk#79).
+  """
+  let inWorkspace(client: ModuleSource!): Boolean! {
+    let commit = ws.git.head.commitSha rescue { err: Error => "" }
+    if (client.cloneRef == "" or client.pin == "" or client.pin != commit) {
+      false
+    } else {
+      let workspaceSelector = gitSelector(ws.address, client.cloneRef)
+      let moduleSelector = gitSelector(client.asString, client.cloneRef)
+      if (workspaceSelector == null or moduleSelector == null) {
+        false
+      } else {
+        workspaceSelector == "" or workspaceSelector == moduleSelector
+      }
+    }
+  }
+
+  """
+  The selector of a ref of the repository at cloneRef, empty when the ref
+  names none, or null for a ref of another repository. A workspace address
+  has the form <repo>[/<path>]@<selector>; a module of the workspace,
+  <repo>#<selector>[:<subpath>]. Both are compared without their URL scheme.
+  """
+  let gitSelector(ref: String!, cloneRef: String!): String {
+    let repo = cloneRef.split("://", limit: 2)[1] ?? cloneRef
+    let path = ref.split("://", limit: 2)[1] ?? ref
+    let rest = path.trimPrefix(repo)
+    if (path.hasPrefix(repo) == false or (rest != "" and rest.hasPrefix("/") == false and rest.hasPrefix("@") == false and rest.hasPrefix("#") == false)) {
+      null
+    } else if (rest.hasPrefix("#")) {
+      rest.trimPrefix("#").split(":", limit: 2)[0] ?? ""
+    } else {
+      rest.split("@", limit: 2)[1] ?? ""
     }
   }
 
