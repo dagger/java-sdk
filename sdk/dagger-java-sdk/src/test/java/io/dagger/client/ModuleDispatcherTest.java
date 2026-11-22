@@ -332,6 +332,17 @@ class ModuleDispatcherTest {
     assertThat(report.getJsonObject("values").getInt("exitCode")).isEqualTo(1);
   }
 
+  /** The engine reads a report with an empty message as plain text, so the type stands in. */
+  @Test
+  void anEmptyMessageIsReportedAsTheErrorsType(@TempDir Path dir) throws Exception {
+    Path file = dir.resolve("error.json");
+
+    failWith(new IllegalStateException(" "), "", file);
+
+    assertThat(readReport(file).getString("message"))
+        .isEqualTo("java.lang.IllegalStateException");
+  }
+
   @Test
   void anUnwritableErrorFileFallsBackToTheMarker(@TempDir Path dir) {
     String stderr =
@@ -454,7 +465,17 @@ class ModuleDispatcherTest {
     } finally {
       System.setErr(savedErr);
     }
-    return captured.toString(StandardCharsets.UTF_8);
+    return withoutTelemetryLogs(captured.toString(StandardCharsets.UTF_8));
+  }
+
+  /**
+   * The output without what OpenTelemetry logs through java.util.logging, such as "Multiple
+   * shutdown calls" when a test before shut its global SDK down: two lines, the logger's then the
+   * message.
+   */
+  private static String withoutTelemetryLogs(String stderr) {
+    return stderr.replaceAll(
+        "(?m)^\\w{3} \\d{1,2}, \\d{4} .* io\\.opentelemetry\\.\\S+ \\S+\\R[A-Z]+: .*\\R", "");
   }
 
   private static int withStdin(String stdin, ExitCode run) throws Exception {
