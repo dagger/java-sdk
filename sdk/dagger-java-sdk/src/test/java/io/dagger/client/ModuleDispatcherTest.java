@@ -4,8 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.dagger.client.engineconn.TestConnections;
+import io.dagger.client.exception.DaggerExecException;
+import io.dagger.client.exception.DaggerQueryException;
+import io.dagger.client.graphql.GraphQLErrors;
 import io.dagger.client.modules.core.JsonConverter;
+import io.dagger.modules.demo.DemoModule;
 import jakarta.json.Json;
+import jakarta.json.JsonObject;
+import jakarta.json.JsonValue;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -17,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -198,6 +205,154 @@ class ModuleDispatcherTest {
         .hasSizeLessThan(100 * 1024);
   }
 
+  private static final String ORIGIN =
+      "[traceparent:0123456789abcdef0123456789abcdef-0123456789abcdef]";
+
+  private static DaggerExecException execError() {
+    return new DaggerExecException(
+        GraphQLErrors.of(
+            "{\"message\":\"exit code: 1 "
+                + ORIGIN
+                + "\",\"path\":[\"container\",\"stdout\"],\"extensions\":{\"_type\":\"EXEC_ERROR\","
+                + "\"cmd\":[\"sh\",\"-c\",\"exit 1\"],\"exitCode\":1,\"stdout\":\"out\","
+                + "\"stderr\":\"err\",\"nested\":{\"ok\":true,\"none\":null}}}"));
+  }
+
+  private static Void throwExec() throws DaggerExecException {
+    throw execError();
+  }
+
+  private static JsonObject readReport(Path file) throws Exception {
+    return Json.createReader(new StringReader(Files.readString(file))).readObject();
+  }
+
+  @Test
+  void aFailureIsReportedInTheErrorFileAndNotMarked(@TempDir Path dir) throws Exception {
+    Path file = dir.resolve("error.json");
+
+    String stderr = failWith(new IllegalStateException("leaf failed:\n boom"), "logged", file);
+
+    assertThat(readReport(file))
+        .isEqualTo(
+            Json.createObjectBuilder()
+                .add("message", "leaf failed:\n boom")
+                .add("values", JsonValue.EMPTY_JSON_OBJECT)
+                .build());
+    assertThat(stderr).doesNotContain(ModuleDispatcher.FUNCTION_ERROR_MARKER);
+    assertThat(stderr).startsWith("logged\njava.lang.IllegalStateException: leaf failed:\n boom\n");
+  }
+
+  /** The engine shows an API error at its origin, with its logs, so nothing is printed. */
+  @Test
+  void anApiErrorWithAnOriginIsReportedWithTheGraphQLErrorsExtensionsAndNotPrinted(
+      @TempDir Path dir) throws Exception {
+    Path file = dir.resolve("error.json");
+
+    String stderr = failWith(execError(), "logged", file);
+
+    JsonObject report = readReport(file);
+    assertThat(report.getString("message")).isEqualTo("exit code: 1 " + ORIGIN);
+    assertThat(report.getJsonObject("values"))
+        .isEqualTo(
+            Json.createReader(
+                    new StringReader(
+                        "{\"_type\":\"EXEC_ERROR\",\"cmd\":[\"sh\",\"-c\",\"exit 1\"],"
+                            + "\"exitCode\":1,\"stdout\":\"out\",\"stderr\":\"err\","
+                            + "\"nested\":{\"ok\":true,\"none\":null}}"))
+                .readObject());
+    assertThat(stderr).isEqualTo("logged\n");
+  }
+
+  /**
+   * What {@code failing} throws, run on a thread of its own, so its stack trace holds no frames of
+   * the test runner's, as a module's holds none below the SDK's.
+   */
+  private static Exception thrownBy(Callable<?> failing) throws InterruptedException {
+    Exception[] thrown = new Exception[1];
+    Thread thread =
+        new Thread(
+            () -> {
+              try {
+                failing.call();
+              } catch (Exception e) {
+                thrown[0] = e;
+              }
+            });
+    thread.start();
+    thread.join();
+    return thrown[0];
+  }
+
+  @Test
+  void anApiErrorWithoutAnOriginPrintsItself(@TempDir Path dir) throws Exception {
+    Exception failure =
+        thrownBy(
+            () -> {
+              throw new DaggerQueryException(GraphQLErrors.of("{\"message\":\"bad argument\"}"));
+            });
+
+    String stderr = failWith(failure, "", dir.resolve("error.json"));
+
+    assertThat(stderr)
+        .isEqualTo("\nio.dagger.client.exception.DaggerQueryException: bad argument\n");
+  }
+
+  /** The module's own frames remain; the SDK's and the JDK's go. */
+  @Test
+  void anErrorOfTheModulesOwnPrintsAShortStackTrace(@TempDir Path dir) throws Exception {
+    Exception failure = thrownBy(DemoModule::failNatively);
+
+    String stderr = failWith(failure, "", dir.resolve("error.json"));
+
+    assertThat(stderr)
+        .matches(
+            "\njava.lang.Exception: demo failed natively\n"
+                + "\tat io\\.dagger\\.modules\\.demo\\.DemoModule\\.failNatively"
+                + "\\(DemoModule\\.java:\\d+\\)\n");
+  }
+
+  /** A wrapped API error is the module's own: its chain prints, without the origins. */
+  @Test
+  void aWrappedApiErrorPrintsItsChainWithoutOrigins(@TempDir Path dir) throws Exception {
+    Exception failure = thrownBy(() -> DemoModule.wrap(thrownBy(ModuleDispatcherTest::throwExec)));
+    Path file = dir.resolve("error.json");
+
+    String stderr = failWith(failure, "", file);
+
+    assertThat(stderr)
+        .matches(
+            "\njava.lang.Exception: demo ran a failing command: exit code: 1\n"
+                + "\tat io\\.dagger\\.modules\\.demo\\.DemoModule\\.wrap"
+                + "\\(DemoModule\\.java:\\d+\\)\n"
+                + "Caused by: io\\.dagger\\.client\\.exception\\.DaggerExecException: exit code:"
+                + " 1\n");
+    JsonObject report = readReport(file);
+    assertThat(report.getString("message"))
+        .isEqualTo("demo ran a failing command: exit code: 1 " + ORIGIN);
+    assertThat(report.getJsonObject("values").getInt("exitCode")).isEqualTo(1);
+  }
+
+  @Test
+  void anUnwritableErrorFileFallsBackToTheMarker(@TempDir Path dir) {
+    String stderr =
+        failWith(new IllegalStateException("leaf failed"), "", dir.resolve("missing/error.json"));
+
+    assertThat(decodeMarker(lastLine(stderr))).isEqualTo("leaf failed");
+  }
+
+  /** Long strings keep their ends, and the message its start and the origins it names. */
+  @Test
+  void aReportOverTheLimitIsShortened(@TempDir Path dir) throws Exception {
+    Path file = dir.resolve("error.json");
+    String message = "é".repeat(ModuleDispatcher.FUNCTION_ERROR_FILE_LIMIT) + " " + ORIGIN;
+
+    failWith(new RuntimeException(message), "", file);
+
+    assertThat(Files.size(file)).isLessThanOrEqualTo(ModuleDispatcher.FUNCTION_ERROR_FILE_LIMIT);
+    String reported = readReport(file).getString("message");
+    assertThat(reported).startsWith("éé").endsWith("..." + " " + ORIGIN);
+  }
+
   @Test
   void aCollectionThatReturnsItselfKeepsItsReceiversBase() throws Exception {
     TestJson receiverJson =
@@ -270,6 +425,10 @@ class ModuleDispatcherTest {
   }
 
   private static String failWith(Throwable failure, String log) {
+    return failWith(failure, log, null);
+  }
+
+  private static String failWith(Throwable failure, String log, Path errorFile) {
     var captured = new ByteArrayOutputStream();
     PrintStream savedErr = System.err;
     System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
@@ -287,7 +446,8 @@ class ModuleDispatcherTest {
                           throw e;
                         }
                         throw (java.lang.Error) failure;
-                      }));
+                      },
+                      errorFile));
       assertThat(code).isEqualTo(2);
     } catch (Exception e) {
       throw new RuntimeException(e);
