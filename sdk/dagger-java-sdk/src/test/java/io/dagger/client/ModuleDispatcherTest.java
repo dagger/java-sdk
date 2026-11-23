@@ -332,7 +332,7 @@ class ModuleDispatcherTest {
     assertThat(report.getJsonObject("values").getInt("exitCode")).isEqualTo(1);
   }
 
-  /** The engine reads a report with an empty message as plain text, so the type stands in. */
+  /** The engine rejects a report with an empty message as invalid, so the type stands in. */
   @Test
   void anEmptyMessageIsReportedAsTheErrorsType(@TempDir Path dir) throws Exception {
     Path file = dir.resolve("error.json");
