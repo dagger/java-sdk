@@ -156,6 +156,34 @@ class DangEntrypointRendererTest {
         .contains("lines.takeLast(1)");
   }
 
+  /** The engine fails the call with the error the dispatcher reported in its error file. */
+  @Test
+  void aFailedCallWhoseErrorTheEngineReadRaisesItAsItIs() {
+    assertThat(DangEntrypointRenderer.render(module(), "demo", CLIENT_VERSION))
+        .contains(
+            String.join(
+                "\n",
+                "    let reported = ((JSON.decode(err.extensions) :: {{functionError: {{message:"
+                    + " String, id: String}}}}).functionError != null) rescue false",
+                "    if (reported) {",
+                "      raise err",
+                "    }",
+                "    let marker = "));
+  }
+
+  /** The engine builds what prebuild returns before a call, which builds on the same jar. */
+  @Test
+  void prebuildIsTheJarEveryCallRuns() {
+    assertThat(DangEntrypointRenderer.render(module(), "demo", CLIENT_VERSION))
+        .contains(
+            String.join(
+                "\n",
+                "  pub prebuild(platform: Platform): File! {",
+                "    JavaModuleBuild(platform: platform).jar",
+                "  }"))
+        .contains("    let build = JavaModuleBuild()\n");
+  }
+
   @Test
   void descriptionsAreEscapedSoTheOutputStaysParseable() {
     ObjectInfo object =

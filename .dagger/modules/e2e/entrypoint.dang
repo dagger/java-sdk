@@ -105,13 +105,15 @@ type EntrypointChecks {
 
   """
   A failing function's error reaches the caller with its text, not as the exit
-  code of the process that ran it.
+  code of the process that ran it. An engine that gives the process an error
+  file reports the error as the function's own; an older one prefixes it with
+  "call module entrypoint: ".
   """
   pub errorCheck(ws: Workspace!): Void @check {
     let failed = cli(playground(app(ws)), ["-m", "app", "call", "fail"])
     let said = failed.stdout + failed.stderr
     assert(
-      failed.exitCode != 0 and said.contains("call module entrypoint: entry-app failed: boom"),
+      failed.exitCode != 0 and said.contains("entry-app failed: boom"),
       "the function's error lost its text:\n" + said,
     )
     null
