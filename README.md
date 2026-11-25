@@ -150,7 +150,7 @@ computed again.
 
 ### The engine release a module targets
 
-A module on the entrypoint targets `v1.0.0-beta.28`: its bindings use the
+A module on the entrypoint targets `v1.0.0-beta.30`: its bindings use the
 running engine's view of that release, its entrypoint sets
 `DAGGER_CLIENT_VERSION` on the process that runs a call, and generation writes
 `src/generated/dang/entrypoint/dang.toml` with `dang = "2.1"` and that release
