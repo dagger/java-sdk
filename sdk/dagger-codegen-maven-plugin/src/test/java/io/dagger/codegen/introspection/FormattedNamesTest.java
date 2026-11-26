@@ -49,7 +49,7 @@ class FormattedNamesTest {
   void formatsNamesWithTheNamingOfTheSchemaVersion() throws Exception {
     List<Request> requests = new ArrayList<>();
     Map<String, Map<String, String>> names =
-        FormattedNames.fetch(schema("v1.0.0-beta.28"), engine(requests));
+        FormattedNames.fetch(schema("v1.0.0-beta.30"), engine(requests));
 
     assertThat(requests).hasSize(1);
     Request request = requests.get(0);
@@ -63,7 +63,7 @@ class FormattedNamesTest {
         .contains("f1: formatIdentifiers(names: $names, casing: PASCAL, acronyms: CAPITALIZED)")
         .contains(
             "f2: formatIdentifiers(names: $names, casing: SCREAMING_SNAKE, acronyms: UPPERCASE)");
-    assertThat(request.variables().getString("version")).isEqualTo("v1.0.0-beta.28");
+    assertThat(request.variables().getString("version")).isEqualTo("v1.0.0-beta.30");
     assertThat(FormattedNames.FORMATS)
         .containsExactly(FormattedNames.MEMBERS, FormattedNames.TYPES, FormattedNames.ENUM_VALUES);
     // Type, field, argument and enum value names, sorted, leaving out introspection names and
@@ -129,7 +129,7 @@ class FormattedNamesTest {
     assertThatThrownBy(
             () ->
                 FormattedNames.fetch(
-                    schema("v1.0.0-beta.28"),
+                    schema("v1.0.0-beta.30"),
                     (query, variables) ->
                         stream("{\"naming\":{\"f0\":[\"x\"],\"f1\":[\"x\"],\"f2\":[\"x\"]}}")))
         .isInstanceOf(IOException.class)

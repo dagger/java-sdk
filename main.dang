@@ -378,7 +378,7 @@ type JavaSdk {
   The engine release a module on the entrypoint is staged at, so its bindings
   are generated from the API view its entrypoint imports.
   """
-  let entrypointTarget: String! = "v1.0.0-beta.28"
+  let entrypointTarget: String! = "v1.0.0-beta.30"
 
   """
   The engine release a module on the entrypoint targets, refusing a

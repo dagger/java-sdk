@@ -26,7 +26,7 @@ generated when the engine loads the module**. The module builds with a plain
 > [`github.com/dagger/sdk-helpers`](https://github.com/dagger/sdk-helpers), the
 > manifest builder that
 > [dagger/dagger#13992](https://github.com/dagger/dagger/pull/13992) moved out of
-> the engine, pinned at its `v1.0.12` tag.
+> the engine, pinned at its `v1.0.13` tag.
 
 ## Install
 
@@ -150,7 +150,7 @@ computed again.
 
 ### The engine release a module targets
 
-A module on the entrypoint targets `v1.0.0-beta.28`: its bindings use the
+A module on the entrypoint targets `v1.0.0-beta.30`: its bindings use the
 running engine's view of that release, its entrypoint sets
 `DAGGER_CLIENT_VERSION` on the process that runs a call, and generation writes
 `src/generated/dang/entrypoint/dang.toml` with `dang = "2.1"` and that release

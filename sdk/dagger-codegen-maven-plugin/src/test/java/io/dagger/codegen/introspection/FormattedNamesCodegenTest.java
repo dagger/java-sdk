@@ -173,7 +173,7 @@ class FormattedNamesCodegenTest {
     new Generator(
             output,
             StandardCharsets.UTF_8,
-            "v1.0.0-beta.28",
+            "v1.0.0-beta.30",
             (query, variables) -> {
               throw new AssertionError("asked the engine despite a names file");
             })
@@ -236,7 +236,7 @@ class FormattedNamesCodegenTest {
   }
 
   private void generate(byte[] schema, FormattedNames.QueryRunner engine) throws Exception {
-    new Generator(output, StandardCharsets.UTF_8, "v1.0.0-beta.28", engine)
+    new Generator(output, StandardCharsets.UTF_8, "v1.0.0-beta.30", engine)
         .generate(GenerationPlan.read(plan(schema)));
   }
 
